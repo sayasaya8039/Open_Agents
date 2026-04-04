@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Model Management | The Intelligent Workspace</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "secondary-fixed": "#d8e2ff",
+                      "error-container": "#93000a",
+                      "on-tertiary": "#571e00",
+                      "on-background": "#e5e2e1",
+                      "on-primary-fixed-variant": "#004493",
+                      "surface-bright": "#393939",
+                      "surface-container-highest": "#353535",
+                      "surface-tint": "#adc6ff",
+                      "primary-container": "#4b8eff",
+                      "surface": "#131313",
+                      "primary-fixed": "#d8e2ff",
+                      "primary-fixed-dim": "#adc6ff",
+                      "outline-variant": "#414755",
+                      "surface-container-low": "#1b1b1c",
+                      "surface-variant": "#353535",
+                      "surface-container-high": "#2a2a2a",
+                      "on-tertiary-container": "#4c1a00",
+                      "tertiary-container": "#ef6719",
+                      "on-primary-fixed": "#001a41",
+                      "on-secondary-container": "#98b5f3",
+                      "on-primary-container": "#00285c",
+                      "tertiary": "#ffb595",
+                      "error": "#ffb4ab",
+                      "on-secondary-fixed-variant": "#26467d",
+                      "inverse-primary": "#005bc1",
+                      "secondary-fixed-dim": "#adc6ff",
+                      "inverse-on-surface": "#303030",
+                      "outline": "#8b90a0",
+                      "secondary-container": "#26467d",
+                      "on-secondary": "#082f65",
+                      "on-error": "#690005",
+                      "on-surface-variant": "#c1c6d7",
+                      "on-error-container": "#ffdad6",
+                      "tertiary-fixed-dim": "#ffb595",
+                      "surface-dim": "#131313",
+                      "on-secondary-fixed": "#001a41",
+                      "tertiary-fixed": "#ffdbcc",
+                      "on-tertiary-fixed-variant": "#7c2e00",
+                      "secondary": "#adc6ff",
+                      "on-tertiary-fixed": "#351000",
+                      "background": "#131313",
+                      "on-primary": "#002e69",
+                      "surface-container-lowest": "#0e0e0e",
+                      "primary": "#adc6ff",
+                      "on-surface": "#e5e2e1",
+                      "surface-container": "#202020",
+                      "inverse-surface": "#e5e2e1"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "fontFamily": {
+                      "headline": ["Inter"],
+                      "body": ["Inter"],
+                      "label": ["Inter"]
+              }
+            },
+          },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+            font-size: 20px;
+        }
+        .glass-panel {
+            background: rgba(27, 27, 28, 0.7);
+            backdrop-filter: blur(30px);
+        }
+        .mac-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .mac-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .mac-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(139, 144, 160, 0.3);
+            border-radius: 10px;
+        }
+        .no-line-shadow {
+            box-shadow: 0px 20px 40px rgba(0, 0, 0, 0.4);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body select-none">
+<!-- SideNavBar (Shared Component) -->
+<nav class="fixed left-0 top-0 h-full z-50 flex flex-col items-center py-6 h-full w-20 border-r border-[#ffffff]/15 bg-[#1b1b1c]/70 backdrop-blur-[30px] font-['Inter'] text-sm tracking-tight">
+<div class="mb-8">
+<span class="text-lg font-bold text-[#adc6ff]">W</span>
+</div>
+<div class="flex flex-col space-y-4 flex-1">
+<button class="p-3 text-[#8b90a0] hover:text-white transition-colors hover:bg-[#2a2a2a]/50 flex flex-col items-center gap-1 rounded-xl">
+<span class="material-symbols-outlined" data-icon="code">code</span>
+</button>
+<button class="p-3 bg-[#2a2a2a] text-[#adc6ff] rounded-xl shadow-[0px_4px_12px_rgba(0,0,0,0.4)] flex flex-col items-center gap-1">
+<span class="material-symbols-outlined" data-icon="memory">memory</span>
+</button>
+<button class="p-3 text-[#8b90a0] hover:text-white transition-colors hover:bg-[#2a2a2a]/50 flex flex-col items-center gap-1 rounded-xl">
+<span class="material-symbols-outlined" data-icon="database">database</span>
+</button>
+<button class="p-3 text-[#8b90a0] hover:text-white transition-colors hover:bg-[#2a2a2a]/50 flex flex-col items-center gap-1 rounded-xl">
+<span class="material-symbols-outlined" data-icon="terminal">terminal</span>
+</button>
+</div>
+<div class="mt-auto flex flex-col items-center space-y-6">
+<button class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center hover:opacity-80 transition-opacity">
+<span class="material-symbols-outlined text-primary" data-icon="add">add</span>
+</button>
+<div class="w-8 h-8 rounded-full overflow-hidden bg-surface-container-highest border border-outline-variant/30">
+<img alt="User Profile" data-alt="Close-up studio portrait of a young professional with soft cinematic lighting on a dark neutral background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDDKvStbkZAVWigMQL7xQrMkTSzS7jL78PFza6zKAWVU0zG1F-83z1TsNKFWBZl7m9tpF-h6EtLHxqsKYvqc2N1StlSytuQQqVxrsraUmILVe7-SvU1-KDsyQR6xuCnxvUWla_bmFBE-5Oi-D0kH8MtB5PMHsA9GLBI-x6j1QuaCPbca-xkY-bEPJCRVJiwszMkVXw-ahd7PP-Yqk-FT52FSDadoWt5I9D5Yp6qiuC9Ze-a0-UPIo_t97t8bkeyzQjC6bU_9SkFrytW"/>
+</div>
+</div>
+</nav>
+<!-- TopNavBar (Shared Component) -->
+<header class="fixed top-0 left-20 right-0 z-40 flex justify-between px-6 items-center w-full h-12 bg-[#131313] border-b border-[#ffffff]/15 font-['Inter'] font-semibold text-xs uppercase tracking-widest">
+<div class="flex items-center gap-8">
+<span class="text-base font-bold text-white tracking-tighter normal-case">The Intelligent Workspace</span>
+<nav class="flex gap-6 h-full items-center">
+<a class="text-[#8b90a0] hover:text-white transition-opacity" href="#">Project</a>
+<a class="text-[#adc6ff] border-b-2 border-[#adc6ff] pb-1" href="#">Build</a>
+<a class="text-[#8b90a0] hover:text-white transition-opacity" href="#">Debug</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-outline text-sm" data-icon="search">search</span>
+<input class="bg-surface-container-low border-none rounded-full py-1 pl-9 pr-4 text-[10px] w-48 focus:ring-1 focus:ring-primary/40 placeholder:text-outline/50" placeholder="SEARCH MODELS..." type="text"/>
+</div>
+<button class="hover:opacity-80 transition-opacity flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" data-icon="settings">settings</span>
+</button>
+<button class="bg-primary text-on-primary px-3 py-1 rounded-md tracking-tighter hover:opacity-90 transition-opacity">Deploy</button>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="pl-20 pt-12 pb-6 min-h-screen grid grid-cols-12 gap-0 overflow-hidden">
+<!-- Left Sidebar: System Resources -->
+<aside class="col-span-3 border-r border-outline-variant/15 p-6 bg-surface-container-low/50 overflow-y-auto mac-scrollbar">
+<div class="mb-8">
+<h2 class="text-label-sm font-semibold text-outline uppercase tracking-widest mb-4">System Monitor</h2>
+<div class="space-y-6">
+<!-- CPU Usage -->
+<div class="space-y-2">
+<div class="flex justify-between items-end">
+<span class="text-xs font-medium">CPU Usage</span>
+<span class="text-[10px] font-bold text-primary">12%</span>
+</div>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary rounded-full" style="width: 12%"></div>
+</div>
+<div class="flex justify-between text-[9px] text-outline">
+<span>16 Cores Active</span>
+<span>3.4 GHz</span>
+</div>
+</div>
+<!-- GPU Usage -->
+<div class="space-y-2">
+<div class="flex justify-between items-end">
+<span class="text-xs font-medium">GPU Load</span>
+<span class="text-[10px] font-bold text-tertiary">45%</span>
+</div>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-tertiary rounded-full" style="width: 45%"></div>
+</div>
+<div class="flex justify-between text-[9px] text-outline">
+<span>RTX 4090</span>
+<span>64°C</span>
+</div>
+</div>
+<!-- VRAM Usage -->
+<div class="space-y-2">
+<div class="flex justify-between items-end">
+<span class="text-xs font-medium">VRAM Allocated</span>
+<span class="text-[10px] font-bold text-on-surface">18.4 / 24 GB</span>
+</div>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-on-surface/40 rounded-full" style="width: 76%"></div>
+</div>
+</div>
+</div>
+</div>
+<div class="mt-12">
+<h2 class="text-label-sm font-semibold text-outline uppercase tracking-widest mb-4">Active Context</h2>
+<div class="bg-surface-container-high/40 rounded-xl p-4 border border-outline-variant/10">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-8 h-8 rounded-lg bg-primary-container/20 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="description">description</span>
+</div>
+<div>
+<p class="text-xs font-semibold truncate">AppController.ts</p>
+<p class="text-[10px] text-outline">TypeScript • 12kb</p>
+</div>
+</div>
+<div class="text-[10px] text-outline leading-relaxed line-clamp-3 italic">
+                        "The Intelligent Workspace relies on a decentralized LLM architecture for low-latency code completion..."
+                    </div>
+</div>
+</div>
+</aside>
+<!-- Right Content: Model Marketplace -->
+<section class="col-span-9 p-8 overflow-y-auto mac-scrollbar">
+<!-- Toolbar -->
+<div class="flex items-center justify-between mb-10">
+<div class="flex bg-surface-container-high p-1 rounded-xl w-fit">
+<button class="px-6 py-1.5 rounded-lg text-xs font-semibold bg-surface-bright shadow-sm text-on-surface">Marketplace</button>
+<button class="px-6 py-1.5 rounded-lg text-xs font-semibold text-outline hover:text-white transition-colors">Installed</button>
+</div>
+<div class="flex items-center gap-4">
+<span class="text-[10px] font-semibold text-outline uppercase tracking-widest">Filter by Architecture</span>
+<select class="bg-surface-container-low border-none rounded-lg text-[10px] py-1.5 focus:ring-1 focus:ring-primary/40 uppercase tracking-wider">
+<option>All Models</option>
+<option>Transformer</option>
+<option>MoE</option>
+<option>RNN-Hybrid</option>
+</select>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+<!-- Card 1: Llama 3 -->
+<div class="group bg-surface-container-low rounded-2xl p-5 border border-outline-variant/10 hover:border-primary/30 transition-all duration-300 no-line-shadow flex flex-col">
+<div class="flex justify-between items-start mb-4">
+<div class="p-3 bg-primary/10 rounded-xl">
+<span class="material-symbols-outlined text-primary text-3xl" data-icon="hub">hub</span>
+</div>
+<span class="text-[10px] font-bold bg-primary-container/20 text-primary-fixed-dim px-2 py-0.5 rounded-full uppercase">8B Params</span>
+</div>
+<h3 class="text-lg font-bold mb-1 group-hover:text-primary transition-colors">Llama 3 Instruct</h3>
+<p class="text-xs text-outline mb-6 leading-relaxed">Highly capable dense model optimized for coding and dialogue.</p>
+<div class="mt-auto">
+<div class="flex justify-between text-[10px] mb-2 font-medium">
+<span class="text-primary">Installed</span>
+<span class="text-outline">4.7 GB</span>
+</div>
+<button class="w-full bg-surface-container-highest border border-outline-variant/30 py-2.5 rounded-xl text-xs font-bold hover:bg-primary hover:text-on-primary transition-all flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="check_circle" data-weight="fill">check_circle</span>
+                            Select Model
+                        </button>
+</div>
+</div>
+<!-- Card 2: Mistral 7B -->
+<div class="group bg-surface-container-low rounded-2xl p-5 border border-outline-variant/10 hover:border-primary/30 transition-all duration-300 no-line-shadow flex flex-col">
+<div class="flex justify-between items-start mb-4">
+<div class="p-3 bg-tertiary/10 rounded-xl">
+<span class="material-symbols-outlined text-tertiary text-3xl" data-icon="auto_awesome">auto_awesome</span>
+</div>
+<span class="text-[10px] font-bold bg-tertiary-container/20 text-tertiary px-2 py-0.5 rounded-full uppercase">7B Params</span>
+</div>
+<h3 class="text-lg font-bold mb-1 group-hover:text-tertiary transition-colors">Mistral v0.2</h3>
+<p class="text-xs text-outline mb-6 leading-relaxed">Efficient architecture with sliding window attention for long context.</p>
+<div class="mt-auto">
+<div class="flex justify-between text-[10px] mb-2 font-medium">
+<span class="text-outline">Downloading... 64%</span>
+<span class="text-outline">4.1 GB</span>
+</div>
+<div class="h-1 w-full bg-surface-container-highest rounded-full overflow-hidden mb-4">
+<div class="h-full bg-tertiary rounded-full" style="width: 64%"></div>
+</div>
+<button class="w-full bg-surface-container-highest/50 border border-outline-variant/20 py-2.5 rounded-xl text-xs font-bold text-outline cursor-not-allowed flex items-center justify-center gap-2">
+                            Pause Download
+                        </button>
+</div>
+</div>
+<!-- Card 3: Gemma -->
+<div class="group bg-surface-container-low rounded-2xl p-5 border border-outline-variant/10 hover:border-primary/30 transition-all duration-300 no-line-shadow flex flex-col">
+<div class="flex justify-between items-start mb-4">
+<div class="p-3 bg-secondary-container/30 rounded-xl">
+<span class="material-symbols-outlined text-secondary text-3xl" data-icon="stars">stars</span>
+</div>
+<span class="text-[10px] font-bold bg-secondary-container/20 text-secondary px-2 py-0.5 rounded-full uppercase">2B Params</span>
+</div>
+<h3 class="text-lg font-bold mb-1 group-hover:text-secondary transition-colors">Gemma IT</h3>
+<p class="text-xs text-outline mb-6 leading-relaxed">Lightweight, high-performance model for mobile and edge devices.</p>
+<div class="mt-auto">
+<div class="flex justify-between text-[10px] mb-2 font-medium">
+<span class="text-outline">Cloud Version</span>
+<span class="text-outline">1.2 GB</span>
+</div>
+<button class="w-full bg-primary-container text-on-primary-container py-2.5 rounded-xl text-xs font-bold hover:opacity-90 transition-all flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="download">download</span>
+                            Install Local
+                        </button>
+</div>
+</div>
+<!-- Card 4: CodeLlama -->
+<div class="group bg-surface-container-low rounded-2xl p-5 border border-outline-variant/10 hover:border-primary/30 transition-all duration-300 no-line-shadow flex flex-col">
+<div class="flex justify-between items-start mb-4">
+<div class="p-3 bg-primary/10 rounded-xl">
+<span class="material-symbols-outlined text-primary text-3xl" data-icon="terminal">terminal</span>
+</div>
+<span class="text-[10px] font-bold bg-primary-container/20 text-primary-fixed-dim px-2 py-0.5 rounded-full uppercase">70B Params</span>
+</div>
+<h3 class="text-lg font-bold mb-1 group-hover:text-primary transition-colors">CodeLlama 70B</h3>
+<p class="text-xs text-outline mb-6 leading-relaxed">Maximum precision for complex architectural design and refactoring.</p>
+<div class="mt-auto">
+<div class="flex justify-between text-[10px] mb-2 font-medium">
+<span class="text-outline">Ready to Fetch</span>
+<span class="text-outline">38.2 GB</span>
+</div>
+<button class="w-full bg-surface-container-highest border border-outline-variant/30 py-2.5 rounded-xl text-xs font-bold hover:bg-primary hover:text-on-primary transition-all flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="download">download</span>
+                            Download
+                        </button>
+</div>
+</div>
+<!-- Card 5: Phi-3 -->
+<div class="group bg-surface-container-low rounded-2xl p-5 border border-outline-variant/10 hover:border-primary/30 transition-all duration-300 no-line-shadow flex flex-col">
+<div class="flex justify-between items-start mb-4">
+<div class="p-3 bg-tertiary/10 rounded-xl">
+<span class="material-symbols-outlined text-tertiary text-3xl" data-icon="psychology">psychology</span>
+</div>
+<span class="text-[10px] font-bold bg-tertiary-container/20 text-tertiary px-2 py-0.5 rounded-full uppercase">3.8B Params</span>
+</div>
+<h3 class="text-lg font-bold mb-1 group-hover:text-tertiary transition-colors">Phi-3 Mini</h3>
+<p class="text-xs text-outline mb-6 leading-relaxed">The most capable small language model for logic-heavy tasks.</p>
+<div class="mt-auto">
+<div class="flex justify-between text-[10px] mb-2 font-medium">
+<span class="text-primary">Installed</span>
+<span class="text-outline">2.3 GB</span>
+</div>
+<button class="w-full bg-surface-container-highest border border-outline-variant/30 py-2.5 rounded-xl text-xs font-bold hover:bg-primary hover:text-on-primary transition-all flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="check_circle" data-weight="fill">check_circle</span>
+                            Select Model
+                        </button>
+</div>
+</div>
+<!-- Empty State / Add Custom -->
+<div class="group bg-transparent border-2 border-dashed border-outline-variant/30 rounded-2xl p-5 hover:border-primary/50 transition-all duration-300 flex flex-col items-center justify-center text-center">
+<div class="p-4 bg-surface-container-high rounded-full mb-4 group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-outline text-3xl" data-icon="upload_file">upload_file</span>
+</div>
+<h3 class="text-sm font-bold text-outline">Import Custom GGUF</h3>
+<p class="text-[10px] text-outline/60 mt-1">Drag and drop your local weights here</p>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer (Shared Component) -->
+<footer class="fixed bottom-0 left-20 right-0 z-40 flex justify-between items-center px-4 w-full h-6 border-t border-[#ffffff]/15 bg-[#131313] font-['Inter'] text-[10px] font-medium tracking-wide uppercase">
+<div class="flex gap-4">
+<span class="text-[#8b90a0]">System Status: <span class="text-[#adc6ff]">LLM Ready</span></span>
+<span class="text-[#8b90a0]">CPU: 12% | GPU: 45%</span>
+</div>
+<div class="flex gap-6">
+<a class="text-[#8b90a0] hover:text-white transition-colors" href="#">Documentation</a>
+<a class="text-[#8b90a0] hover:text-white transition-colors" href="#">API Reference</a>
+<span class="text-[#ffb595] opacity-80">v4.2.0-stable</span>
+</div>
+</footer>
+</body></html>

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "secondary-fixed": "#d8e2ff",
+            "error-container": "#93000a",
+            "on-tertiary": "#571e00",
+            "on-background": "#e5e2e1",
+            "on-primary-fixed-variant": "#004493",
+            "surface-bright": "#393939",
+            "surface-container-highest": "#353535",
+            "surface-tint": "#adc6ff",
+            "primary-container": "#4b8eff",
+            "surface": "#131313",
+            "primary-fixed": "#d8e2ff",
+            "primary-fixed-dim": "#adc6ff",
+            "outline-variant": "#414755",
+            "surface-container-low": "#1b1b1c",
+            "surface-variant": "#353535",
+            "surface-container-high": "#2a2a2a",
+            "on-tertiary-container": "#4c1a00",
+            "tertiary-container": "#ef6719",
+            "on-primary-fixed": "#001a41",
+            "on-secondary-container": "#98b5f3",
+            "on-primary-container": "#00285c",
+            "tertiary": "#ffb595",
+            "error": "#ffb4ab",
+            "on-secondary-fixed-variant": "#26467d",
+            "inverse-primary": "#005bc1",
+            "secondary-fixed-dim": "#adc6ff",
+            "inverse-on-surface": "#303030",
+            "outline": "#8b90a0",
+            "secondary-container": "#26467d",
+            "on-secondary": "#082f65",
+            "on-error": "#690005",
+            "on-surface-variant": "#c1c6d7",
+            "on-error-container": "#ffdad6",
+            "tertiary-fixed-dim": "#ffb595",
+            "surface-dim": "#131313",
+            "on-secondary-fixed": "#001a41",
+            "tertiary-fixed": "#ffdbcc",
+            "on-tertiary-fixed-variant": "#7c2e00",
+            "secondary": "#adc6ff",
+            "on-tertiary-fixed": "#351000",
+            "background": "#131313",
+            "on-primary": "#002e69",
+            "surface-container-lowest": "#0e0e0e",
+            "primary": "#adc6ff",
+            "on-surface": "#e5e2e1",
+            "surface-container": "#202020",
+            "inverse-surface": "#e5e2e1"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.125rem",
+            "lg": "0.25rem",
+            "xl": "0.5rem",
+            "full": "0.75rem"
+          },
+          "fontFamily": {
+            "headline": ["Inter", "sans-serif"],
+            "body": ["Inter", "sans-serif"],
+            "label": ["Inter", "sans-serif"],
+            "mono": ["JetBrains Mono", "monospace"]
+          }
+        },
+      },
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+    body {
+      background-color: #131313;
+      color: #e5e2e1;
+      font-family: 'Inter', sans-serif;
+    }
+    .vibrancy {
+      backdrop-filter: blur(30px);
+    }
+  </style>
+</head>
+<body class="overflow-hidden">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-full z-50 flex flex-col items-center py-6 bg-[#1b1b1c]/70 backdrop-blur-[30px] h-full w-20 flex flex-col border-r border-[#ffffff]/15 font-['Inter'] text-sm tracking-tight">
+<div class="mb-10 text-lg font-bold text-[#adc6ff] tracking-tighter">
+<span class="material-symbols-outlined text-2xl" data-icon="terminal">terminal</span>
+</div>
+<nav class="flex flex-col gap-6 flex-1">
+<!-- Editor Inactive -->
+<button class="p-3 text-[#8b90a0] hover:text-white transition-colors group flex flex-col items-center gap-1">
+<span class="material-symbols-outlined" data-icon="code">code</span>
+<span class="text-[10px] uppercase font-bold tracking-widest">Editor</span>
+</button>
+<!-- Models Inactive -->
+<button class="p-3 text-[#8b90a0] hover:text-white transition-colors group flex flex-col items-center gap-1">
+<span class="material-symbols-outlined" data-icon="memory">memory</span>
+<span class="text-[10px] uppercase font-bold tracking-widest">Models</span>
+</button>
+<!-- Knowledge Inactive -->
+<button class="p-3 text-[#8b90a0] hover:text-white transition-colors group flex flex-col items-center gap-1">
+<span class="material-symbols-outlined" data-icon="database">database</span>
+<span class="text-[10px] uppercase font-bold tracking-widest">Data</span>
+</button>
+<!-- Logs Active -->
+<button class="p-3 bg-[#2a2a2a] text-[#adc6ff] rounded-xl shadow-[0px_4px_12px_rgba(0,0,0,0.4)] flex flex-col items-center gap-1 scale-95 duration-200 ease-in-out">
+<span class="material-symbols-outlined" data-icon="terminal">terminal</span>
+<span class="text-[10px] uppercase font-bold tracking-widest">Logs</span>
+</button>
+</nav>
+<div class="mt-auto flex flex-col items-center gap-4">
+<div class="w-8 h-8 rounded-full bg-surface-container-high border border-outline-variant/30 flex items-center justify-center overflow-hidden">
+<img alt="User Profile" data-alt="close up profile avatar of a tech-focused software engineer with modern minimalistic lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDMQVNcNHC63GVXw_TN9-_JkValyCDciNlhVSCOq2HjG4TIEvtLHx2Lf_cvYmT2gWHeVSg0brswRy9aP5X9pNhVGdkHyFkesS9z_PeBEHIX39O9Sp37D_KIwkQ45HKaBiy0cYC9RDnXouBqvFxRUNgYX0La2Hhoxrp3IZ9zSWtzAm9Tbvht_DVzs6adIc__A23NRopQvozeQ2qTmFkI3uL4Lio4412e5wHpThXVlFvmE9FYkyCxllurrcY84fFOCFfpCY4t715-NOo0"/>
+</div>
+</div>
+</aside>
+<!-- TopNavBar -->
+<header class="fixed top-0 left-20 right-0 z-40 flex justify-between px-6 items-center bg-[#131313] w-full h-12 border-b border-[#ffffff]/15 font-['Inter'] font-semibold text-xs uppercase tracking-widest">
+<div class="flex items-center gap-6">
+<span class="text-base font-bold text-white tracking-tighter normal-case">The Intelligent Workspace</span>
+<nav class="hidden md:flex gap-6 items-center h-full">
+<a class="text-[#8b90a0] hover:text-white transition-opacity" href="#">Project</a>
+<a class="text-[#8b90a0] hover:text-white transition-opacity" href="#">Build</a>
+<a class="text-[#adc6ff] border-b-2 border-[#adc6ff] pb-1" href="#">Debug</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center bg-surface-container-high px-3 py-1 rounded-full border border-outline-variant/10 text-outline">
+<span class="material-symbols-outlined text-sm mr-2" data-icon="search">search</span>
+<span class="normal-case font-normal text-xs">Search Logs...</span>
+</div>
+<button class="text-white bg-primary-container px-4 py-1 rounded-md text-[10px] tracking-widest hover:opacity-80 transition-opacity">Deploy</button>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-white" data-icon="settings">settings</span>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-white" data-icon="help">help</span>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="fixed inset-0 top-12 left-20 flex flex-col bg-surface-container-lowest">
+<!-- Tabbed Header Control -->
+<div class="flex items-center justify-between px-6 py-3 bg-surface-container-low border-b border-outline-variant/10">
+<div class="flex p-1 bg-surface-container-high rounded-full items-center">
+<button class="px-6 py-1.5 rounded-full text-xs font-semibold bg-surface-bright shadow-[0px_4px_12px_rgba(0,0,0,0.3)] text-primary">Terminal</button>
+<button class="px-6 py-1.5 rounded-full text-xs font-semibold text-outline hover:text-white transition-colors">LLM Logs</button>
+<button class="px-6 py-1.5 rounded-full text-xs font-semibold text-outline hover:text-white transition-colors">Build Output</button>
+</div>
+<div class="flex items-center gap-4 text-[10px] uppercase tracking-widest font-bold text-outline">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+<span>Connected: local-node-01</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="memory">memory</span>
+<span>1.2 GB</span>
+</div>
+</div>
+</div>
+<!-- Dual View Layout (Asymmetric) -->
+<div class="flex flex-1 overflow-hidden">
+<!-- Primary Terminal Area -->
+<section class="w-3/5 h-full flex flex-col border-r border-outline-variant/10 bg-[#0e0e0e] p-6 font-mono text-sm">
+<div class="flex-1 overflow-y-auto space-y-2 leading-relaxed custom-scrollbar">
+<div class="flex gap-4">
+<span class="text-outline">10:42:01</span>
+<span class="text-primary">system@workspace:~$</span>
+<span class="text-white">npm run start:dev</span>
+</div>
+<div class="flex gap-4">
+<span class="text-outline">10:42:02</span>
+<span class="text-outline">[INFO]</span>
+<span class="text-outline-variant">Starting compilation in watch mode...</span>
+</div>
+<div class="flex gap-4">
+<span class="text-outline">10:42:05</span>
+<span class="text-emerald-400 font-medium">✔ Found 0 errors. Watching for file changes.</span>
+</div>
+<div class="flex gap-4">
+<span class="text-outline">10:42:05</span>
+<span class="text-outline">[INFO]</span>
+<span class="text-white">Server running at <span class="underline cursor-pointer">http://localhost:3000</span></span>
+</div>
+<div class="flex gap-4">
+<span class="text-outline">10:43:12</span>
+<span class="text-primary">system@workspace:~$</span>
+<span class="text-white">curl -X GET /api/v1/context</span>
+</div>
+<div class="flex gap-4">
+<span class="text-outline">10:43:12</span>
+<span class="text-tertiary">{"status": "ready", "tokens": 4096, "model": "gpt-4-turbo"}</span>
+</div>
+<div class="flex gap-4 pt-4">
+<span class="text-primary">system@workspace:~$</span>
+<span class="w-2 h-5 bg-primary animate-pulse inline-block"></span>
+</div>
+</div>
+</section>
+<!-- LLM Debug Logs & Metrics (The 'Void' Depth) -->
+<section class="w-2/5 h-full bg-surface-container-lowest flex flex-col">
+<!-- Header for LLM Logs -->
+<div class="px-6 py-4 flex items-center justify-between bg-surface-container-low/50">
+<h2 class="text-xs font-bold uppercase tracking-widest text-on-surface">LLM Interaction Data</h2>
+<div class="flex gap-2">
+<span class="px-2 py-0.5 bg-tertiary-container/20 text-tertiary text-[10px] rounded-sm font-bold border border-tertiary/20">GPT-4-TURBO</span>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+<!-- Log Entry 1 -->
+<div class="bg-surface-container-high/40 rounded-xl p-4 border border-outline-variant/10">
+<div class="flex justify-between items-center mb-3">
+<span class="text-[10px] font-bold text-outline">REQUEST ID: 88F2-A9</span>
+<span class="text-[10px] text-tertiary font-mono">1.2s LATENCY</span>
+</div>
+<div class="space-y-3">
+<div>
+<p class="text-[10px] uppercase font-bold text-outline-variant mb-1">Prompt Summary</p>
+<p class="text-xs text-on-surface leading-normal italic">"Explain the logic of the authentication middleware and suggest performance optimizations."</p>
+</div>
+<div class="grid grid-cols-2 gap-4 pt-2 border-t border-outline-variant/10">
+<div>
+<p class="text-[10px] uppercase font-bold text-outline-variant mb-1">Input Tokens</p>
+<p class="text-sm font-mono text-primary">1,204</p>
+</div>
+<div>
+<p class="text-[10px] uppercase font-bold text-outline-variant mb-1">Output Tokens</p>
+<p class="text-sm font-mono text-tertiary">450</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Log Entry 2 - Error State -->
+<div class="bg-error-container/10 rounded-xl p-4 border border-error/20">
+<div class="flex justify-between items-center mb-3">
+<span class="text-[10px] font-bold text-error">STATUS: FAILED</span>
+<span class="text-[10px] text-outline font-mono">0.1s LATENCY</span>
+</div>
+<div class="space-y-3">
+<p class="text-xs text-on-error-container leading-normal font-mono">
+                [ERROR] 429: Too Many Requests. Rate limit exceeded for model: gpt-4-turbo.
+              </p>
+<button class="text-[10px] uppercase font-bold text-error hover:underline">Retry with Fallback</button>
+</div>
+</div>
+<!-- Token Usage Chart Card -->
+<div class="bg-surface-container-high/40 rounded-xl p-4 border border-outline-variant/10">
+<p class="text-[10px] uppercase font-bold text-outline-variant mb-4">Context Window Usage</p>
+<div class="h-2 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[75%] rounded-full"></div>
+</div>
+<div class="flex justify-between mt-2 text-[10px] font-mono text-outline">
+<span>96,302 tokens</span>
+<span>128k limit</span>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+<!-- Footer -->
+<footer class="fixed bottom-0 left-20 right-0 z-40 flex justify-between items-center px-4 bg-[#131313] w-full h-6 border-t border-[#ffffff]/15 font-['Inter'] text-[10px] font-medium tracking-wide uppercase">
+<div class="text-[#ffb595] flex items-center gap-4">
+<span>System Status: LLM Ready</span>
+<span class="text-outline">|</span>
+<span>CPU: 12%</span>
+<span class="text-outline">|</span>
+<span>GPU: 45%</span>
+</div>
+<div class="flex items-center gap-6">
+<a class="text-[#8b90a0] hover:text-white transition-colors" href="#">Documentation</a>
+<a class="text-[#8b90a0] hover:text-white transition-colors" href="#">API Reference</a>
+</div>
+</footer>
+<style>
+    /* Subtle custom scrollbar */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</body></html>

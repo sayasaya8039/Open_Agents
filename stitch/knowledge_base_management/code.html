@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "secondary-fixed": "#d8e2ff",
+            "error-container": "#93000a",
+            "on-tertiary": "#571e00",
+            "on-background": "#e5e2e1",
+            "on-primary-fixed-variant": "#004493",
+            "surface-bright": "#393939",
+            "surface-container-highest": "#353535",
+            "surface-tint": "#adc6ff",
+            "primary-container": "#4b8eff",
+            "surface": "#131313",
+            "primary-fixed": "#d8e2ff",
+            "primary-fixed-dim": "#adc6ff",
+            "outline-variant": "#414755",
+            "surface-container-low": "#1b1b1c",
+            "surface-variant": "#353535",
+            "surface-container-high": "#2a2a2a",
+            "on-tertiary-container": "#4c1a00",
+            "tertiary-container": "#ef6719",
+            "on-primary-fixed": "#001a41",
+            "on-secondary-container": "#98b5f3",
+            "on-primary-container": "#00285c",
+            "tertiary": "#ffb595",
+            "error": "#ffb4ab",
+            "on-secondary": "#082f65",
+            "on-error": "#690005",
+            "on-surface-variant": "#c1c6d7",
+            "on-error-container": "#ffdad6",
+            "tertiary-fixed-dim": "#ffb595",
+            "surface-dim": "#131313",
+            "on-secondary-fixed": "#001a41",
+            "tertiary-fixed": "#ffdbcc",
+            "on-tertiary-fixed-variant": "#7c2e00",
+            "secondary": "#adc6ff",
+            "on-tertiary-fixed": "#351000",
+            "background": "#131313",
+            "on-primary": "#002e69",
+            "surface-container-lowest": "#0e0e0e",
+            "primary": "#adc6ff",
+            "on-surface": "#e5e2e1",
+            "surface-container": "#202020",
+            "inverse-surface": "#e5e2e1"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.125rem",
+            "lg": "0.25rem",
+            "xl": "0.5rem",
+            "full": "0.75rem"
+          },
+          "fontFamily": {
+            "headline": ["Inter"],
+            "body": ["Inter"],
+            "label": ["Inter"]
+          }
+        },
+      },
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+      font-size: 20px;
+    }
+    body {
+      background-color: #131313;
+      color: #e5e2e1;
+      font-family: 'Inter', sans-serif;
+    }
+    .vibrancy-sidebar {
+      background: rgba(27, 27, 28, 0.7);
+      backdrop-filter: blur(30px);
+    }
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+  </style>
+</head>
+<body class="antialiased">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-full z-50 flex flex-col items-center py-6 h-full w-20 flex flex-col border-r border-[#ffffff]/15 bg-[#1b1b1c]/70 backdrop-blur-[30px] font-['Inter'] text-sm tracking-tight">
+<div class="mb-10">
+<span class="text-lg font-bold text-[#adc6ff] tracking-tighter">WS</span>
+</div>
+<nav class="flex flex-col gap-6 items-center flex-1">
+<a class="group flex flex-col items-center gap-1 text-[#8b90a0] hover:text-white transition-colors" href="#">
+<div class="p-3 rounded-xl transition-all duration-200 ease-in-out hover:bg-[#2a2a2a]/50 active:scale-95">
+<span class="material-symbols-outlined" data-icon="code">code</span>
+</div>
+<span class="text-[10px] font-semibold uppercase tracking-widest">Editor</span>
+</a>
+<a class="group flex flex-col items-center gap-1 text-[#8b90a0] hover:text-white transition-colors" href="#">
+<div class="p-3 rounded-xl transition-all duration-200 ease-in-out hover:bg-[#2a2a2a]/50 active:scale-95">
+<span class="material-symbols-outlined" data-icon="memory">memory</span>
+</div>
+<span class="text-[10px] font-semibold uppercase tracking-widest">Models</span>
+</a>
+<!-- Active Tab: Knowledge -->
+<a class="group flex flex-col items-center gap-1 bg-[#2a2a2a] text-[#adc6ff] rounded-xl shadow-[0px_4px_12px_rgba(0,0,0,0.4)] transition-colors" href="#">
+<div class="p-3 rounded-xl">
+<span class="material-symbols-outlined" data-icon="database" style="font-variation-settings: 'FILL' 1;">database</span>
+</div>
+<span class="text-[10px] font-semibold uppercase tracking-widest pb-2">Knowledge</span>
+</a>
+<a class="group flex flex-col items-center gap-1 text-[#8b90a0] hover:text-white transition-colors" href="#">
+<div class="p-3 rounded-xl transition-all duration-200 ease-in-out hover:bg-[#2a2a2a]/50 active:scale-95">
+<span class="material-symbols-outlined" data-icon="terminal">terminal</span>
+</div>
+<span class="text-[10px] font-semibold uppercase tracking-widest">Logs</span>
+</a>
+</nav>
+<div class="mt-auto">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center border border-white/10 overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="close-up portrait of a professional male developer with soft studio lighting and neutral background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDuUro4UG-hosyWBI5VlN6LWDA5gK9ivaWvm29EbY63T2AIU0j6W0JlXAwgfEwUIWtvjRPRQ7v0_JbRVx6So_xZVPOLDrfb62mEVYAjYvl8aAPWMbFatfusxPHrH538XYYWdhPqMtjHk8BzdR8b4iBtC5PmOmQ-REsAW5a8r7u9UQi5TwA4eybvrCUn2qdwQS4LBydY4gKy-VdJMV2O6KRSXW4_IfbCnnOjmTZKtDaifDsGn-_MmU_ynee1KgZnXkV1z-jA47JjsEfH"/>
+</div>
+</div>
+</aside>
+<!-- TopNavBar -->
+<header class="fixed top-0 left-20 right-0 z-40 h-12 flex justify-between px-6 items-center bg-[#131313] border-b border-[#ffffff]/15 font-['Inter'] font-semibold text-xs uppercase tracking-widest">
+<div class="flex items-center gap-8">
+<span class="text-base font-bold text-white tracking-tighter normal-case">The Intelligent Workspace</span>
+<nav class="flex gap-6">
+<a class="text-[#8b90a0] hover:text-white transition-opacity" href="#">Project</a>
+<a class="text-[#8b90a0] hover:text-white transition-opacity" href="#">Build</a>
+<a class="text-[#8b90a0] hover:text-white transition-opacity" href="#">Debug</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-outline" data-icon="search">search</span>
+<input class="bg-surface-container-low border-none rounded-full py-1.5 pl-9 pr-4 text-[10px] w-64 focus:ring-1 focus:ring-primary/40 placeholder:text-outline/50 transition-all" placeholder="SEARCH CONTEXT..." type="text"/>
+</div>
+<div class="flex items-center gap-2">
+<button class="px-3 py-1 text-[#8b90a0] hover:text-white transition-opacity flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" data-icon="share">share</span> Share
+        </button>
+<button class="px-4 py-1 bg-gradient-to-b from-primary to-primary-container text-on-primary-container rounded-md font-bold tracking-tight hover:opacity-90 transition-all active:scale-95">
+          Deploy
+        </button>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-white" data-icon="settings">settings</span>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-white" data-icon="help">help</span>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="ml-20 pt-12 pb-6 min-h-screen">
+<div class="max-w-6xl mx-auto px-10 py-12">
+<!-- Screen Header -->
+<header class="flex justify-between items-end mb-12">
+<div>
+<h1 class="text-5xl font-bold tracking-tighter text-white mb-2">Knowledge Base</h1>
+<p class="text-outline font-medium tracking-tight">Manage and optimize RAG indices for your local context.</p>
+</div>
+<button class="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-6 py-3 rounded-xl border border-white/10 transition-all group">
+<span class="material-symbols-outlined text-primary" data-icon="add_circle">add_circle</span>
+<span class="font-semibold text-white tracking-tight">Add Folder</span>
+</button>
+</header>
+<!-- Stats Grid -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+<div class="bg-surface-container-low p-6 rounded-2xl border border-white/5 relative overflow-hidden">
+<div class="relative z-10">
+<span class="text-[10px] font-bold text-outline uppercase tracking-widest block mb-4">Total Tokens</span>
+<div class="text-3xl font-bold text-white tracking-tighter">14.2M</div>
+</div>
+<div class="absolute -right-4 -bottom-4 opacity-10">
+<span class="material-symbols-outlined text-7xl" data-icon="analytics">analytics</span>
+</div>
+</div>
+<div class="bg-surface-container-low p-6 rounded-2xl border border-white/5 relative overflow-hidden">
+<div class="relative z-10">
+<span class="text-[10px] font-bold text-outline uppercase tracking-widest block mb-4">Active Repos</span>
+<div class="text-3xl font-bold text-white tracking-tighter">12</div>
+</div>
+<div class="absolute -right-4 -bottom-4 opacity-10">
+<span class="material-symbols-outlined text-7xl" data-icon="folder_managed">folder_managed</span>
+</div>
+</div>
+<div class="bg-surface-container-low p-6 rounded-2xl border border-white/5 relative overflow-hidden">
+<div class="relative z-10">
+<span class="text-[10px] font-bold text-outline uppercase tracking-widest block mb-4">Index Health</span>
+<div class="text-3xl font-bold text-tertiary tracking-tighter">Optimal</div>
+</div>
+<div class="absolute -right-4 -bottom-4 opacity-10">
+<span class="material-symbols-outlined text-7xl" data-icon="health_and_safety">health_and_safety</span>
+</div>
+</div>
+</div>
+<!-- Index Management List -->
+<div class="bg-surface-container-lowest rounded-2xl overflow-hidden border border-white/5">
+<!-- List Header -->
+<div class="grid grid-cols-12 px-6 py-4 bg-white/5 border-b border-white/5 text-[10px] font-bold text-outline uppercase tracking-widest">
+<div class="col-span-5">Name &amp; Path</div>
+<div class="col-span-3">Status</div>
+<div class="col-span-2">Last Sync</div>
+<div class="col-span-2 text-right">Actions</div>
+</div>
+<!-- Row 1 -->
+<div class="grid grid-cols-12 px-6 py-5 hover:bg-white/[0.02] transition-colors border-b border-white/5 items-center group">
+<div class="col-span-5 flex items-center gap-4">
+<div class="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="folder">folder</span>
+</div>
+<div>
+<div class="text-sm font-semibold text-white">core-api-v3</div>
+<div class="text-xs text-outline font-mono opacity-60">~/projects/nexus/services/api</div>
+</div>
+</div>
+<div class="col-span-3">
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-wider">
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+              Optimized
+            </div>
+</div>
+<div class="col-span-2 text-xs text-outline font-medium">2 hours ago</div>
+<div class="col-span-2 text-right">
+<button class="text-xs font-bold text-[#adc6ff] hover:text-white transition-colors uppercase tracking-widest px-4 py-2 rounded-lg hover:bg-primary/10">
+              Re-index
+            </button>
+</div>
+</div>
+<!-- Row 2 -->
+<div class="grid grid-cols-12 px-6 py-5 hover:bg-white/[0.02] transition-colors border-b border-white/5 items-center group">
+<div class="col-span-5 flex items-center gap-4">
+<div class="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-tertiary">
+<span class="material-symbols-outlined" data-icon="source">source</span>
+</div>
+<div>
+<div class="text-sm font-semibold text-white">design-system-lib</div>
+<div class="text-xs text-outline font-mono opacity-60">~/shared/ui-components</div>
+</div>
+</div>
+<div class="col-span-3">
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 text-white/50 text-[10px] font-bold uppercase tracking-wider">
+<div class="flex space-x-0.5">
+<div class="w-1 h-1 rounded-full bg-tertiary animate-pulse"></div>
+</div>
+              Syncing...
+            </div>
+</div>
+<div class="col-span-2 text-xs text-outline font-medium">Just now</div>
+<div class="col-span-2 text-right">
+<button class="text-xs font-bold text-outline opacity-40 cursor-not-allowed uppercase tracking-widest px-4 py-2">
+              Waiting
+            </button>
+</div>
+</div>
+<!-- Row 3 -->
+<div class="grid grid-cols-12 px-6 py-5 hover:bg-white/[0.02] transition-colors border-b border-white/5 items-center group">
+<div class="col-span-5 flex items-center gap-4">
+<div class="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-outline">
+<span class="material-symbols-outlined" data-icon="folder_zip">folder_zip</span>
+</div>
+<div>
+<div class="text-sm font-semibold text-white">legacy-docs</div>
+<div class="text-xs text-outline font-mono opacity-60">~/archive/docs-2022</div>
+</div>
+</div>
+<div class="col-span-3">
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface-container-high text-outline text-[10px] font-bold uppercase tracking-wider">
+              Stale
+            </div>
+</div>
+<div class="col-span-2 text-xs text-outline font-medium">14 days ago</div>
+<div class="col-span-2 text-right">
+<button class="text-xs font-bold text-[#adc6ff] hover:text-white transition-colors uppercase tracking-widest px-4 py-2 rounded-lg hover:bg-primary/10">
+              Re-index
+            </button>
+</div>
+</div>
+<!-- Row 4 -->
+<div class="grid grid-cols-12 px-6 py-5 hover:bg-white/[0.02] transition-colors items-center group">
+<div class="col-span-5 flex items-center gap-4">
+<div class="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="code_blocks">code_blocks</span>
+</div>
+<div>
+<div class="text-sm font-semibold text-white">auth-middleware</div>
+<div class="text-xs text-outline font-mono opacity-60">~/projects/nexus/services/auth</div>
+</div>
+</div>
+<div class="col-span-3">
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-wider">
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+              Optimized
+            </div>
+</div>
+<div class="col-span-2 text-xs text-outline font-medium">Yesterday</div>
+<div class="col-span-2 text-right">
+<button class="text-xs font-bold text-[#adc6ff] hover:text-white transition-colors uppercase tracking-widest px-4 py-2 rounded-lg hover:bg-primary/10">
+              Re-index
+            </button>
+</div>
+</div>
+</div>
+<!-- Detail Card (Bento Style) -->
+<div class="mt-12 grid grid-cols-1 lg:grid-cols-5 gap-6">
+<div class="lg:col-span-3 bg-surface-container-high rounded-2xl p-8 border border-white/5 relative group overflow-hidden">
+<div class="absolute top-0 right-0 p-8 opacity-10">
+<span class="material-symbols-outlined text-9xl" data-icon="model_training">model_training</span>
+</div>
+<div class="relative z-10">
+<h3 class="text-2xl font-bold text-white tracking-tighter mb-4">Index Strategy</h3>
+<p class="text-outline text-sm leading-relaxed max-w-md mb-6">
+              Using <span class="text-primary font-semibold">Hierarchical Navigable Small World (HNSW)</span> for fast approximate nearest neighbor search. Your local context is automatically chunked into 512-token segments with a 10% overlap for maximum retrieval accuracy.
+            </p>
+<div class="flex gap-4">
+<div class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-[10px] font-bold text-white uppercase tracking-widest">
+                Embedding: text-embedding-3-small
+              </div>
+<div class="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-[10px] font-bold text-white uppercase tracking-widest">
+                Dimensions: 1536
+              </div>
+</div>
+</div>
+</div>
+<div class="lg:col-span-2 bg-gradient-to-br from-[#2a2a2a] to-[#1b1b1c] rounded-2xl p-8 border border-white/5 flex flex-col justify-center">
+<span class="text-xs font-bold text-tertiary uppercase tracking-widest mb-2">Automated Refresh</span>
+<h3 class="text-xl font-bold text-white tracking-tight mb-4">Deep Learning Sync</h3>
+<p class="text-outline text-xs leading-relaxed mb-6">
+            The intelligent workspace monitors your file system and triggers re-indexing only on significant semantic changes, preserving your GPU resources.
+          </p>
+<div class="h-1 w-full bg-white/10 rounded-full overflow-hidden">
+<div class="h-full bg-tertiary w-3/4"></div>
+</div>
+<div class="flex justify-between mt-2 text-[10px] font-bold text-outline uppercase">
+<span>Next Global Sync</span>
+<span>75% Complete</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="fixed bottom-0 left-20 right-0 z-40 flex justify-between items-center px-4 h-6 border-t border-[#ffffff]/15 bg-[#131313] font-['Inter'] text-[10px] font-medium tracking-wide uppercase">
+<div class="text-[#8b90a0]">
+      System Status: <span class="text-[#adc6ff]">LLM Ready</span> | CPU: <span class="text-white">12%</span> | GPU: <span class="text-white">45%</span>
+</div>
+<div class="flex gap-4">
+<a class="text-[#8b90a0] hover:text-white transition-colors" href="#">Documentation</a>
+<a class="text-[#8b90a0] hover:text-white transition-colors" href="#">API Reference</a>
+</div>
+</footer>
+</body></html>

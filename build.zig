@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
         "src/render/vulkan_render.c",
         "src/provider/api_provider.c",
         "src/ui/tui.c",
+        "src/gui/win32_app.c",
     };
 
     const c_flags = &[_][]const u8{
@@ -65,6 +66,9 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("dxgi");
     exe.linkSystemLibrary("d3d12");
     exe.linkSystemLibrary("ole32");
+    exe.linkSystemLibrary("gdi32");
+    exe.linkSystemLibrary("shell32");
+    exe.linkSystemLibrary("user32");
 
     b.installArtifact(exe);
 

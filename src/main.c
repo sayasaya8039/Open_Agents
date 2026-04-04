@@ -26,6 +26,7 @@
 #include "net/multi_nic.h"
 #include "render/vulkan_render.h"
 #include "ui/tui.h"
+#include "gui/win32_app.h"
 
 #ifndef OAG_VERSION
 #define OAG_VERSION "0.1.0"
@@ -221,10 +222,16 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // No arguments at all → launch TUI mode (interactive editor + AI chat)
+    // No arguments at all → launch GUI mode
     if (!args.model_path && !args.list_nics && !args.list_gpus &&
         !args.tui_mode && !args.vulkan_mode && !args.server_mode && !args.prompt) {
-        args.tui_mode = true;
+        // Launch GUI
+        oag_gui_t* gui = oag_gui_create(oag_gui_default_config());
+        if (gui) {
+            oag_gui_run(gui);
+            oag_gui_free(gui);
+        }
+        return 0;
     }
 
     // List GPUs
