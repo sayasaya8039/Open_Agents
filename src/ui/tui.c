@@ -113,14 +113,16 @@ static void draw_status_bar(oag_tui_t* t) {
     tui_set_color(t, 0x1E1E2E, OAG_COLOR_ACCENT);
 
     char status[256];
-    const char* mode_str = t->mode == MODE_EDITOR ? "EDIT" :
-                           t->mode == MODE_CHAT ? "CHAT" : "CMD";
-    snprintf(status, sizeof(status),
-        " [%s] %s%s  Ln %d, Col %d  |  Tab: switch  Ctrl+Q: quit  Ctrl+S: save ",
-        mode_str,
-        t->filename[0] ? t->filename : "[untitled]",
-        t->modified ? " *" : "",
-        t->cursor_y + 1, t->cursor_x + 1);
+    if (t->mode == MODE_CHAT) {
+        snprintf(status, sizeof(status),
+            " [CHAT] Type message + Enter to send  |  Tab: editor  Ctrl+Q: quit ");
+    } else {
+        snprintf(status, sizeof(status),
+            " [EDIT] %s%s  Ln %d, Col %d  |  Tab: chat  Ctrl+Q: quit ",
+            t->filename[0] ? t->filename : "[untitled]",
+            t->modified ? " *" : "",
+            t->cursor_y + 1, t->cursor_x + 1);
+    }
 
     int pad = t->width - (int)strlen(status);
     printf("%s", status);
@@ -199,10 +201,17 @@ static void draw_chat(oag_tui_t* t) {
         putchar('|');
     }
 
-    // Chat header
+    // Chat header with provider info
     tui_goto(t, x_start + 2, 0);
     tui_set_color(t, OAG_COLOR_ACCENT, OAG_COLOR_BG);
-    printf(" AI Chat ");
+    if (t->providers && t->providers->n_providers > 0) {
+        oag_provider_t* active = oag_provider_get_active(t->providers);
+        printf(" AI Chat [%s] ", active ? active->config.model : "API");
+    } else if (t->inf) {
+        printf(" AI Chat [Local: %s] ", t->inf->model ? t->inf->model->arch : "GGUF");
+    } else {
+        printf(" AI Chat [No AI] ");
+    }
     tui_set_color(t, OAG_COLOR_FG, OAG_COLOR_BG);
 
     // Chat messages
@@ -221,11 +230,30 @@ static void draw_chat(oag_tui_t* t) {
 
         tui_set_color(t, OAG_COLOR_FG, OAG_COLOR_BG);
         if (t->chat[i].text) {
-            int len = (int)strlen(t->chat[i].text);
-            if (len > max_w - 5) len = max_w - 5;
-            printf("%.*s", len, t->chat[i].text);
+            // Handle multi-line messages
+            const char* text = t->chat[i].text;
+            const char* line_start = text;
+            bool first_line = true;
+            while (*line_start && row < panel_h - 2) {
+                const char* nl = strchr(line_start, '\n');
+                int line_len = nl ? (int)(nl - line_start) : (int)strlen(line_start);
+                if (line_len > max_w - 5) line_len = max_w - 5;
+
+                if (!first_line) {
+                    tui_goto(t, x_start + 2, row);
+                    tui_set_color(t, OAG_COLOR_FG, OAG_COLOR_BG);
+                    printf("     ");  // indent continuation
+                }
+                printf("%.*s", line_len, line_start);
+                first_line = false;
+                row++;
+
+                if (nl) line_start = nl + 1;
+                else break;
+            }
+        } else {
+            row++;
         }
-        row++;
     }
 
     // Input line
@@ -297,7 +325,15 @@ static void handle_chat_submit(oag_tui_t* t) {
     // Get AI response
     char* response = NULL;
 
-    if (t->providers) {
+    if (!t->providers && !t->inf) {
+        // No AI backend available
+        response = strdup(
+            "AI未接続。以下のいずれかで接続:\n"
+            "1) set OPENAI_API_KEY=sk-...\n"
+            "2) set ANTHROPIC_API_KEY=sk-...\n"
+            "3) open_agents -m model.gguf"
+        );
+    } else if (t->providers) {
         oag_api_message_t msgs[1] = {{ .role = "user", .content = t->chat_input }};
         oag_api_request_t req = {
             .messages = msgs, .n_messages = 1,
@@ -479,12 +515,21 @@ oag_tui_t* oag_tui_create(oag_tui_config_t config) {
     t->lines[0].len = 0;
     t->n_lines = 1;
 
-    t->mode = MODE_EDITOR;
+    t->mode = MODE_CHAT;  // Start in chat mode by default
     t->running = true;
 
     // Hide cursor blinking
     CONSOLE_CURSOR_INFO cci = { .dwSize = 25, .bVisible = TRUE };
     SetConsoleCursorInfo(t->hout, &cci);
+
+    // Welcome message
+    strcpy(t->chat[0].role, "assistant");
+    t->chat[0].text = strdup(
+        "Open_Agents v0.2.0 へようこそ！\n"
+        "Tab: エディタ/チャット切替\n"
+        "Ctrl+Q: 終了"
+    );
+    t->n_chat = 1;
 
     return t;
 }
