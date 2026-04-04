@@ -216,9 +216,15 @@ static void run_interactive(oag_inference_t* inf, float temperature, int max_tok
 int main(int argc, char** argv) {
     cli_args_t args = parse_args(argc, argv);
 
-    if (args.show_help || (!args.model_path && !args.list_nics && !args.list_gpus && !args.tui_mode && !args.vulkan_mode)) {
+    if (args.show_help) {
         print_usage();
         return 0;
+    }
+
+    // No arguments at all → launch TUI mode (interactive editor + AI chat)
+    if (!args.model_path && !args.list_nics && !args.list_gpus &&
+        !args.tui_mode && !args.vulkan_mode && !args.server_mode && !args.prompt) {
+        args.tui_mode = true;
     }
 
     // List GPUs
