@@ -136,11 +136,7 @@ extern const oag_backend_vtable_t oag_backend_cpu_vtable;
 // GPU backends
 extern const oag_backend_vtable_t oag_backend_cuda_vtable;
 extern const oag_backend_vtable_t oag_backend_directml_vtable;
-
-// Optional backends (compiled conditionally)
-#ifdef OAG_BACKEND_NPU_ENABLED
 extern const oag_backend_vtable_t oag_backend_npu_vtable;
-#endif
 #ifdef OAG_BACKEND_WASM_ENABLED
 extern const oag_backend_vtable_t oag_backend_wasm_vtable;
 #endif

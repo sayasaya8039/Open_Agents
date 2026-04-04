@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
         "src/backend/gpu_detect.c",
         "src/backend/cuda_backend.c",
         "src/backend/directml_backend.c",
+        "src/backend/npu_backend.c",
         "src/render/vulkan_render.c",
         "src/provider/api_provider.c",
     };

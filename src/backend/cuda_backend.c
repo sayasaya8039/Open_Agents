@@ -34,6 +34,26 @@ typedef CUresult (*pfn_cuMemAlloc)(CUdeviceptr*, size_t);
 typedef CUresult (*pfn_cuMemFree)(CUdeviceptr);
 typedef CUresult (*pfn_cuMemcpyHtoD)(CUdeviceptr, const void*, size_t);
 typedef CUresult (*pfn_cuMemcpyDtoH)(void*, CUdeviceptr, size_t);
+typedef CUresult (*pfn_cuStreamCreate)(CUstream*, unsigned int);
+typedef CUresult (*pfn_cuStreamSynchronize)(CUstream);
+typedef CUresult (*pfn_cuStreamDestroy)(CUstream);
+
+// cuBLAS types (loaded from cublas64_*.dll)
+typedef void* cublasHandle_t;
+typedef int cublasStatus_t;
+#define CUBLAS_STATUS_SUCCESS 0
+#define CUBLAS_OP_N 0
+#define CUBLAS_OP_T 1
+
+typedef cublasStatus_t (*pfn_cublasCreate)(cublasHandle_t*);
+typedef cublasStatus_t (*pfn_cublasDestroy)(cublasHandle_t);
+typedef cublasStatus_t (*pfn_cublasSetStream)(cublasHandle_t, CUstream);
+typedef cublasStatus_t (*pfn_cublasSgemm)(cublasHandle_t, int, int,
+    int, int, int, const float*, const float*, int, const float*, int,
+    const float*, float*, int);
+typedef cublasStatus_t (*pfn_cublasGemmEx)(cublasHandle_t, int, int,
+    int, int, int, const void*, const void*, int, int, const void*, int, int,
+    const void*, void*, int, int, int);
 
 // Compute capability attribute IDs
 #define CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR 75
@@ -55,7 +75,13 @@ typedef struct {
     int               compute_major;
     int               compute_minor;
 
-    // Function pointers
+    // cuBLAS
+    HMODULE           hlib_cublas;   // cublas64_*.dll
+    cublasHandle_t    cublas_handle;
+    CUstream          stream;
+    bool              has_cublas;
+
+    // Function pointers — CUDA Driver
     pfn_cuInit              cuInit;
     pfn_cuDeviceGetCount    cuDeviceGetCount;
     pfn_cuDeviceGet         cuDeviceGet;
@@ -68,6 +94,16 @@ typedef struct {
     pfn_cuMemFree           cuMemFree;
     pfn_cuMemcpyHtoD        cuMemcpyHtoD;
     pfn_cuMemcpyDtoH        cuMemcpyDtoH;
+    pfn_cuStreamCreate      cuStreamCreate;
+    pfn_cuStreamSynchronize cuStreamSynchronize;
+    pfn_cuStreamDestroy     cuStreamDestroy;
+
+    // Function pointers — cuBLAS
+    pfn_cublasCreate        cublasCreate;
+    pfn_cublasDestroy       cublasDestroy;
+    pfn_cublasSetStream     cublasSetStream;
+    pfn_cublasSgemm         cublasSgemm;
+    pfn_cublasGemmEx        cublasGemmEx;
 } cuda_ctx_t;
 
 #define LOAD_FN(ctx, name)                                       \
@@ -154,11 +190,52 @@ static bool cuda_init(oag_backend_t* be) {
         return false;
     }
 
+    // Create stream
+    LOAD_FN(ctx, cuStreamCreate);
+    LOAD_FN(ctx, cuStreamSynchronize);
+    LOAD_FN(ctx, cuStreamDestroy);
+    ctx->cuStreamCreate(&ctx->stream, 0);
+
     printf("[CUDA] %s | SM %d.%d | %d SMs | %.1f GB VRAM\n",
            ctx->device_name,
            ctx->compute_major, ctx->compute_minor,
            ctx->sm_count,
            ctx->total_mem / (1024.0 * 1024.0 * 1024.0));
+
+    // Try to load cuBLAS for GPU-accelerated matmul
+    ctx->has_cublas = false;
+    const char* cublas_names[] = {
+        "cublas64_12.dll", "cublas64_11.dll", "cublas64_10.dll", "cublasLt64_12.dll", NULL
+    };
+    for (int i = 0; cublas_names[i]; i++) {
+        ctx->hlib_cublas = LoadLibraryA(cublas_names[i]);
+        if (ctx->hlib_cublas) break;
+    }
+
+    if (ctx->hlib_cublas) {
+        ctx->cublasCreate    = (pfn_cublasCreate)GetProcAddress(ctx->hlib_cublas, "cublasCreate_v2");
+        ctx->cublasDestroy   = (pfn_cublasDestroy)GetProcAddress(ctx->hlib_cublas, "cublasDestroy_v2");
+        ctx->cublasSetStream = (pfn_cublasSetStream)GetProcAddress(ctx->hlib_cublas, "cublasSetStream_v2");
+        ctx->cublasSgemm     = (pfn_cublasSgemm)GetProcAddress(ctx->hlib_cublas, "cublasSgemm_v2");
+        ctx->cublasGemmEx    = (pfn_cublasGemmEx)GetProcAddress(ctx->hlib_cublas, "cublasGemmEx");
+
+        if (ctx->cublasCreate && ctx->cublasSgemm) {
+            cublasStatus_t st = ctx->cublasCreate(&ctx->cublas_handle);
+            if (st == CUBLAS_STATUS_SUCCESS) {
+                ctx->has_cublas = true;
+                ctx->cublasSetStream(ctx->cublas_handle, ctx->stream);
+                printf("[CUDA] cuBLAS loaded — GPU matmul enabled\n");
+            }
+        }
+
+        if (!ctx->has_cublas) {
+            printf("[CUDA] cuBLAS functions not found, using CPU matmul fallback\n");
+            FreeLibrary(ctx->hlib_cublas);
+            ctx->hlib_cublas = NULL;
+        }
+    } else {
+        printf("[CUDA] cuBLAS not found — matmul will use CPU. Install CUDA Toolkit for GPU acceleration.\n");
+    }
 
     return true;
 }
@@ -167,12 +244,13 @@ static void cuda_shutdown(oag_backend_t* be) {
     cuda_ctx_t* ctx = (cuda_ctx_t*)be->ctx;
     if (!ctx) return;
 
-    if (ctx->context) {
-        ctx->cuCtxDestroy(ctx->context);
+    if (ctx->has_cublas && ctx->cublasDestroy) {
+        ctx->cublasDestroy(ctx->cublas_handle);
     }
-    if (ctx->hlib) {
-        FreeLibrary(ctx->hlib);
-    }
+    if (ctx->hlib_cublas) FreeLibrary(ctx->hlib_cublas);
+    if (ctx->stream) ctx->cuStreamDestroy(ctx->stream);
+    if (ctx->context) ctx->cuCtxDestroy(ctx->context);
+    if (ctx->hlib) FreeLibrary(ctx->hlib);
     free(ctx);
     be->ctx = NULL;
 }
@@ -204,10 +282,58 @@ static bool cuda_get_device_info(oag_backend_t* be, oag_device_info_t* info) {
 
 static void cuda_matmul(oag_backend_t* be, oag_tensor_t* dst,
                         const oag_tensor_t* a, const oag_tensor_t* b) {
-    (void)be;
-    // TODO: Replace with cuBLAS sgemm via runtime loading
-    // For now: CPU fallback
-    oag_tensor_matmul(dst, a, b);
+    cuda_ctx_t* ctx = (cuda_ctx_t*)be->ctx;
+
+    if (!ctx || !ctx->has_cublas) {
+        // CPU fallback
+        oag_tensor_matmul(dst, a, b);
+        return;
+    }
+
+    // cuBLAS sgemm: C = alpha * A @ B + beta * C
+    // A: [M, K], B: [K, N] → C: [M, N]
+    // cuBLAS uses column-major, so we compute C^T = B^T @ A^T
+    int M = (int)a->shape[0];
+    int K = (int)a->shape[1];
+    int N = (int)b->shape[1];
+
+    size_t size_a = M * K * sizeof(float);
+    size_t size_b = K * N * sizeof(float);
+    size_t size_c = M * N * sizeof(float);
+
+    // Allocate device memory
+    CUdeviceptr d_a, d_b, d_c;
+    if (ctx->cuMemAlloc(&d_a, size_a) != CUDA_SUCCESS ||
+        ctx->cuMemAlloc(&d_b, size_b) != CUDA_SUCCESS ||
+        ctx->cuMemAlloc(&d_c, size_c) != CUDA_SUCCESS) {
+        // Fallback on allocation failure
+        oag_tensor_matmul(dst, a, b);
+        return;
+    }
+
+    // Upload to GPU
+    ctx->cuMemcpyHtoD(d_a, a->data, size_a);
+    ctx->cuMemcpyHtoD(d_b, b->data, size_b);
+
+    // cuBLAS sgemm (column-major → swap A/B and transpose)
+    float alpha = 1.0f, beta = 0.0f;
+    ctx->cublasSgemm(ctx->cublas_handle,
+                     CUBLAS_OP_N, CUBLAS_OP_N,
+                     N, M, K,
+                     &alpha,
+                     (const float*)(uintptr_t)d_b, N,
+                     (const float*)(uintptr_t)d_a, K,
+                     &beta,
+                     (float*)(uintptr_t)d_c, N);
+
+    // Download result
+    ctx->cuStreamSynchronize(ctx->stream);
+    ctx->cuMemcpyDtoH(dst->data, d_c, size_c);
+
+    // Free device memory
+    ctx->cuMemFree(d_a);
+    ctx->cuMemFree(d_b);
+    ctx->cuMemFree(d_c);
 }
 
 static void cuda_matmul_q4(oag_backend_t* be, oag_tensor_t* dst,

@@ -185,6 +185,7 @@ static void ensure_registry(void) {
     registered_backends[OAG_BACKEND_CPU]      = &oag_backend_cpu_vtable;
     registered_backends[OAG_BACKEND_CUDA]     = &oag_backend_cuda_vtable;
     registered_backends[OAG_BACKEND_DIRECTML] = &oag_backend_directml_vtable;
+    registered_backends[OAG_BACKEND_NPU]      = &oag_backend_npu_vtable;
     registry_initialized = true;
 }
 

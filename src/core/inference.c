@@ -68,6 +68,17 @@ static void init_device_scheduler(oag_device_scheduler_t* ds) {
         }
     }
 
+    // Try NPU (Intel AI Boost via OpenVINO)
+    ds->npu = oag_backend_create(OAG_BACKEND_NPU);
+    if (ds->npu) {
+        ds->use_npu = true;
+        oag_device_info_t npu_info;
+        if (ds->npu->vt->get_device_info) {
+            ds->npu->vt->get_device_info(ds->npu, &npu_info);
+            printf("[Scheduler] NPU: %s\n", npu_info.name);
+        }
+    }
+
     ds->use_multi_device = ds->use_gpu || ds->use_npu;
 
     if (ds->use_multi_device) {
