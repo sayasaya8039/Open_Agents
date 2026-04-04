@@ -137,14 +137,7 @@ extern const oag_backend_vtable_t oag_backend_cpu_vtable;
 extern const oag_backend_vtable_t oag_backend_cuda_vtable;
 extern const oag_backend_vtable_t oag_backend_directml_vtable;
 extern const oag_backend_vtable_t oag_backend_npu_vtable;
-#ifdef OAG_BACKEND_WASM_ENABLED
-extern const oag_backend_vtable_t oag_backend_wasm_vtable;
-#endif
-#ifdef OAG_BACKEND_MOJO_ENABLED
 extern const oag_backend_vtable_t oag_backend_mojo_vtable;
-#endif
-#ifdef OAG_BACKEND_JULIA_ENABLED
 extern const oag_backend_vtable_t oag_backend_julia_vtable;
-#endif
 
 #endif // OAG_BACKEND_H

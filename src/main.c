@@ -25,6 +25,7 @@
 #include "server/http_server.h"
 #include "net/multi_nic.h"
 #include "render/vulkan_render.h"
+#include "ui/tui.h"
 
 #ifndef OAG_VERSION
 #define OAG_VERSION "0.1.0"
@@ -43,6 +44,8 @@ typedef struct {
     bool        show_help;
     bool        list_nics;
     bool        list_gpus;
+    bool        tui_mode;
+    const char* edit_file;
     float       temperature;
     int         max_tokens;
     int         n_threads;
@@ -59,6 +62,8 @@ static cli_args_t parse_args(int argc, char** argv) {
         .show_help   = false,
         .list_nics   = false,
         .list_gpus   = false,
+        .tui_mode    = false,
+        .edit_file   = NULL,
         .temperature = 0.7f,
         .max_tokens  = 512,
         .n_threads   = 0,
@@ -88,6 +93,9 @@ static cli_args_t parse_args(int argc, char** argv) {
             args.list_nics = true;
         } else if (strcmp(argv[i], "--gpus") == 0) {
             args.list_gpus = true;
+        } else if (strcmp(argv[i], "--tui") == 0 || strcmp(argv[i], "--edit") == 0) {
+            args.tui_mode = true;
+            if (i + 1 < argc && argv[i+1][0] != '-') args.edit_file = argv[++i];
         } else if (argv[i][0] != '-' && !args.model_path) {
             args.model_path = argv[i];
         }
@@ -115,6 +123,8 @@ static void print_usage(void) {
         "  --temp <float>        Temperature (default: 0.7)\n"
         "  --max-tokens <n>      Max tokens to generate (default: 512)\n"
         "  -t, --threads <n>     CPU threads (default: auto)\n"
+        "  --tui [file]          TUI code editor + AI chat (split pane)\n"
+        "  --edit [file]         Same as --tui\n"
         "  --gpus                Detect GPUs (NVIDIA→CUDA, AMD→DirectML)\n"
         "  --nics                List network interfaces\n"
         "  -h, --help            Show this help\n"
@@ -206,7 +216,7 @@ static void run_interactive(oag_inference_t* inf, float temperature, int max_tok
 int main(int argc, char** argv) {
     cli_args_t args = parse_args(argc, argv);
 
-    if (args.show_help || (!args.model_path && !args.list_nics && !args.list_gpus)) {
+    if (args.show_help || (!args.model_path && !args.list_nics && !args.list_gpus && !args.tui_mode)) {
         print_usage();
         return 0;
     }
@@ -278,6 +288,30 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // TUI mode (code editor + AI chat) — works with or without model
+    if (args.tui_mode) {
+        oag_tui_t* tui = oag_tui_create(oag_tui_default_config());
+        if (tui) {
+            if (inf) oag_tui_set_inference(tui, inf);
+
+            oag_provider_registry_t* providers = oag_provider_registry_create();
+            oag_provider_auto_detect(providers);
+            if (providers->n_providers > 0) {
+                oag_tui_set_provider(tui, providers);
+            }
+
+            if (args.edit_file) {
+                oag_tui_open_file(tui, args.edit_file);
+            }
+
+            oag_tui_run(tui);
+            oag_tui_free(tui);
+            oag_provider_registry_free(providers);
+        }
+        oag_inference_free(inf);
+        if (vk) oag_vk_destroy(vk);
+        return 0;
+    }
     // Server mode
     if (args.server_mode) {
         oag_server_config_t srv_config = oag_server_default_config();
