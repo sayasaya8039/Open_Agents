@@ -155,15 +155,26 @@ static char* build_chat_prompt(const oag_chat_msg_t* messages, int32_t n_message
 }
 
 char* oag_inference_chat(oag_inference_t* inf, oag_chat_params_t params) {
+    if (!inf || !inf->model) return strdup("[Error: no model loaded]");
+
     double t0 = inf_get_time_ms();
 
     // Build prompt
     char* prompt_text = build_chat_prompt(params.messages, params.n_messages);
 
     // Tokenize
+    if (!inf->model->tokenizer) {
+        free(prompt_text);
+        return strdup("[Error: tokenizer not loaded]");
+    }
+
     size_t n_tokens;
     int32_t* tokens = oag_tokenizer_encode(inf->model->tokenizer, prompt_text, &n_tokens);
     free(prompt_text);
+
+    if (!tokens || n_tokens == 0) {
+        return strdup("[Error: tokenization failed]");
+    }
 
     printf("[Chat] Prompt: %zu tokens | Max gen: %d\n", n_tokens, params.max_tokens);
 

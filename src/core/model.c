@@ -28,8 +28,9 @@ static double get_time_ms(void) {
 
 oag_kv_cache_t* oag_kv_cache_create(uint32_t n_layer, uint32_t n_ctx, uint32_t n_embd) {
     oag_kv_cache_t* cache = (oag_kv_cache_t*)calloc(1, sizeof(oag_kv_cache_t));
-    cache->n_ctx = n_ctx;
-    cache->pos   = 0;
+    cache->n_ctx   = n_ctx;
+    cache->n_layer = n_layer;
+    cache->pos     = 0;
     cache->k = (oag_tensor_t**)calloc(n_layer, sizeof(oag_tensor_t*));
     cache->v = (oag_tensor_t**)calloc(n_layer, sizeof(oag_tensor_t*));
 
@@ -43,8 +44,10 @@ oag_kv_cache_t* oag_kv_cache_create(uint32_t n_layer, uint32_t n_ctx, uint32_t n
 
 void oag_kv_cache_free(oag_kv_cache_t* cache) {
     if (!cache) return;
-    // n_layer not stored, but we'll free what's there
-    // This is a simplification — in production, track n_layer
+    for (uint32_t l = 0; l < cache->n_layer; l++) {
+        oag_tensor_free(cache->k[l]);
+        oag_tensor_free(cache->v[l]);
+    }
     free(cache->k);
     free(cache->v);
     free(cache);

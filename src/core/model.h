@@ -14,6 +14,7 @@ typedef struct {
     oag_tensor_t** v;  // [n_layer] tensors
     int32_t        pos; // current position
     int32_t        n_ctx;
+    uint32_t       n_layer;
 } oag_kv_cache_t;
 
 // Layer weights (Llama-style transformer)

@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
         "-mfma",
         "-mf16c",
         "-DNDEBUG",
-        "-DOAG_VERSION=\"0.1.0\"",
+        "-DOAG_VERSION=\"0.2.0\"",
         "-DOAG_HAS_CPU_BACKEND=1",
     };
 

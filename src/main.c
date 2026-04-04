@@ -216,7 +216,7 @@ static void run_interactive(oag_inference_t* inf, float temperature, int max_tok
 int main(int argc, char** argv) {
     cli_args_t args = parse_args(argc, argv);
 
-    if (args.show_help || (!args.model_path && !args.list_nics && !args.list_gpus && !args.tui_mode)) {
+    if (args.show_help || (!args.model_path && !args.list_nics && !args.list_gpus && !args.tui_mode && !args.vulkan_mode)) {
         print_usage();
         return 0;
     }
@@ -236,59 +236,48 @@ int main(int argc, char** argv) {
         if (!args.model_path) return 0;
     }
 
-    // Detect model format
-    printf("[Open_Agents] Loading model: %s\n", args.model_path);
-    oag_model_format_t fmt = oag_detect_model_format(args.model_path);
-
-    switch (fmt) {
-        case OAG_FORMAT_GGUF:
-            printf("[Open_Agents] Format: GGUF\n");
-            break;
-        case OAG_FORMAT_ONNX:
-            printf("[Open_Agents] Format: ONNX\n");
-            break;
-        default:
-            fprintf(stderr, "[Open_Agents] Unknown model format\n");
-            return 1;
-    }
-
     // Initialize Vulkan (optional)
     oag_vk_ctx_t* vk = NULL;
     if (args.vulkan_mode) {
         oag_vk_config_t vk_config = oag_vk_default_config();
         vk = oag_vk_create(vk_config);
+        if (vk) oag_vk_print_stats(vk);
+        // If no model specified, just test Vulkan and exit
+        if (!args.model_path && !args.tui_mode && !args.server_mode) {
+            oag_vk_destroy(vk);
+            return 0;
+        }
     }
 
-    // Create inference engine
+    // Load model (if specified)
     oag_inference_t* inf = NULL;
 
-    if (fmt == OAG_FORMAT_GGUF) {
-        inf = oag_inference_create(args.model_path);
-    } else if (fmt == OAG_FORMAT_ONNX) {
-        // ONNX path: load separately and wrap
-        oag_onnx_ctx_t* onnx = oag_onnx_load(args.model_path);
-        if (onnx) {
-            oag_onnx_print_summary(onnx);
-            // TODO: Create inference engine from ONNX graph
-            // For now, print info and exit
-            printf("[Open_Agents] ONNX inference pipeline coming soon\n");
-            oag_onnx_free(onnx);
-        }
-        // Fallback message
-        if (!inf) {
-            printf("[Open_Agents] ONNX runtime not yet complete. Use GGUF format.\n");
-            if (vk) oag_vk_destroy(vk);
-            return 1;
+    if (args.model_path) {
+        printf("[Open_Agents] Loading model: %s\n", args.model_path);
+        oag_model_format_t fmt = oag_detect_model_format(args.model_path);
+
+        switch (fmt) {
+            case OAG_FORMAT_GGUF:
+                printf("[Open_Agents] Format: GGUF\n");
+                inf = oag_inference_create(args.model_path);
+                break;
+            case OAG_FORMAT_ONNX: {
+                printf("[Open_Agents] Format: ONNX\n");
+                oag_onnx_ctx_t* onnx = oag_onnx_load(args.model_path);
+                if (onnx) {
+                    oag_onnx_print_summary(onnx);
+                    printf("[Open_Agents] ONNX inference pipeline — use API providers or GGUF for now\n");
+                    oag_onnx_free(onnx);
+                }
+                break;
+            }
+            default:
+                fprintf(stderr, "[Open_Agents] Unknown model format: %s\n", args.model_path);
+                break;
         }
     }
 
-    if (!inf) {
-        fprintf(stderr, "[Open_Agents] Failed to initialize inference engine\n");
-        if (vk) oag_vk_destroy(vk);
-        return 1;
-    }
-
-    // TUI mode (code editor + AI chat) — works with or without model
+    // TUI mode — works with or without model
     if (args.tui_mode) {
         oag_tui_t* tui = oag_tui_create(oag_tui_default_config());
         if (tui) {
@@ -312,8 +301,15 @@ int main(int argc, char** argv) {
         if (vk) oag_vk_destroy(vk);
         return 0;
     }
+    // Below modes require a loaded model
+    if (!inf && !args.tui_mode) {
+        fprintf(stderr, "[Open_Agents] No model loaded. Use -m <model.gguf> or --tui for editor-only mode.\n");
+        if (vk) oag_vk_destroy(vk);
+        return 1;
+    }
+
     // Server mode
-    if (args.server_mode) {
+    if (args.server_mode && inf) {
         oag_server_config_t srv_config = oag_server_default_config();
         srv_config.port = args.port;
         oag_server_t* srv = oag_server_create(inf, srv_config);
@@ -324,7 +320,7 @@ int main(int argc, char** argv) {
         }
     }
     // Single prompt mode
-    else if (args.prompt) {
+    else if (args.prompt && inf) {
         oag_chat_msg_t messages[1] = {
             { .role = "user", .content = args.prompt }
         };
@@ -346,7 +342,7 @@ int main(int argc, char** argv) {
         oag_inference_print_stats(inf);
     }
     // Interactive REPL
-    else {
+    else if (inf) {
         run_interactive(inf, args.temperature, args.max_tokens);
         oag_inference_print_stats(inf);
     }

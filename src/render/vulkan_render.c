@@ -59,40 +59,31 @@ typedef struct {
     uint32_t minImageTransferGranularity[3];
 } VkQueueFamilyProperties_t;
 
+// VkPhysicalDeviceProperties is 824 bytes in Vulkan 1.2
+// We must allocate the FULL struct or vkGetPhysicalDeviceProperties will corrupt the stack
 typedef struct {
     uint32_t      apiVersion;
     uint32_t      driverVersion;
     uint32_t      vendorID;
     uint32_t      deviceID;
-    uint32_t      deviceType;
-    char          deviceName[256];
-    uint8_t       pipelineCacheUUID[16];
-    // ... (truncated, we only use deviceName)
+    uint32_t      deviceType;        // offset 16
+    char          deviceName[256];   // offset 20
+    uint8_t       pipelineCacheUUID[16]; // offset 276
+    uint8_t       _limits_pad[480];  // VkPhysicalDeviceLimits (480 bytes)
+    uint8_t       _sparse_pad[40];   // VkPhysicalDeviceSparseProperties
 } VkPhysicalDeviceProperties_t;
 
-typedef struct {
-    VkDeviceSize size;
-    VkFlags      flags;
-} VkMemoryHeap_t;
-
-typedef struct {
-    VkFlags   propertyFlags;
-    uint32_t  heapIndex;
-} VkMemoryType_t;
-
-typedef struct {
-    uint32_t       memoryTypeCount;
-    VkMemoryType_t memoryTypes[32];
-    uint32_t       memoryHeapCount;
-    VkMemoryHeap_t memoryHeaps[16];
-} VkPhysicalDeviceMemoryProperties_t;
+// Use raw byte buffer for memory properties to avoid layout issues
+// VkPhysicalDeviceMemoryProperties is 520 bytes on 64-bit
+// We'll parse it manually
+#define VK_MEM_PROPS_SIZE 1024  // generous buffer
 
 // Function pointer types
 typedef VkResult (*PFN_vkCreateInstance)(const VkInstanceCreateInfo_t*, const void*, VkInstance*);
 typedef void     (*PFN_vkDestroyInstance)(VkInstance, const void*);
 typedef VkResult (*PFN_vkEnumeratePhysicalDevices)(VkInstance, uint32_t*, VkPhysicalDevice*);
 typedef void     (*PFN_vkGetPhysicalDeviceProperties)(VkPhysicalDevice, VkPhysicalDeviceProperties_t*);
-typedef void     (*PFN_vkGetPhysicalDeviceMemoryProperties)(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties_t*);
+typedef void     (*PFN_vkGetPhysicalDeviceMemoryProperties)(VkPhysicalDevice, void*);
 typedef void     (*PFN_vkGetPhysicalDeviceQueueFamilyProperties)(VkPhysicalDevice, uint32_t*, VkQueueFamilyProperties_t*);
 
 // ============================================================
@@ -152,7 +143,7 @@ oag_vk_config_t oag_vk_default_config(void) {
 
 oag_vk_ctx_t* oag_vk_create(oag_vk_config_t config) {
     oag_vk_ctx_t* ctx = (oag_vk_ctx_t*)calloc(1, sizeof(oag_vk_ctx_t));
-    ctx->config = config;
+    memcpy(&ctx->config, &config, sizeof(config));
 
     vk_internal_t* vk = (vk_internal_t*)calloc(1, sizeof(vk_internal_t));
 
@@ -207,21 +198,40 @@ oag_vk_ctx_t* oag_vk_create(oag_vk_config_t config) {
     vk->best_device_vram = 0;
 
     for (uint32_t i = 0; i < vk->n_physical_devices; i++) {
-        VkPhysicalDeviceProperties_t props;
-        vk->vkGetPhysicalDeviceProperties(vk->physical_devices[i], &props);
+        // Heap-allocate to avoid stack corruption from Vulkan struct size mismatch
+        VkPhysicalDeviceProperties_t* props = (VkPhysicalDeviceProperties_t*)calloc(1, sizeof(*props));
+        vk->vkGetPhysicalDeviceProperties(vk->physical_devices[i], props);
 
-        VkPhysicalDeviceMemoryProperties_t mem_props;
-        vk->vkGetPhysicalDeviceMemoryProperties(vk->physical_devices[i], &mem_props);
+        // Parse memory properties from raw buffer
+        uint8_t* mem_buf = (uint8_t*)calloc(1, VK_MEM_PROPS_SIZE);
+        vk->vkGetPhysicalDeviceMemoryProperties(vk->physical_devices[i], mem_buf);
+
+        // Layout: memoryTypeCount(4) + memoryTypes[32](8 each=256) + memoryHeapCount(4) + pad(4) + memoryHeaps[16](16 each=256)
+        // Offset of memoryHeapCount = 4 + 256 = 260
+        // Offset of memoryHeaps = 260 + 4 + 4(pad) = 268? No.
+        // Actually: memoryTypeCount(4), memoryTypes[32] = {propertyFlags(4), heapIndex(4)} * 32 = 256
+        // memoryHeapCount at offset 260, then memoryHeaps[16] = {size(8), flags(4), pad(4)} * 16
+        uint32_t heap_count;
+        memcpy(&heap_count, mem_buf + 260, 4);
+        if (heap_count > 16) heap_count = 16;
 
         uint64_t vram = 0;
-        for (uint32_t h = 0; h < mem_props.memoryHeapCount; h++) {
-            if (mem_props.memoryHeaps[h].flags & 1) {  // DEVICE_LOCAL
-                vram += mem_props.memoryHeaps[h].size;
+        // memoryHeaps starts at offset 264 (or 268 with padding)
+        // Try offset 264 first
+        for (uint32_t h = 0; h < heap_count; h++) {
+            // Each heap: VkDeviceSize(8) + VkMemoryPropertyFlags(4) + pad(4) = 16
+            size_t heap_offset = 264 + h * 16;
+            VkDeviceSize heap_size;
+            VkFlags heap_flags;
+            memcpy(&heap_size, mem_buf + heap_offset, 8);
+            memcpy(&heap_flags, mem_buf + heap_offset + 8, 4);
+            if (heap_flags & 1) {  // DEVICE_LOCAL
+                vram += heap_size;
             }
         }
 
         const char* type_str = "Unknown";
-        switch (props.deviceType) {
+        switch (props->deviceType) {
             case 1: type_str = "Integrated"; break;
             case 2: type_str = "Discrete"; break;
             case 3: type_str = "Virtual"; break;
@@ -229,13 +239,19 @@ oag_vk_ctx_t* oag_vk_create(oag_vk_config_t config) {
         }
 
         printf("  [%u] %-10s  %.1f GB  %s\n",
-               i, type_str, vram / (1024.0 * 1024.0 * 1024.0), props.deviceName);
+               i, type_str, vram / (1024.0 * 1024.0 * 1024.0), props->deviceName);
 
-        if (vram > vk->best_device_vram) {
+        // Prefer discrete GPU with most VRAM
+        bool is_discrete = (props->deviceType == 2);
+        if ((is_discrete && vram > vk->best_device_vram) ||
+            (vram > vk->best_device_vram && vk->best_device_vram == 0)) {
             vk->best_device_vram = vram;
             vk->best_device_idx = i;
-            strncpy(vk->best_device_name, props.deviceName, sizeof(vk->best_device_name) - 1);
+            strncpy(vk->best_device_name, props->deviceName, sizeof(vk->best_device_name) - 1);
         }
+
+        free(props);
+        free(mem_buf);
 
         // Find queue families
         uint32_t n_families = 0;
