@@ -259,9 +259,12 @@ oag_tensor_t* oag_model_forward(oag_model_t* model,
                 oag_tensor_copy(norm_out, &h_view);
             }
 
-            // 2. Q/K/V projections (simplified: skip if weights missing)
-            if (layer->wq && layer->wk && layer->wv) {
-                // Q = norm_out @ Wq^T (simplified matmul for single vector)
+            // 2. Q/K/V projections + Multi-Head Attention with KV cache
+            if (layer->wq && layer->wk && layer->wv && layer->wo) {
+                uint32_t kv_dim = n_head_kv * head_dim;
+                int32_t pos = kv_pos + t;
+
+                // Q = norm_out @ Wq^T
                 for (uint32_t i = 0; i < n_embd; i++) {
                     float sum = 0.0f;
                     for (uint32_t j = 0; j < n_embd; j++) {
@@ -270,39 +273,84 @@ oag_tensor_t* oag_model_forward(oag_model_t* model,
                     q_out->data[i] = sum;
                 }
 
-                // K, V (use n_head_kv * head_dim for GQA)
-                uint32_t kv_dim = n_head_kv * head_dim;
+                // K, V projections (GQA: kv_dim may be < n_embd)
                 for (uint32_t i = 0; i < kv_dim; i++) {
-                    float sum_k = 0.0f, sum_v = 0.0f;
+                    float sk = 0.0f, sv = 0.0f;
                     for (uint32_t j = 0; j < n_embd; j++) {
-                        sum_k += norm_out->data[j] * layer->wk->data[i * n_embd + j];
-                        sum_v += norm_out->data[j] * layer->wv->data[i * n_embd + j];
+                        sk += norm_out->data[j] * layer->wk->data[i * n_embd + j];
+                        sv += norm_out->data[j] * layer->wv->data[i * n_embd + j];
                     }
-                    k_out->data[i] = sum_k;
-                    v_out->data[i] = sum_v;
+                    k_out->data[i] = sk;
+                    v_out->data[i] = sv;
                 }
 
-                // Apply RoPE to Q and K
-                oag_tensor_rope(q_out, q_out, n_head, head_dim, kv_pos + t, model->rope_freq_base);
-                oag_tensor_rope(k_out, k_out, n_head_kv, head_dim, kv_pos + t, model->rope_freq_base);
+                // RoPE
+                oag_tensor_rope(q_out, q_out, n_head, head_dim, pos, model->rope_freq_base);
+                oag_tensor_rope(k_out, k_out, n_head_kv, head_dim, pos, model->rope_freq_base);
 
-                // Store K/V in cache (simplified)
-                // ... KV cache update would go here ...
+                // Write K/V to cache at current position
+                if (model->kv_cache && pos < model->kv_cache->n_ctx) {
+                    float* cache_k = model->kv_cache->k[l]->data + pos * n_embd;
+                    float* cache_v = model->kv_cache->v[l]->data + pos * n_embd;
+                    memcpy(cache_k, k_out->data, kv_dim * sizeof(float));
+                    memcpy(cache_v, v_out->data, kv_dim * sizeof(float));
+                }
 
-                // Simplified attention: just use Q @ K^T for current position
-                // Full implementation needs KV cache iteration
-                // For now: attn_out = Wo @ Q (placeholder)
+                // Multi-head attention: for each head, Q[h] @ K_cache[h]^T → softmax → @ V_cache[h]
+                int32_t seq_len = pos + 1;  // attend to all positions up to current
+                uint32_t n_rep = n_head / n_head_kv;  // GQA repetition factor
+
+                memset(attn_out->data, 0, n_embd * sizeof(float));
+
+                for (uint32_t h = 0; h < n_head; h++) {
+                    uint32_t kv_h = h / n_rep;  // GQA: map query head to KV head
+                    float* q_h = q_out->data + h * head_dim;
+
+                    // Compute attention scores: Q[h] @ K_cache[kv_h, :seq_len]^T
+                    float* scores = (float*)calloc(seq_len, sizeof(float));
+                    float max_score = -1e30f;
+
+                    for (int32_t s = 0; s < seq_len; s++) {
+                        float* k_s = model->kv_cache->k[l]->data + s * n_embd + kv_h * head_dim;
+                        float dot = 0.0f;
+                        for (uint32_t d = 0; d < head_dim; d++) {
+                            dot += q_h[d] * k_s[d];
+                        }
+                        scores[s] = dot / sqrtf((float)head_dim);
+                        if (scores[s] > max_score) max_score = scores[s];
+                    }
+
+                    // Softmax
+                    float sum_exp = 0.0f;
+                    for (int32_t s = 0; s < seq_len; s++) {
+                        scores[s] = expf(scores[s] - max_score);
+                        sum_exp += scores[s];
+                    }
+                    float inv_sum = 1.0f / (sum_exp + 1e-10f);
+                    for (int32_t s = 0; s < seq_len; s++) {
+                        scores[s] *= inv_sum;
+                    }
+
+                    // Weighted sum of V: attn_out[h] = sum(scores[s] * V_cache[kv_h, s])
+                    float* out_h = attn_out->data + h * head_dim;
+                    for (int32_t s = 0; s < seq_len; s++) {
+                        float* v_s = model->kv_cache->v[l]->data + s * n_embd + kv_h * head_dim;
+                        float w = scores[s];
+                        for (uint32_t d = 0; d < head_dim; d++) {
+                            out_h[d] += w * v_s[d];
+                        }
+                    }
+
+                    free(scores);
+                }
+
+                // Output projection: h += Wo @ attn_out
                 for (uint32_t i = 0; i < n_embd; i++) {
                     float sum = 0.0f;
                     for (uint32_t j = 0; j < n_embd; j++) {
-                        sum += q_out->data[j] * layer->wo->data[i * n_embd + j];
+                        sum += attn_out->data[j] * layer->wo->data[i * n_embd + j];
                     }
-                    attn_out->data[i] = sum;
-                }
-
-                // Residual connection
-                for (uint32_t i = 0; i < n_embd; i++) {
-                    h[i] += attn_out->data[i];
+                    h[i] += sum;
                 }
             }
 
@@ -314,7 +362,6 @@ oag_tensor_t* oag_model_forward(oag_model_t* model,
                 // SwiGLU: out = W2 @ (silu(W1 @ x) * (W3 @ x))
                 uint32_t ff = model->n_ff;
                 float* gate = (float*)malloc(ff * sizeof(float));
-                float* up   = (float*)malloc(ff * sizeof(float));
 
                 for (uint32_t i = 0; i < ff; i++) {
                     float g = 0.0f, u = 0.0f;
@@ -337,7 +384,6 @@ oag_tensor_t* oag_model_forward(oag_model_t* model,
                 }
 
                 free(gate);
-                free(up);
             }
         }
     }

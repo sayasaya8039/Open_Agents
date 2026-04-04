@@ -29,6 +29,7 @@ static const char* DEFAULT_URLS[] = {
     [OAG_PROVIDER_TOGETHER]    = "https://api.together.xyz",
     [OAG_PROVIDER_DEEPSEEK]    = "https://api.deepseek.com",
     [OAG_PROVIDER_OLLAMA]      = "http://localhost:11434",
+    [OAG_PROVIDER_CUSTOM]      = "http://localhost:8080",
 };
 
 static const char* DEFAULT_MODELS[] = {
@@ -44,6 +45,7 @@ static const char* DEFAULT_MODELS[] = {
     [OAG_PROVIDER_TOGETHER]    = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     [OAG_PROVIDER_DEEPSEEK]    = "deepseek-chat",
     [OAG_PROVIDER_OLLAMA]      = "qwen2.5-coder:7b",
+    [OAG_PROVIDER_CUSTOM]      = "custom-model",
 };
 
 // ============================================================
@@ -161,10 +163,12 @@ static http_result_t http_post(const char* url, const char* auth_header,
         result.len += bytes_read;
         if (result.len + 8192 >= buf_size) {
             buf_size *= 2;
-            result.body = (char*)realloc(result.body, buf_size);
+            char* tmp = (char*)realloc(result.body, buf_size);
+            if (!tmp) break;  // allocation failed, stop reading
+            result.body = tmp;
         }
     }
-    result.body[result.len] = '\0';
+    if (result.body) result.body[result.len] = '\0';
 
     WinHttpCloseHandle(request);
     WinHttpCloseHandle(connect);

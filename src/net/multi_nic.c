@@ -29,6 +29,7 @@ static void discover_nics_win(oag_multi_nic_t* mn) {
     GetAdaptersAddresses(AF_INET, 0, NULL, NULL, &buf_size);
 
     IP_ADAPTER_ADDRESSES* addrs = (IP_ADAPTER_ADDRESSES*)malloc(buf_size);
+    if (!addrs) return;
     if (GetAdaptersAddresses(AF_INET, 0, NULL, addrs, &buf_size) != NO_ERROR) {
         free(addrs);
         return;
@@ -423,6 +424,14 @@ int64_t oag_multi_nic_download(oag_multi_nic_t* mn,
 
         int64_t buf_size = tasks[i].range_end - tasks[i].range_start + 1;
         buffers[i] = (uint8_t*)malloc((size_t)buf_size);
+        if (!buffers[i]) {
+            fprintf(stderr, "[Multi-NIC] Failed to allocate %lld bytes for chunk %d\n",
+                    (long long)buf_size, i);
+            // Cleanup and abort
+            for (int j = 0; j < i; j++) free(buffers[j]);
+            free(tasks); free(buffers); free(threads);
+            return -1;
+        }
         tasks[i].buffer = buffers[i];
     }
 

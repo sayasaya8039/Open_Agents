@@ -262,9 +262,24 @@ static void handle_chat_completions(socket_t fd, oag_inference_t* inf,
     } else {
         char* result = oag_inference_chat(inf, params);
 
-        // Build response JSON
+        // Escape result for JSON
         size_t result_len = result ? strlen(result) : 0;
-        size_t json_size = result_len + 512;
+        size_t escaped_size = result_len * 2 + 1;
+        char* escaped = (char*)malloc(escaped_size);
+        size_t ep = 0;
+        if (result) {
+            for (size_t ri = 0; ri < result_len && ep < escaped_size - 2; ri++) {
+                char c = result[ri];
+                if (c == '"' || c == '\\') { escaped[ep++] = '\\'; escaped[ep++] = c; }
+                else if (c == '\n') { escaped[ep++] = '\\'; escaped[ep++] = 'n'; }
+                else if (c == '\r') { escaped[ep++] = '\\'; escaped[ep++] = 'r'; }
+                else if (c == '\t') { escaped[ep++] = '\\'; escaped[ep++] = 't'; }
+                else escaped[ep++] = c;
+            }
+        }
+        escaped[ep] = '\0';
+
+        size_t json_size = ep + 512;
         char* json = (char*)malloc(json_size);
 
         snprintf(json, json_size,
@@ -274,10 +289,11 @@ static void handle_chat_completions(socket_t fd, oag_inference_t* inf,
             "\"message\":{\"role\":\"assistant\",\"content\":\"%s\"},"
             "\"finish_reason\":\"stop\"}],"
             "\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0}}",
-            result ? result : "");
+            escaped);
 
         send_json(fd, 200, json);
         free(json);
+        free(escaped);
         free(result);
     }
 }

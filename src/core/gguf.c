@@ -140,7 +140,14 @@ static double read_f64(reader_t* r) {
 static gguf_string_t read_string(reader_t* r) {
     gguf_string_t s;
     s.len = read_u64(r);
+    // Bounds check: prevent reading past buffer
+    if (s.len > r->size - r->pos || s.len > 0x7FFFFFFF) {
+        s.len = 0;
+        s.data = (char*)calloc(1, 1);
+        return s;
+    }
     s.data = (char*)malloc(s.len + 1);
+    if (!s.data) { s.len = 0; s.data = (char*)calloc(1, 1); return s; }
     memcpy(s.data, r->data + r->pos, s.len);
     s.data[s.len] = '\0';
     r->pos += s.len;
@@ -314,8 +321,8 @@ gguf_ctx_t* gguf_load(const char* path) {
 
     // Tensor data starts at aligned position after header
     size_t alignment = 32;  // GGUF default alignment
-    const char* align_str = gguf_get_str(ctx, "general.alignment");
-    if (align_str) alignment = (size_t)atol(align_str);
+    uint32_t align_val = gguf_get_u32(ctx, "general.alignment", 32);
+    if (align_val > 0) alignment = (size_t)align_val;
 
     size_t header_end = r.pos;
     size_t data_start = (header_end + alignment - 1) & ~(alignment - 1);

@@ -323,6 +323,9 @@ static void handle_chat_submit(oag_tui_t* t) {
         strcpy(t->chat[t->n_chat].role, "assistant");
         t->chat[t->n_chat].text = response ? response : strdup("(no response)");
         t->n_chat++;
+    } else {
+        // Chat full — free response to prevent leak
+        free(response);
     }
 
     // Auto-scroll

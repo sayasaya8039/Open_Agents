@@ -187,12 +187,12 @@ char* oag_inference_chat(oag_inference_t* inf, oag_chat_params_t params) {
         .user_data  = params.user_data,
     };
 
-    // Wrap stream callback
-    if (params.stream && params.on_token) {
-        gen.stream = true;
-        // Use a simple wrapper (in production, use proper closure)
-        gen.on_token = (void (*)(int32_t, const char*, void*))params.on_token;
-    }
+    // NOTE: gen.on_token has signature (int32_t, const char*, void*)
+    // params.on_token has signature (const char*, void*)
+    // We leave gen.on_token = NULL and don't stream through model_generate
+    // Streaming is handled at the HTTP/TUI layer instead
+    (void)params.stream;
+    (void)params.on_token;
 
     int32_t n_gen;
     int32_t* output = oag_model_generate(inf->model, tokens, (int32_t)n_tokens, gen, &n_gen);

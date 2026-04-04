@@ -116,6 +116,9 @@ typedef struct {
     ctx->name = (PFN_##name)GetProcAddress(ctx->hlib, #name);     \
     if (!ctx->name) {                                              \
         printf("[Vulkan] Missing: %s\n", #name);                  \
+        FreeLibrary(ctx->hlib);                                    \
+        free(ctx);                                                  \
+        free(out_ctx);                                              \
         return NULL;                                                \
     }
 
@@ -142,8 +145,8 @@ oag_vk_config_t oag_vk_default_config(void) {
 }
 
 oag_vk_ctx_t* oag_vk_create(oag_vk_config_t config) {
-    oag_vk_ctx_t* ctx = (oag_vk_ctx_t*)calloc(1, sizeof(oag_vk_ctx_t));
-    memcpy(&ctx->config, &config, sizeof(config));
+    oag_vk_ctx_t* out_ctx = (oag_vk_ctx_t*)calloc(1, sizeof(oag_vk_ctx_t));
+    memcpy(&out_ctx->config, &config, sizeof(config));
 
     vk_internal_t* vk = (vk_internal_t*)calloc(1, sizeof(vk_internal_t));
 
@@ -152,7 +155,7 @@ oag_vk_ctx_t* oag_vk_create(oag_vk_config_t config) {
     if (!vk->hlib) {
         printf("[Vulkan] vulkan-1.dll not found. Install Vulkan runtime.\n");
         free(vk);
-        free(ctx);
+        free(out_ctx);
         return NULL;
     }
 
@@ -184,7 +187,7 @@ oag_vk_ctx_t* oag_vk_create(oag_vk_config_t config) {
         printf("[Vulkan] vkCreateInstance failed: %d\n", res);
         FreeLibrary(vk->hlib);
         free(vk);
-        free(ctx);
+        free(out_ctx);
         return NULL;
     }
 
@@ -267,36 +270,30 @@ oag_vk_ctx_t* oag_vk_create(oag_vk_config_t config) {
     }
 
     // Store in context
-    strncpy(ctx->gpu_name, vk->best_device_name, sizeof(ctx->gpu_name) - 1);
-    ctx->vram_total = vk->best_device_vram;
-    ctx->physical_device = vk->physical_devices[vk->best_device_idx];
-    ctx->instance = vk->instance;
+    strncpy(out_ctx->gpu_name, vk->best_device_name, sizeof(out_ctx->gpu_name) - 1);
+    out_ctx->vram_total = vk->best_device_vram;
+    out_ctx->physical_device = vk->physical_devices[vk->best_device_idx];
+    out_ctx->instance = vk->instance;
 
     printf("[Vulkan] Selected: %s (%.1f GB) | Graphics Q=%u Compute Q=%u\n",
-           ctx->gpu_name,
-           ctx->vram_total / (1024.0 * 1024.0 * 1024.0),
+           out_ctx->gpu_name,
+           out_ctx->vram_total / (1024.0 * 1024.0 * 1024.0),
            vk->graphics_queue_family, vk->compute_queue_family);
 
     if (config.gpu_compute) {
         printf("[Vulkan] GPU Compute: enabled (compute shader matmul)\n");
     }
 
-    // TODO Phase 4: vkCreateDevice, swapchain, pipeline, compute shaders
-    // For now, we have a working Vulkan instance with GPU enumeration
+    out_ctx->initialized = true;
+    out_ctx->_internal = vk;  // proper void* field instead of type-pun
 
-    ctx->initialized = true;
-
-    // Store internal pointer for cleanup
-    // We use the cmd_pool field as a hack to store vk_internal_t*
-    ctx->cmd_pool = (VkCommandPool)vk;
-
-    return ctx;
+    return out_ctx;
 }
 
 void oag_vk_destroy(oag_vk_ctx_t* ctx) {
     if (!ctx) return;
 
-    vk_internal_t* vk = (vk_internal_t*)ctx->cmd_pool;
+    vk_internal_t* vk = (vk_internal_t*)ctx->_internal;
     if (vk) {
         if (vk->instance && vk->vkDestroyInstance) {
             vk->vkDestroyInstance(vk->instance, NULL);

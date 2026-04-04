@@ -37,6 +37,7 @@ typedef struct {
     VkSwapchainKHR    swapchain;
     VkCommandPool     cmd_pool;
     VkRenderPass      render_pass;
+    void*             _internal;     // vk_internal_t* (avoid type-pun via cmd_pool)
 
     // GPU info
     char              gpu_name[256];

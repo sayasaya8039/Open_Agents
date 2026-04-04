@@ -383,8 +383,12 @@ const oag_onnx_tensor_t* oag_onnx_find_initializer(const oag_onnx_ctx_t* ctx, co
 oag_tensor_t* oag_onnx_to_tensor(const oag_onnx_tensor_t* onnx_t) {
     if (!onnx_t || !onnx_t->raw_data) return NULL;
 
+    // Clamp to max 4 dims (oag_tensor_t supports max 4)
+    int n_dims = onnx_t->n_dims;
+    if (n_dims > 4) n_dims = 4;
+
     int64_t shape[4] = {1, 1, 1, 1};
-    for (int i = 0; i < onnx_t->n_dims && i < 4; i++) {
+    for (int i = 0; i < n_dims; i++) {
         shape[i] = onnx_t->dims[i];
     }
 
