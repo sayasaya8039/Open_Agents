@@ -35,6 +35,10 @@ actions!(
         SelectToLineEnd,
         SelectWordLeft,
         SelectWordRight,
+        Copy,
+        Cut,
+        Paste,
+        SelectAll,
     ]
 );
 
@@ -64,6 +68,11 @@ pub fn register_keybindings(cx: &mut gpui::App) {
         KeyBinding::new("delete", Delete, Some("Editor")),
         KeyBinding::new("enter", Enter, Some("Editor")),
         KeyBinding::new("tab", Tab, Some("Editor")),
+        // クリップボード
+        KeyBinding::new("ctrl-c", Copy, Some("Editor")),
+        KeyBinding::new("ctrl-x", Cut, Some("Editor")),
+        KeyBinding::new("ctrl-v", Paste, Some("Editor")),
+        KeyBinding::new("ctrl-a", SelectAll, Some("Editor")),
         // ファイル操作
         KeyBinding::new("ctrl-s", Save, Some("Editor")),
         KeyBinding::new("ctrl-o", Open, Some("Editor")),

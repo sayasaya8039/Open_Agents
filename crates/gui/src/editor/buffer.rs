@@ -259,7 +259,7 @@ impl TextBuffer {
     }
 
     /// バッファ位置範囲のテキストを返す
-    fn text_in_range(&self, start: Position, end: Position) -> String {
+    pub fn text_in_range(&self, start: Position, end: Position) -> String {
         let (start, end) = if start <= end { (start, end) } else { (end, start) };
         if start.line == end.line {
             let line = &self.lines[start.line];

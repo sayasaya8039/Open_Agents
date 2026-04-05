@@ -22,6 +22,8 @@ pub struct EditorView {
     /// IME 変換中テキスト
     ime_text: Option<String>,
     ime_range: Option<Range<usize>>,
+    /// マウスドラッグ中フラグ
+    dragging: bool,
 }
 
 impl EditorView {
@@ -36,6 +38,7 @@ impl EditorView {
             scroll_handle: UniformListScrollHandle::new(),
             ime_text: None,
             ime_range: None,
+            dragging: false,
         }
     }
 
@@ -97,6 +100,63 @@ impl EditorView {
                 )
                 .child(after)
                 .into_any_element()
+        } else if editor.cursor.has_selection() {
+            // 選択範囲ハイライト描画
+            let (sel_start, sel_end) = editor.cursor.selection_range().unwrap();
+            let line_len = line_text.len();
+
+            // この行が選択範囲内かチェック
+            let line_in_selection = line_idx >= sel_start.line && line_idx <= sel_end.line;
+
+            if line_in_selection {
+                // この行での選択開始/終了カラムを計算
+                let sel_col_start = if line_idx == sel_start.line {
+                    sel_start.column.min(line_len)
+                } else {
+                    0
+                };
+                let sel_col_end = if line_idx == sel_end.line {
+                    sel_end.column.min(line_len)
+                } else {
+                    line_len
+                };
+
+                // char boundary にスナップ
+                let sc = (0..=line_len).rev()
+                    .find(|&i| i <= sel_col_start && line_text.is_char_boundary(i))
+                    .unwrap_or(0);
+                let ec = (0..=line_len).rev()
+                    .find(|&i| i <= sel_col_end && line_text.is_char_boundary(i))
+                    .unwrap_or(0);
+
+                let before = line_text[..sc].to_string();
+                let selected = line_text[sc..ec].to_string();
+                let after = line_text[ec..].to_string();
+
+                div()
+                    .flex_1()
+                    .flex()
+                    .text_size(px(13.))
+                    .font_family("Cascadia Code")
+                    .text_color(hex(TEXT_PRIMARY))
+                    .child(before)
+                    .child(
+                        div()
+                            .bg(hex_a(0x264f78, 0.7)) // VS Code 選択色
+                            .text_color(hex(0xffffff))
+                            .child(selected),
+                    )
+                    .child(after)
+                    .into_any_element()
+            } else {
+                div()
+                    .flex_1()
+                    .text_size(px(13.))
+                    .font_family("Cascadia Code")
+                    .text_color(hex(TEXT_PRIMARY))
+                    .child(line_text)
+                    .into_any_element()
+            }
         } else {
             div()
                 .flex_1()
@@ -458,6 +518,106 @@ impl EditorView {
         .detach();
     }
 
+    // --- マウス操作 ---
+
+    /// ピクセル座標からバッファ位置を計算
+    fn position_from_point(&self, point: Point<Pixels>) -> Position {
+        let line_height = px(20.);
+        let char_width = px(8.);
+        let gutter_width = px(48.);
+        let line = ((point.y / line_height) as usize)
+            .min(self.buffer.line_count().saturating_sub(1));
+        let adjusted_x = (point.x - gutter_width).max(px(0.));
+        let mut col = ((adjusted_x / char_width) as usize)
+            .min(self.buffer.line_len(line));
+        // char boundary にスナップ
+        let line_str = self.buffer.line(line);
+        while col > 0 && !line_str.is_char_boundary(col) {
+            col -= 1;
+        }
+        Position::new(line, col)
+    }
+
+    /// マウスクリック — カーソル移動
+    fn handle_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+        if ev.button == MouseButton::Left {
+            self.focus_handle.focus(window);
+            let pos = self.position_from_point(ev.position);
+            self.cursor.anchor = None;
+            self.cursor.position = pos;
+            self.cursor.preferred_column = None;
+            self.dragging = true;
+            _cx.notify();
+        }
+    }
+
+    /// マウスドラッグ — 選択範囲拡張
+    fn handle_mouse_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.dragging && ev.pressed_button == Some(MouseButton::Left) {
+            let pos = self.position_from_point(ev.position);
+            if self.cursor.anchor.is_none() {
+                self.cursor.anchor = Some(self.cursor.position);
+            }
+            self.cursor.position = pos;
+            cx.notify();
+        }
+    }
+
+    /// マウスアップ — ドラッグ終了
+    fn handle_mouse_up(&mut self, ev: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if ev.button == MouseButton::Left {
+            self.dragging = false;
+            // anchor と position が同じなら選択解除
+            if let Some(anchor) = self.cursor.anchor {
+                if anchor == self.cursor.position {
+                    self.cursor.anchor = None;
+                }
+            }
+            cx.notify();
+        }
+    }
+
+    // --- クリップボード ---
+
+    fn handle_copy(&mut self, _action: &actions::Copy, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((start, end)) = self.cursor.selection_range() {
+            let text = self.buffer.text_in_range(start, end);
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    fn handle_cut(&mut self, _action: &actions::Cut, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((start, end)) = self.cursor.selection_range() {
+            let text = self.buffer.text_in_range(start, end);
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.cursor.delete_selection(&mut self.buffer);
+            self.ensure_cursor_visible();
+            cx.notify();
+        }
+    }
+
+    fn handle_paste(&mut self, _action: &actions::Paste, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(item) = cx.read_from_clipboard() {
+            if let Some(text) = item.text() {
+                if !text.is_empty() {
+                    self.cursor.delete_selection(&mut self.buffer);
+                    let new_pos = self.buffer.insert_text(self.cursor.position, &text);
+                    self.cursor.position = new_pos;
+                    self.cursor.preferred_column = None;
+                    self.ensure_cursor_visible();
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn handle_select_all(&mut self, _action: &actions::SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor.anchor = Some(Position::new(0, 0));
+        let last_line = self.buffer.line_count().saturating_sub(1);
+        self.cursor.position = Position::new(last_line, self.buffer.line_len(last_line));
+        cx.notify();
+    }
+
     /// ファイル名を取得（タブ表示用）
     pub fn tab_title(&self) -> String {
         let name = self.buffer.file_name();
@@ -509,6 +669,13 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::handle_tab))
             .on_action(cx.listener(Self::handle_save))
             .on_action(cx.listener(Self::handle_open))
+            .on_action(cx.listener(Self::handle_copy))
+            .on_action(cx.listener(Self::handle_cut))
+            .on_action(cx.listener(Self::handle_paste))
+            .on_action(cx.listener(Self::handle_select_all))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
+            .on_mouse_move(cx.listener(Self::handle_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .flex_1()
             .flex()
             .flex_col()
