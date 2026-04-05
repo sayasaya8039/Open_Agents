@@ -2,7 +2,8 @@
 //! 保存先: `%LOCALAPPDATA%\\open_agents_gui\\model_params.json`
 //!
 //! JSON はルートにモデル用キー（flatten）とオプションの `hardware` / `appearance`
-//! / `ai` オブジェクト、および `model_path` を持つ。
+//! / `ai` オブジェクト、および `model_paths`（読み込み済みモデル一覧）を持つ。
+//! 旧形式の単一 `model_path` は読み込み時に `model_paths` へ移行される。
 //! 以前のフラットな `model_params.json`（モデルのみ）も `load_local_llm_prefs` で読み込み可能。
 
 use serde::{Deserialize, Serialize};
@@ -224,6 +225,39 @@ fn sanitize_model_path(path: Option<PathBuf>) -> Option<PathBuf> {
     })
 }
 
+fn sanitize_model_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for p in paths {
+        if let Some(q) = sanitize_model_path(Some(p)) {
+            if !out.contains(&q) {
+                out.push(q);
+            }
+        }
+    }
+    out
+}
+
+/// 旧 JSON の単一 `model_path` を `model_paths` に併合する（必要なら正規化後に保存で置き換わる）。
+fn migrate_prefs_json(raw: &str) -> String {
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return raw.to_string();
+    };
+    let Some(obj) = v.as_object_mut() else {
+        return raw.to_string();
+    };
+    if let Some(old) = obj.remove("model_path") {
+        let paths_val = obj.entry("model_paths").or_insert(serde_json::json!([]));
+        if let serde_json::Value::Array(ref mut paths) = paths_val {
+            if let serde_json::Value::String(s) = old {
+                if !s.is_empty() && !paths.iter().any(|p| p.as_str() == Some(s.as_str())) {
+                    paths.push(serde_json::Value::String(s));
+                }
+            }
+        }
+    }
+    v.to_string()
+}
+
 /// モデル（ルートに flatten）＋ `hardware` / `appearance` / `ai` サブオブジェクト
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LocalLlmPrefs {
@@ -235,8 +269,9 @@ pub struct LocalLlmPrefs {
     pub appearance: AppearancePrefs,
     #[serde(default)]
     pub ai: AiPrefs,
+    /// 読み込み済みローカルモデル（順序保持・下に追加）
     #[serde(default)]
-    pub model_path: Option<PathBuf>,
+    pub model_paths: Vec<PathBuf>,
 }
 
 impl Default for LocalLlmPrefs {
@@ -246,7 +281,7 @@ impl Default for LocalLlmPrefs {
             hardware: HardwareParams::default(),
             appearance: AppearancePrefs::default(),
             ai: AiPrefs::default(),
-            model_path: None,
+            model_paths: Vec::new(),
         }
     }
 }
@@ -257,7 +292,7 @@ impl LocalLlmPrefs {
         self.hardware = self.hardware.sanitize();
         self.appearance = self.appearance.sanitize();
         self.ai = self.ai.sanitize();
-        self.model_path = sanitize_model_path(self.model_path);
+        self.model_paths = sanitize_model_paths(std::mem::take(&mut self.model_paths));
         self
     }
 
@@ -281,10 +316,12 @@ pub fn load_local_llm_prefs() -> LocalLlmPrefs {
     let Ok(raw) = fs::read_to_string(&path) else {
         return LocalLlmPrefs::default();
     };
-    match serde_json::from_str::<LocalLlmPrefs>(&raw) {
+    let migrated = migrate_prefs_json(&raw);
+    match serde_json::from_str::<LocalLlmPrefs>(&migrated) {
         Ok(p) => p.sanitize(),
         Err(_) => {
             let model = serde_json::from_str::<ModelParams>(&raw)
+                .or_else(|_| serde_json::from_str::<ModelParams>(&migrated))
                 .unwrap_or_default()
                 .sanitize();
             LocalLlmPrefs {
@@ -357,7 +394,16 @@ mod tests {
         assert_eq!(p.hardware, HardwareParams::default());
         assert_eq!(p.appearance, AppearancePrefs::default());
         assert_eq!(p.ai, AiPrefs::default());
-        assert_eq!(p.model_path, None);
+        assert!(p.model_paths.is_empty());
+    }
+
+    #[test]
+    fn migrates_legacy_model_path_into_model_paths() {
+        let raw = r#"{"temperature":0.7,"max_output_tokens":2048,"context_length":4096,"model_path":"D:/models/x.gguf"}"#;
+        let migrated = migrate_prefs_json(raw);
+        let p: LocalLlmPrefs = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(p.model_paths.len(), 1);
+        assert!(p.model_paths[0].as_os_str().to_string_lossy().contains("x.gguf"));
     }
 
     #[test]
@@ -381,12 +427,22 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_drops_empty_model_path() {
+    fn sanitize_drops_empty_model_paths_entries() {
         let p = LocalLlmPrefs {
-            model_path: Some(PathBuf::new()),
+            model_paths: vec![PathBuf::new()],
             ..LocalLlmPrefs::default()
         }
         .sanitize();
-        assert_eq!(p.model_path, None);
+        assert!(p.model_paths.is_empty());
+    }
+
+    #[test]
+    fn sanitize_dedupes_model_paths() {
+        let p = LocalLlmPrefs {
+            model_paths: vec![PathBuf::from("same"), PathBuf::from("same")],
+            ..LocalLlmPrefs::default()
+        }
+        .sanitize();
+        assert_eq!(p.model_paths.len(), 1);
     }
 }

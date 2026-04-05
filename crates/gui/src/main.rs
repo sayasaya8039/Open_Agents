@@ -190,8 +190,8 @@ struct AppView {
     chat_messages: Vec<ChatMsg>,
     /// Figma Chat ヘッダー「思考を表示」トグル
     chat_show_thinking: bool,
-    /// 設定画面で選択したローカル LLM モデルファイル
-    settings_model_path: Option<PathBuf>,
+    /// 設定で読み込んだローカル LLM（下に追加・永続化）
+    settings_model_paths: Vec<PathBuf>,
     /// 永続化済みローカル LLM 推論パラメータ（Temperature / max tokens / context）
     model_params: model_prefs::ModelParams,
     /// GPU スレッド・バッチ等（`model_params.json` の `hardware` と同期）
@@ -344,16 +344,24 @@ impl AppView {
                 if let Some(path) = paths.first() {
                     let path = path.clone();
                     let _ = cx.update(|ecx| {
-                        let _ = app.update(ecx, |this: &mut AppView, ecx| {
-                            this.settings_model_path = Some(path);
-                            this.persist_local_llm_prefs();
-                            ecx.notify();
+                        let _ = app.update(ecx, |this: &mut AppView, cx| {
+                            this.settings_add_model_file(path, cx);
                         });
                     });
                 }
             }
         })
         .detach();
+    }
+
+    /// 一覧末尾へ追加（同一パスは無視）。`model_params.json` に保存する。
+    fn settings_add_model_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let path = path.canonicalize().unwrap_or(path);
+        if !self.settings_model_paths.iter().any(|p| p == &path) {
+            self.settings_model_paths.push(path);
+            self.persist_local_llm_prefs();
+        }
+        cx.notify();
     }
 }
 
@@ -399,10 +407,13 @@ impl Render for AppView {
 }
 
 impl AppView {
+    /// 形式ドロップダウン用（末尾＝直近追加のモデル）
+    fn settings_last_model_path(&self) -> Option<&Path> {
+        self.settings_model_paths.last().map(|p| p.as_path())
+    }
+
     fn settings_detected_model_format(&self) -> Option<ModelFormat> {
-        self.settings_model_path
-            .as_deref()
-            .map(ModelFormat::from_path)
+        self.settings_last_model_path().map(ModelFormat::from_path)
     }
 
     fn settings_model_format_label(&self) -> SharedString {
@@ -412,6 +423,12 @@ impl AppView {
     }
 
     fn settings_model_format_hint(&self) -> SharedString {
+        if self.settings_model_paths.is_empty() {
+            return "モデルを追加すると一覧に残ります（起動後も維持）".into();
+        }
+        if self.settings_model_paths.len() > 1 {
+            return "末尾（直近追加）のファイル形式を表示しています".into();
+        }
         match self.settings_detected_model_format() {
             Some(ModelFormat::Gguf) => "GGUF を自動判定しました".into(),
             Some(ModelFormat::Onnx) => "ONNX を自動判定しました".into(),
@@ -420,33 +437,101 @@ impl AppView {
         }
     }
 
-    fn settings_model_filename(&self) -> SharedString {
-        self.settings_model_path
-            .as_ref()
-            .and_then(|path| path.file_name().and_then(|name| name.to_str()))
+    fn settings_model_filename_for(path: &Path) -> SharedString {
+        path.file_name()
+            .and_then(|name| name.to_str())
             .map(|name| name.to_string().into())
-            .unwrap_or_else(|| "モデル未選択".into())
+            .unwrap_or_else(|| "（無名）".into())
     }
 
-    fn settings_model_path_label(&self) -> SharedString {
-        self.settings_model_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned().into())
-            .unwrap_or_else(|| "まだモデルファイルは選択されていません".into())
+    fn settings_model_path_label_for(path: &Path) -> SharedString {
+        path.to_string_lossy().into_owned().into()
     }
 
-    fn settings_model_meta_label(&self) -> SharedString {
-        let Some(path) = self.settings_model_path.as_ref() else {
-            return "GGUF または ONNX 形式".into();
-        };
-
+    fn settings_model_meta_label_for(path: &Path) -> SharedString {
         let format = ModelFormat::from_path(path).label();
         let size = fs::metadata(path)
             .ok()
             .map(|meta| human_readable_size(meta.len()))
             .unwrap_or_else(|| "サイズ不明".to_string());
-
         format!("{format} • {size}").into()
+    }
+
+    fn settings_loaded_model_row(
+        &mut self,
+        cx: &mut Context<Self>,
+        index: usize,
+        path: &PathBuf,
+    ) -> impl IntoElement {
+        let idx = index;
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .p(px(12.))
+            .bg(hex(BG))
+            .border_1()
+            .border_color(hex(BORDER))
+            .rounded(px(8.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child(Self::settings_model_filename_for(path)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(0x22c55e))
+                                    .child("✓"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child(Self::settings_model_meta_label_for(path)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_DIM))
+                            .child(Self::settings_model_path_label_for(path)),
+                    ),
+            )
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(4.))
+                    .bg(hex(0x2d2d2d))
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_MUTED))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            if idx < this.settings_model_paths.len() {
+                                this.settings_model_paths.remove(idx);
+                                this.persist_local_llm_prefs();
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .child("🗑"),
+            )
     }
 
     // ============================================================
@@ -1328,7 +1413,7 @@ impl AppView {
             hardware: self.hardware_params.clone(),
             appearance: self.appearance_prefs.clone(),
             ai: self.ai_prefs.clone(),
-            model_path: self.settings_model_path.clone(),
+            model_paths: self.settings_model_paths.clone(),
         });
     }
 
@@ -2002,93 +2087,41 @@ impl AppView {
                                                             .child(self.settings_model_format_hint()),
                                                     ),
                                             )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap(px(8.))
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(13.))
-                                                            .text_color(hex(TEXT_PRIMARY))
-                                                            .child("読み込み済みモデル"),
-                                                    )
                                                     .child(
                                                         div()
                                                             .flex()
-                                                            .items_center()
-                                                            .justify_between()
-                                                            .p(px(12.))
-                                                            .bg(hex(BG))
-                                                            .border_1()
-                                                            .border_color(hex(BORDER))
-                                                            .rounded(px(8.))
+                                                            .flex_col()
+                                                            .gap(px(8.))
                                                             .child(
                                                                 div()
-                                                                    .flex_1()
-                                                                    .min_w(px(0.))
-                                                                    .flex()
-                                                                    .flex_col()
-                                                                    .gap(px(4.))
-                                                                    .child(
-                                                                        div()
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .gap(px(8.))
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_size(px(12.))
-                                                                                    .text_color(hex(TEXT_PRIMARY))
-                                                                                    .child(self.settings_model_filename()),
-                                                                            )
-                                                                            .when(self.settings_model_path.is_some(), |d| {
-                                                                                d.child(
-                                                                                    div()
-                                                                                        .text_size(px(12.))
-                                                                                        .text_color(hex(0x22c55e))
-                                                                                        .child("✓"),
-                                                                                )
-                                                                            }),
-                                                                    )
-                                                                    .child(
-                                                                        div()
-                                                                            .text_size(px(11.))
-                                                                            .text_color(hex(TEXT_MUTED))
-                                                                            .child(self.settings_model_meta_label()),
-                                                                    )
-                                                                    .child(
-                                                                        div()
-                                                                            .text_size(px(11.))
-                                                                            .text_color(hex(TEXT_DIM))
-                                                                            .child(self.settings_model_path_label()),
-                                                                    ),
+                                                                    .text_size(px(13.))
+                                                                    .text_color(hex(TEXT_PRIMARY))
+                                                                    .child("読み込み済みモデル"),
                                                             )
-                                                            .child(
-                                                                div()
-                                                                    .px(px(10.))
-                                                                    .py(px(4.))
-                                                                    .rounded(px(4.))
-                                                                    .bg(hex(0x2d2d2d))
-                                                                    .text_size(px(11.))
-                                                                    .text_color(hex(TEXT_MUTED))
-                                                                    .cursor_pointer()
-                                                                    .on_mouse_down(
-                                                                        MouseButton::Left,
-                                                                        cx.listener(
-                                                                            |this: &mut AppView,
-                                                                             _: &MouseDownEvent,
-                                                                             _,
-                                                                             cx: &mut Context<AppView>| {
-                                                                                this.settings_model_path = None;
-                                                                                this.persist_local_llm_prefs();
-                                                                                cx.notify();
-                                                                            },
+                                                            .when(self.settings_model_paths.is_empty(), |d| {
+                                                                d.child(
+                                                                    div()
+                                                                        .text_size(px(11.))
+                                                                        .text_color(hex(TEXT_DIM))
+                                                                        .child(
+                                                                            "上のボタンで追加するとここに並びます（次回起動後も保持）",
                                                                         ),
+                                                                )
+                                                            })
+                                                            .children({
+                                                                let rows: Vec<(usize, PathBuf)> = self
+                                                                    .settings_model_paths
+                                                                    .iter()
+                                                                    .enumerate()
+                                                                    .map(|(i, p)| (i, p.clone()))
+                                                                    .collect();
+                                                                rows.into_iter().map(|(idx, path)| {
+                                                                    self.settings_loaded_model_row(
+                                                                        cx, idx, &path,
                                                                     )
-                                                                    .child("🗑"),
-                                                            ),
-                                                    ),
-                                            )
+                                                                })
+                                                            }),
+                                                    )
                                             .child(
                                                 div()
                                                     .pt(px(16.))
@@ -2519,7 +2552,7 @@ fn main() {
                             thinking: None,
                         }],
                         chat_show_thinking: true,
-                        settings_model_path: local_llm.model_path,
+                        settings_model_paths: local_llm.model_paths,
                         model_params: local_llm.model,
                         hardware_params: local_llm.hardware,
                         appearance_prefs: local_llm.appearance,
