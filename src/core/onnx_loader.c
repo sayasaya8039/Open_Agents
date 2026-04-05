@@ -478,7 +478,7 @@ oag_model_format_t oag_detect_model_format(const char* path) {
 
     if (n < 4) return OAG_FORMAT_UNKNOWN;
 
-    // GGUF magic: "GGUF" = 0x46475547
+    // GGUF magic: 'G','G','U','F' as LE uint32 = 0x46554747
     if (header[0] == 'G' && header[1] == 'G' && header[2] == 'U' && header[3] == 'F') {
         return OAG_FORMAT_GGUF;
     }

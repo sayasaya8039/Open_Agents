@@ -29,7 +29,7 @@ fn main() {
         .flag_if_supported("/utf-8")
         .define("NDEBUG", None)
         .define("OAG_HAS_CPU_BACKEND", "1")
-        .define("OAG_VERSION", "\"0.2.32\"")
+        .define("OAG_VERSION", "\"0.2.33\"")
         .compile("oag_core");
 
     // Link Windows libraries (for C core)

@@ -7,7 +7,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#define GGUF_MAGIC 0x46475547  // "GGUF"
+/* 先頭 4 バイトが G,G,U,F (0x47,0x47,0x55,0x46)。memcpy で LE uint32 として読むと 0x46554747 */
+#define GGUF_MAGIC 0x46554747U
 #define GGUF_VERSION_3 3
 
 // GGUF value types
