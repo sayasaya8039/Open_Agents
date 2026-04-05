@@ -1,6 +1,7 @@
 // Open_Agents — Terminal UI (Windows Console API)
 // Split-pane: Left=Code Editor, Right=AI Chat, Bottom=Output
 #include "ui/tui.h"
+#include "core/event_loop.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,6 +69,15 @@ struct oag_tui {
     // Mode
     enum { MODE_EDITOR, MODE_CHAT, MODE_COMMAND } mode;
     bool running;
+
+    // Dirty tracking (line-level)
+    bool*    dirty_lines;       // [MAX_LINES] per-line dirty flag
+    bool     force_full_redraw; // force full redraw on next frame
+    int      last_width;
+    int      last_height;
+
+    // Event loop
+    oag_event_loop_t* event_loop;
 };
 
 // ============================================================
@@ -136,6 +146,12 @@ static void draw_editor(oag_tui_t* t) {
 
     for (int row = 0; row < panel_h; row++) {
         int line_idx = t->scroll_y + row;
+
+        // Skip clean lines (unless force_full_redraw)
+        if (!t->force_full_redraw && line_idx < MAX_LINES && !t->dirty_lines[line_idx]) {
+            continue;
+        }
+
         tui_goto(t, 0, row);
 
         if (t->config.line_numbers) {
@@ -288,11 +304,52 @@ static void draw_output(oag_tui_t* t) {
     }
 }
 
+static void mark_line_dirty(oag_tui_t* t, int line_idx) {
+    if (line_idx >= 0 && line_idx < MAX_LINES) {
+        t->dirty_lines[line_idx] = true;
+    }
+}
+
+static void mark_all_dirty(oag_tui_t* t) {
+    t->force_full_redraw = true;
+}
+
+static void clear_dirty(oag_tui_t* t) {
+    if (t->force_full_redraw) {
+        memset(t->dirty_lines, 0, MAX_LINES * sizeof(bool));
+        t->force_full_redraw = false;
+    } else {
+        // Only clear the lines we actually drew
+        int panel_h = t->height - t->output_height - 1;
+        for (int i = 0; i < panel_h; i++) {
+            int line_idx = t->scroll_y + i;
+            if (line_idx < MAX_LINES) t->dirty_lines[line_idx] = false;
+        }
+    }
+}
+
 static void draw_all(oag_tui_t* t) {
+    // Check for terminal resize
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    GetConsoleScreenBufferInfo(t->hout, &csbi);
+    int new_w = csbi.dwSize.X;
+    int new_h = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (new_w != t->last_width || new_h != t->last_height) {
+        t->width = new_w;
+        t->height = new_h;
+        t->last_width = new_w;
+        t->last_height = new_h;
+        t->force_full_redraw = true;
+    }
+
     draw_editor(t);
-    draw_chat(t);
-    draw_output(t);
-    draw_status_bar(t);
+
+    // Chat and output always redraw on full redraw or specific dirty
+    if (t->force_full_redraw) {
+        draw_chat(t);
+        draw_output(t);
+    }
+    draw_status_bar(t);  // always (cursor position changes)
 
     // Position cursor
     if (t->mode == MODE_EDITOR) {
@@ -306,6 +363,7 @@ static void draw_all(oag_tui_t* t) {
     }
 
     fflush(stdout);
+    clear_dirty(t);
 }
 
 // ============================================================
@@ -393,6 +451,7 @@ static void handle_key(oag_tui_t* t, int key) {
     if (t->mode == MODE_EDITOR) {
         switch (key) {
             case 224: { // Extended key
+                int old_cursor_y = t->cursor_y;
                 int ext = _getch();
                 switch (ext) {
                     case 72: if (t->cursor_y > 0) t->cursor_y--; break;  // Up
@@ -404,6 +463,8 @@ static void handle_key(oag_tui_t* t, int key) {
                 int panel_h = t->height - t->output_height - 2;
                 if (t->cursor_y < t->scroll_y) t->scroll_y = t->cursor_y;
                 if (t->cursor_y >= t->scroll_y + panel_h) t->scroll_y = t->cursor_y - panel_h + 1;
+                mark_line_dirty(t, old_cursor_y);
+                mark_line_dirty(t, t->cursor_y);
                 break;
             }
             case 13: { // Enter
@@ -419,6 +480,7 @@ static void handle_key(oag_tui_t* t, int key) {
                     t->cursor_y++;
                     t->cursor_x = 0;
                     t->modified = true;
+                    mark_all_dirty(t);
                 }
                 break;
             }
@@ -432,6 +494,7 @@ static void handle_key(oag_tui_t* t, int key) {
                         line->len--;
                         t->cursor_x--;
                         t->modified = true;
+                        mark_line_dirty(t, t->cursor_y);
                     }
                 }
                 break;
@@ -453,6 +516,7 @@ static void handle_key(oag_tui_t* t, int key) {
                             line->len++;
                             t->cursor_x++;
                             t->modified = true;
+                            mark_line_dirty(t, t->cursor_y);
                         }
                     }
                 }
@@ -518,6 +582,12 @@ oag_tui_t* oag_tui_create(oag_tui_config_t config) {
     t->mode = MODE_CHAT;  // Start in chat mode by default
     t->running = true;
 
+    t->dirty_lines = (bool*)calloc(MAX_LINES, sizeof(bool));
+    t->force_full_redraw = true;
+    t->last_width = 0;
+    t->last_height = 0;
+    t->event_loop = NULL;
+
     // Hide cursor blinking
     CONSOLE_CURSOR_INFO cci = { .dwSize = 25, .bVisible = TRUE };
     SetConsoleCursorInfo(t->hout, &cci);
@@ -540,6 +610,11 @@ void oag_tui_free(oag_tui_t* t) {
     free(t->lines);
     for (int i = 0; i < t->n_chat; i++) free(t->chat[i].text);
     free(t->output_buf);
+    if (t->dirty_lines) free(t->dirty_lines);
+    if (t->event_loop) {
+        oag_event_loop_stop(t->event_loop);
+        oag_event_loop_destroy(t->event_loop);
+    }
     tui_reset_color(t);
     free(t);
 }
@@ -581,19 +656,80 @@ bool oag_tui_open_file(oag_tui_t* t, const char* path) {
     return true;
 }
 
+// Batch callback — called from timer thread when 4ms window expires
+static void on_batch_ready(void* user_data) {
+    // This runs on the timer thread — just set a flag.
+    // The main thread will check it.
+    oag_tui_t* t = (oag_tui_t*)user_data;
+    (void)t;
+    // The main loop polls oag_event_loop_drain, so this callback
+    // can be a no-op (or use SetEvent for WaitForSingleObject wakeup).
+}
+
 void oag_tui_run(oag_tui_t* t) {
     tui_clear(t);
+    t->force_full_redraw = true;
     draw_all(t);
 
+    // Create event loop
+    t->event_loop = oag_event_loop_create();
+    if (!t->event_loop) {
+        // Fallback to legacy loop
+        while (t->running) {
+            if (_kbhit()) {
+                int key = _getch();
+                handle_key(t, key);
+                draw_all(t);
+            } else {
+                Sleep(16);
+            }
+        }
+        tui_clear(t);
+        tui_reset_color(t);
+        return;
+    }
+
+    oag_event_loop_set_callback(t->event_loop, on_batch_ready, t);
+    oag_event_loop_start(t->event_loop);
+
+    // Main event loop — drain batched events every 4ms
+    oag_event_t events[256];
     while (t->running) {
-        if (_kbhit()) {
-            int key = _getch();
-            handle_key(t, key);
+        uint32_t count = oag_event_loop_drain(t->event_loop, events, 256);
+
+        if (count == 0) {
+            Sleep(1);  // Yield CPU briefly
+            continue;
+        }
+
+        // Process batched events
+        bool needs_redraw = false;
+        for (uint32_t i = 0; i < count; i++) {
+            switch (events[i].type) {
+                case OAG_EVENT_KEY_PRESS:
+                    handle_key(t, events[i].key_code);
+                    needs_redraw = true;
+                    break;
+                case OAG_EVENT_RESIZE:
+                    t->force_full_redraw = true;
+                    needs_redraw = true;
+                    break;
+                case OAG_EVENT_QUIT:
+                    t->running = false;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (needs_redraw) {
             draw_all(t);
-        } else {
-            Sleep(16);  // ~60fps
         }
     }
+
+    oag_event_loop_stop(t->event_loop);
+    oag_event_loop_destroy(t->event_loop);
+    t->event_loop = NULL;
 
     tui_clear(t);
     tui_reset_color(t);

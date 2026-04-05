@@ -83,6 +83,18 @@ pub fn build(b: *std.Build) void {
     });
     exe.addObject(simd_obj);
 
+    // ========== Event Loop Zig Module ==========
+    const evloop_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/event_loop.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const evloop_obj = b.addObject(.{
+        .name = "oag_event_loop",
+        .root_module = evloop_mod,
+    });
+    exe.addObject(evloop_obj);
+
     b.installArtifact(exe);
 
     // ========== Run step ==========
