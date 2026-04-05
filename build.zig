@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("gdi32");
     exe.linkSystemLibrary("shell32");
     exe.linkSystemLibrary("user32");
+    exe.linkSystemLibrary("dwrite");
 
     // ========== SIMD Zig Module ==========
     // Build as separate object and link into exe
@@ -106,6 +107,18 @@ pub fn build(b: *std.Build) void {
         .root_module = vt_mod,
     });
     exe.addObject(vt_obj);
+
+    // ========== GPU Grid Renderer Zig Module ==========
+    const gpu_grid_mod = b.createModule(.{
+        .root_source_file = b.path("src/render/gpu_grid.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const gpu_grid_obj = b.addObject(.{
+        .name = "oag_gpu_grid",
+        .root_module = gpu_grid_mod,
+    });
+    exe.addObject(gpu_grid_obj);
 
     b.installArtifact(exe);
 
