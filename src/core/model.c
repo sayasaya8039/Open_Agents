@@ -118,6 +118,14 @@ oag_model_t* oag_model_load_with_ctx(const char* path,
     m->rope_freq_base = gguf->rope_freq_base;
     m->norm_eps       = gguf->norm_eps;
 
+    if (m->arch && strcmp(m->arch, "gemma4") == 0) {
+        fprintf(stderr,
+                "[Model] Unsupported GGUF architecture: gemma4. "
+                "The native core currently implements a Llama-style decoder and cannot load Gemma 4 attention layouts.\n");
+        oag_model_free(m);
+        return NULL;
+    }
+
     printf("[Model] Arch: %s | %uL %uH %uKV | embd=%u ff=%u ctx=%u\n",
            m->arch, m->n_layer, m->n_head, m->n_head_kv,
            m->n_embd, m->n_ff, m->n_ctx);

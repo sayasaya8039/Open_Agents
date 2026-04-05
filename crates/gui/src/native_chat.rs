@@ -2,6 +2,7 @@
 
 use std::ffi::{CStr, CString};
 use std::fs;
+use std::io::{BufReader, Read};
 use std::os::raw::{c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -48,6 +49,46 @@ extern "C" {
 const NATIVE_CONTEXT_LENGTH_MIN: i32 = 512;
 const NATIVE_CONTEXT_LENGTH_MAX: i32 = 8192;
 const LARGE_FULL_PRECISION_GGUF_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const GGUF_MAGIC: [u8; 4] = *b"GGUF";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+enum GgufValueType {
+    Uint8 = 0,
+    Int8 = 1,
+    Uint16 = 2,
+    Int16 = 3,
+    Uint32 = 4,
+    Int32 = 5,
+    Float32 = 6,
+    Bool = 7,
+    String = 8,
+    Array = 9,
+    Uint64 = 10,
+    Int64 = 11,
+    Float64 = 12,
+}
+
+impl GgufValueType {
+    fn from_u32(raw: u32) -> Option<Self> {
+        Some(match raw {
+            0 => Self::Uint8,
+            1 => Self::Int8,
+            2 => Self::Uint16,
+            3 => Self::Int16,
+            4 => Self::Uint32,
+            5 => Self::Int32,
+            6 => Self::Float32,
+            7 => Self::Bool,
+            8 => Self::String,
+            9 => Self::Array,
+            10 => Self::Uint64,
+            11 => Self::Int64,
+            12 => Self::Float64,
+            _ => return None,
+        })
+    }
+}
 
 fn cstring_chat(s: &str) -> Result<CString, String> {
     if s.as_bytes().contains(&0) {
@@ -106,12 +147,117 @@ fn looks_full_precision_gguf(path: &Path) -> bool {
         .any(|needle| name.contains(needle))
 }
 
+fn read_exact_array<R: Read, const N: usize>(reader: &mut R) -> Result<[u8; N], String> {
+    let mut buf = [0u8; N];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| format!("GGUF の読み取りに失敗しました: {e}"))?;
+    Ok(buf)
+}
+
+fn read_gguf_u32<R: Read>(reader: &mut R) -> Result<u32, String> {
+    Ok(u32::from_le_bytes(read_exact_array(reader)?))
+}
+
+fn read_gguf_u64<R: Read>(reader: &mut R) -> Result<u64, String> {
+    Ok(u64::from_le_bytes(read_exact_array(reader)?))
+}
+
+fn skip_gguf_bytes<R: Read>(reader: &mut R, mut len: u64) -> Result<(), String> {
+    let mut buf = [0u8; 4096];
+    while len > 0 {
+        let chunk = len.min(buf.len() as u64) as usize;
+        reader
+            .read_exact(&mut buf[..chunk])
+            .map_err(|e| format!("GGUF のスキップに失敗しました: {e}"))?;
+        len -= chunk as u64;
+    }
+    Ok(())
+}
+
+fn read_gguf_string<R: Read>(reader: &mut R) -> Result<String, String> {
+    let len = read_gguf_u64(reader)?;
+    let len_usize =
+        usize::try_from(len).map_err(|_| "GGUF 文字列長が大きすぎます".to_string())?;
+    let mut buf = vec![0u8; len_usize];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| format!("GGUF 文字列の読み取りに失敗しました: {e}"))?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn skip_gguf_value<R: Read>(reader: &mut R, value_type: GgufValueType) -> Result<(), String> {
+    match value_type {
+        GgufValueType::Uint8 | GgufValueType::Int8 | GgufValueType::Bool => skip_gguf_bytes(reader, 1),
+        GgufValueType::Uint16 | GgufValueType::Int16 => skip_gguf_bytes(reader, 2),
+        GgufValueType::Uint32 | GgufValueType::Int32 | GgufValueType::Float32 => {
+            skip_gguf_bytes(reader, 4)
+        }
+        GgufValueType::Uint64 | GgufValueType::Int64 | GgufValueType::Float64 => {
+            skip_gguf_bytes(reader, 8)
+        }
+        GgufValueType::String => {
+            let len = read_gguf_u64(reader)?;
+            skip_gguf_bytes(reader, len)
+        }
+        GgufValueType::Array => {
+            let elem_type_raw = read_gguf_u32(reader)?;
+            let elem_type = GgufValueType::from_u32(elem_type_raw)
+                .ok_or_else(|| format!("未対応の GGUF 配列型です: {elem_type_raw}"))?;
+            let count = read_gguf_u64(reader)?;
+            for _ in 0..count {
+                skip_gguf_value(reader, elem_type)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn read_gguf_architecture(path: &Path) -> Result<Option<String>, String> {
+    let file = fs::File::open(path).map_err(|e| format!("GGUF を開けませんでした: {e}"))?;
+    let mut reader = BufReader::new(file);
+    let magic = read_exact_array::<_, 4>(&mut reader)?;
+    if magic != GGUF_MAGIC {
+        return Ok(None);
+    }
+    let version = read_gguf_u32(&mut reader)?;
+    if !(2..=4).contains(&version) {
+        return Err(format!("未対応の GGUF バージョンです: {version}"));
+    }
+    let _n_tensors = read_gguf_u64(&mut reader)?;
+    let n_kv = read_gguf_u64(&mut reader)?;
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut reader)?;
+        let value_type_raw = read_gguf_u32(&mut reader)?;
+        let value_type = GgufValueType::from_u32(value_type_raw)
+            .ok_or_else(|| format!("未対応の GGUF 値型です: {value_type_raw}"))?;
+        if key == "general.architecture" {
+            if value_type != GgufValueType::String {
+                return Err("GGUF の general.architecture が文字列ではありません".into());
+            }
+            return read_gguf_string(&mut reader).map(Some);
+        }
+        skip_gguf_value(&mut reader, value_type)?;
+    }
+    Ok(None)
+}
+
 fn validate_native_model_profile(path: &Path, size_bytes: u64) -> Result<(), String> {
     let is_gguf = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("gguf"))
         .unwrap_or(false);
+    if is_gguf {
+        if let Some(arch) = read_gguf_architecture(path)? {
+            if arch.eq_ignore_ascii_case("gemma4") {
+                return Err(
+                    "選択中の GGUF は Gemma 4 (`general.architecture = gemma4`) です。現行のネイティブ推論コアは Gemma 4 のテンソル構成と attention レイアウトに未対応のため、Chat では読み込めません。Ollama 経由で使うか、Qwen / Llama 系 GGUF を選択してください。"
+                        .into(),
+                );
+            }
+        }
+    }
     if is_gguf
         && size_bytes >= LARGE_FULL_PRECISION_GGUF_BYTES
         && looks_full_precision_gguf(path)
@@ -250,6 +396,32 @@ pub fn complete_native_chat_blocking(
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_gguf_path(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("open_agents_{name}_{nonce}.gguf"))
+    }
+
+    fn write_minimal_gguf(path: &Path, architecture: &str) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&(GgufValueType::String as u32).to_le_bytes());
+        bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(architecture.as_bytes());
+
+        fs::write(path, bytes).unwrap();
+    }
 
     #[test]
     fn onnx_path_rejected_before_loading() {
@@ -271,11 +443,11 @@ mod tests {
 
     #[test]
     fn rejects_large_bf16_gguf_with_actionable_message() {
-        let err = validate_native_model_profile(
-            Path::new(r"D:\models\gemma-4-E4B-it-BF16.gguf"),
-            14 * 1024 * 1024 * 1024,
-        )
-        .unwrap_err();
+        let path = temp_gguf_path("bf16");
+        write_minimal_gguf(&path, "llama");
+        let err =
+            validate_native_model_profile(&path, 14 * 1024 * 1024 * 1024).unwrap_err();
+        let _ = fs::remove_file(&path);
         assert!(
             err.contains("量子化"),
             "expected quantization guidance, got: {err}"
@@ -284,10 +456,28 @@ mod tests {
 
     #[test]
     fn accepts_quantized_gguf_profile() {
-        let ok = validate_native_model_profile(
-            Path::new(r"D:\models\qwen2.5-coder-7b-q4_k_m.gguf"),
-            4 * 1024 * 1024 * 1024,
-        );
+        let path = temp_gguf_path("q4_k_m");
+        write_minimal_gguf(&path, "llama");
+        let ok = validate_native_model_profile(&path, 4 * 1024 * 1024 * 1024);
+        let _ = fs::remove_file(&path);
         assert!(ok.is_ok(), "expected quantized gguf to be accepted: {ok:?}");
+    }
+
+    #[test]
+    fn rejects_gemma4_architecture_before_native_load() {
+        let path = temp_gguf_path("gemma4");
+        write_minimal_gguf(&path, "gemma4");
+        let err = validate_native_model_path(&path).unwrap_err();
+        let _ = fs::remove_file(&path);
+        assert!(err.contains("Gemma 4"), "expected Gemma 4 guidance, got: {err}");
+    }
+
+    #[test]
+    fn accepts_llama_style_architecture_in_preflight() {
+        let path = temp_gguf_path("llama");
+        write_minimal_gguf(&path, "llama");
+        let ok = validate_native_model_path(&path);
+        let _ = fs::remove_file(&path);
+        assert!(ok.is_ok(), "expected llama gguf preflight to pass: {ok:?}");
     }
 }
