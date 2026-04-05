@@ -171,6 +171,13 @@ enum ModelParamAdjustKind {
     ContextLength,
 }
 
+#[derive(Clone, Copy)]
+enum HardwareParamAdjustKind {
+    GpuLayers,
+    NThreads,
+    BatchSize,
+}
+
 struct AppView {
     page: Page,
     chat_messages: Vec<ChatMsg>,
@@ -180,6 +187,8 @@ struct AppView {
     settings_model_path: Option<PathBuf>,
     /// 永続化済みローカル LLM 推論パラメータ（Temperature / max tokens / context）
     model_params: model_prefs::ModelParams,
+    /// GPU スレッド・バッチ等（`model_params.json` の `hardware` と同期）
+    hardware_params: model_prefs::HardwareParams,
     /// 開いているワークスペースのルート（Zed worktree root）
     workspace_root: PathBuf,
     /// 仮想ファイルツリー
@@ -1280,47 +1289,6 @@ impl AppView {
             )
     }
 
-    fn settings_slider_row(&self, label: &str, value: &str, hint: Option<&str>) -> impl IntoElement {
-        let mut col = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(hex(TEXT_PRIMARY))
-                            .child(label.to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(hex(TEXT_MUTED))
-                            .child(value.to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .h(px(4.))
-                    .w_full()
-                    .rounded(px(2.))
-                    .bg(hex(CONTROL_BG)),
-            );
-        if let Some(h) = hint {
-            col = col.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(hex(TEXT_DIM))
-                    .child(h.to_string()),
-            );
-        }
-        col
-    }
-
     fn settings_toggle_row(&self, title: &str, subtitle: &str, on: bool) -> impl IntoElement {
         div()
             .flex()
@@ -1365,8 +1333,191 @@ impl AppView {
             }
         }
         self.model_params.clamp();
-        model_prefs::save_model_params(&self.model_params);
+        self.persist_local_llm_prefs();
         cx.notify();
+    }
+
+    fn persist_local_llm_prefs(&self) {
+        model_prefs::save_local_llm_prefs(&model_prefs::LocalLlmPrefs {
+            model: self.model_params.clone(),
+            hardware: self.hardware_params.clone(),
+        });
+    }
+
+    fn adjust_hardware_param(
+        &mut self,
+        kind: HardwareParamAdjustKind,
+        steps: i32,
+        cx: &mut Context<Self>,
+    ) {
+        match kind {
+            HardwareParamAdjustKind::GpuLayers => {
+                let v = self.hardware_params.gpu_layers + steps;
+                self.hardware_params.gpu_layers = v.clamp(0, 80);
+            }
+            HardwareParamAdjustKind::NThreads => {
+                let v = self.hardware_params.n_threads + steps;
+                self.hardware_params.n_threads = v.clamp(1, 32);
+            }
+            HardwareParamAdjustKind::BatchSize => {
+                let v = self.hardware_params.batch_size + steps * 128;
+                self.hardware_params.batch_size = v.clamp(128, 2048);
+            }
+        }
+        self.hardware_params.clamp();
+        self.persist_local_llm_prefs();
+        cx.notify();
+    }
+
+    fn settings_gpu_acceleration_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let on = self.hardware_params.gpu_acceleration;
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .child(self.settings_labeled_block(
+                "GPU アクセラレーション",
+                "利用可能な場合、GPUを使用",
+            ))
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(9999.))
+                    .cursor_pointer()
+                    .bg(if on {
+                        hex_a(ACCENT_BLUE, 0.35)
+                    } else {
+                        hex(CONTROL_BG)
+                    })
+                    .text_size(px(11.))
+                    .text_color(if on {
+                        hex(TEXT_PRIMARY)
+                    } else {
+                        hex(TEXT_MUTED)
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.hardware_params.gpu_acceleration =
+                                !this.hardware_params.gpu_acceleration;
+                            this.persist_local_llm_prefs();
+                            cx.notify();
+                        }),
+                    )
+                    .child(if on { "オン" } else { "オフ" }),
+            )
+    }
+
+    fn settings_hardware_stepper_row(
+        &mut self,
+        cx: &mut Context<Self>,
+        kind: HardwareParamAdjustKind,
+        label: &'static str,
+        hint: Option<&'static str>,
+    ) -> impl IntoElement {
+        let value_str: SharedString = match kind {
+            HardwareParamAdjustKind::GpuLayers => {
+                format!("{}", self.hardware_params.gpu_layers).into()
+            }
+            HardwareParamAdjustKind::NThreads => {
+                format!("{}", self.hardware_params.n_threads).into()
+            }
+            HardwareParamAdjustKind::BatchSize => {
+                format!("{}", self.hardware_params.batch_size).into()
+            }
+        };
+
+        let k_minus = kind;
+        let k_plus = kind;
+
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(hex(CONTROL_BG))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                            this.adjust_hardware_param(k_minus, -1, cx);
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child("−"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .min_w(px(52.))
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_MUTED))
+                                    .text_center()
+                                    .child(value_str),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(hex(CONTROL_BG))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                            this.adjust_hardware_param(k_plus, 1, cx);
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child("+"),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(4.))
+                    .w_full()
+                    .rounded(px(2.))
+                    .bg(hex(CONTROL_BG)),
+            );
+        if let Some(h) = hint {
+            col = col.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_DIM))
+                    .child(h),
+            );
+        }
+        col
     }
 
     /// Temperature / 最大トークン / コンテキスト長 — 値は `model_prefs` と同期
@@ -1744,18 +1895,25 @@ impl AppView {
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child("ハードウェア設定"),
                                                     )
-                                                    .child(self.settings_toggle_row(
-                                                        "GPU アクセラレーション",
-                                                        "利用可能な場合、GPUを使用",
-                                                        true,
-                                                    ))
-                                                    .child(self.settings_slider_row(
+                                                    .child(self.settings_gpu_acceleration_row(cx))
+                                                    .child(self.settings_hardware_stepper_row(
+                                                        cx,
+                                                        HardwareParamAdjustKind::GpuLayers,
                                                         "GPU レイヤー数",
-                                                        "32",
                                                         Some("GPUにオフロードするレイヤー数"),
                                                     ))
-                                                    .child(self.settings_slider_row("スレッド数", "8", None))
-                                                    .child(self.settings_slider_row("バッチサイズ", "512", None)),
+                                                    .child(self.settings_hardware_stepper_row(
+                                                        cx,
+                                                        HardwareParamAdjustKind::NThreads,
+                                                        "スレッド数",
+                                                        None,
+                                                    ))
+                                                    .child(self.settings_hardware_stepper_row(
+                                                        cx,
+                                                        HardwareParamAdjustKind::BatchSize,
+                                                        "バッチサイズ",
+                                                        None,
+                                                    )),
                                             ),
                                     ),
                             )
@@ -2135,6 +2293,7 @@ fn main() {
                                 (default_sample_tree(), default_expanded_set())
                             }
                         };
+                    let local_llm = model_prefs::load_local_llm_prefs();
                     AppView {
                         page: Page::Editor,
                         chat_messages: vec![ChatMsg {
@@ -2144,7 +2303,8 @@ fn main() {
                         }],
                         chat_show_thinking: true,
                         settings_model_path: None,
-                        model_params: model_prefs::load_model_params(),
+                        model_params: local_llm.model,
+                        hardware_params: local_llm.hardware,
                         workspace_root,
                         file_tree,
                         explorer_expanded,
