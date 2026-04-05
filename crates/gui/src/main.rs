@@ -160,6 +160,30 @@ impl AppView {
         }
     }
 
+    /// ワークスペースルートを差し替え、ツリー再読込と `last_workspace.txt` へ保存する。
+    fn apply_workspace_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let path = path.canonicalize().unwrap_or(path);
+        if !path.is_dir() {
+            eprintln!("workspace: 無効なパス {}", path.display());
+            return;
+        }
+        self.workspace_root = path;
+        workspace_prefs::save_last_workspace(&self.workspace_root);
+        match read_tree_from_disk(&self.workspace_root) {
+            Ok(tree) => {
+                self.file_tree = tree;
+                self.explorer_expanded.clear();
+            }
+            Err(e) => {
+                eprintln!("explorer: フォルダ読込 {e}");
+                self.file_tree = TreeNode::dir("", vec![]);
+                self.explorer_expanded.clear();
+            }
+        }
+        self.explorer_selection = None;
+        cx.notify();
+    }
+
     /// EXPLORER 右端: フォルダを開く（ワークスペースルートを差し替え）
     fn explorer_open_folder_dialog(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
@@ -171,28 +195,10 @@ impl AppView {
         cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
             if let Ok(Ok(Some(paths))) = receiver.await {
                 if let Some(path) = paths.first() {
-                    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let path = path.clone();
                     let _ = cx.update(|ecx| {
                         let _ = app.update(ecx, |this: &mut AppView, ecx| {
-                            if !path.is_dir() {
-                                return;
-                            }
-                            this.workspace_root = path;
-                            workspace_prefs::save_last_workspace(&this.workspace_root);
-                            match read_tree_from_disk(&this.workspace_root) {
-                                Ok(tree) => {
-                                    this.file_tree = tree;
-                                    // フォルダを開いた直後はツリーはすべて閉じた状態
-                                    this.explorer_expanded.clear();
-                                }
-                                Err(e) => {
-                                    eprintln!("explorer: フォルダ読込 {e}");
-                                    this.file_tree = TreeNode::dir("", vec![]);
-                                    this.explorer_expanded.clear();
-                                }
-                            }
-                            this.explorer_selection = None;
-                            ecx.notify();
+                            this.apply_workspace_root(path, ecx);
                         });
                     });
                 }
@@ -1141,10 +1147,7 @@ fn main() {
                 let editor_view = cx.new(|cx| EditorView::new(cx));
 
                 cx.new(|_cx| {
-                    let workspace_root = workspace_prefs::load_last_workspace()
-                        .unwrap_or_else(|| {
-                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                        });
+                    let workspace_root = workspace_prefs::resolve_workspace_at_launch();
                     let (file_tree, explorer_expanded) =
                         match read_tree_from_disk(&workspace_root) {
                             Ok(tree) => {
