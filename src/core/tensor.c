@@ -146,6 +146,15 @@ static void dequant_q8_0(const uint8_t* src, float* dst, size_t n_elem) {
     }
 }
 
+/// brain float (GGUF GGML_TYPE_BF16 = 30): uint16 を IEEE float の上位 16bit として解釈
+static void dequant_bf16(const uint8_t* src, float* dst, size_t n_elem) {
+    const uint16_t* bf = (const uint16_t*)src;
+    for (size_t i = 0; i < n_elem; i++) {
+        uint32_t u = (uint32_t)bf[i] << 16;
+        memcpy(&dst[i], &u, 4);
+    }
+}
+
 static void dequant_f16(const uint8_t* src, float* dst, size_t n_elem) {
     const uint16_t* f16 = (const uint16_t*)src;
     for (size_t i = 0; i < n_elem; i++) {
@@ -181,6 +190,34 @@ oag_tensor_t* oag_tensor_dequant(const void* quant_data, ggml_type_t type,
         case GGML_TYPE_Q8_0:
             dequant_q8_0(src, t->data, t->n_elem);
             break;
+        case GGML_TYPE_BF16:
+            dequant_bf16(src, t->data, t->n_elem);
+            break;
+        case GGML_TYPE_I8: {
+            const int8_t* p = (const int8_t*)src;
+            for (size_t i = 0; i < t->n_elem; i++) t->data[i] = (float)p[i];
+            break;
+        }
+        case GGML_TYPE_I16: {
+            const int16_t* p = (const int16_t*)src;
+            for (size_t i = 0; i < t->n_elem; i++) t->data[i] = (float)p[i];
+            break;
+        }
+        case GGML_TYPE_I32: {
+            const int32_t* p = (const int32_t*)src;
+            for (size_t i = 0; i < t->n_elem; i++) t->data[i] = (float)p[i];
+            break;
+        }
+        case GGML_TYPE_I64: {
+            const int64_t* p = (const int64_t*)src;
+            for (size_t i = 0; i < t->n_elem; i++) t->data[i] = (float)p[i];
+            break;
+        }
+        case GGML_TYPE_F64: {
+            const double* p = (const double*)src;
+            for (size_t i = 0; i < t->n_elem; i++) t->data[i] = (float)p[i];
+            break;
+        }
         default:
             fprintf(stderr, "[Tensor] Dequant not implemented for type: %s\n",
                     ggml_type_name(type));

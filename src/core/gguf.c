@@ -48,6 +48,13 @@ static const size_t GGML_TYPE_SIZES[] = {
     [GGML_TYPE_Q5_K]    = 176,
     [GGML_TYPE_Q6_K]    = 210,
     [GGML_TYPE_Q8_K]    = 292,
+    /* IQ2/IQ3/IQ4 (16–23) は未対応: type_size=0（必要なら llama.cpp の block_* に合わせて追記） */
+    [GGML_TYPE_I8]      = 1,
+    [GGML_TYPE_I16]     = 2,
+    [GGML_TYPE_I32]     = 4,
+    [GGML_TYPE_I64]     = 8,
+    [GGML_TYPE_F64]     = 8,
+    [GGML_TYPE_BF16]    = 2,
 };
 
 static const size_t GGML_BLOCK_SIZES[] = {
@@ -65,15 +72,29 @@ static const size_t GGML_BLOCK_SIZES[] = {
     [GGML_TYPE_Q5_K]    = 256,
     [GGML_TYPE_Q6_K]    = 256,
     [GGML_TYPE_Q8_K]    = 256,
+    [GGML_TYPE_I8]      = 1,
+    [GGML_TYPE_I16]     = 1,
+    [GGML_TYPE_I32]     = 1,
+    [GGML_TYPE_I64]     = 1,
+    [GGML_TYPE_F64]     = 1,
+    [GGML_TYPE_BF16]    = 1,
 };
 
 size_t ggml_type_size(ggml_type_t type) {
-    if (type <= GGML_TYPE_Q8_K) return GGML_TYPE_SIZES[type];
+    int ti = (int)type;
+    if (ti >= 0 && ti < (int)(sizeof GGML_TYPE_SIZES / sizeof GGML_TYPE_SIZES[0])) {
+        size_t sz = GGML_TYPE_SIZES[ti];
+        if (sz > 0) return sz;
+    }
     return 0;
 }
 
 size_t ggml_type_block_size(ggml_type_t type) {
-    if (type <= GGML_TYPE_Q8_K) return GGML_BLOCK_SIZES[type];
+    int ti = (int)type;
+    if (ti >= 0 && ti < (int)(sizeof GGML_BLOCK_SIZES / sizeof GGML_BLOCK_SIZES[0])) {
+        size_t bs = GGML_BLOCK_SIZES[ti];
+        if (bs > 0) return bs;
+    }
     return 0;
 }
 
@@ -93,6 +114,21 @@ const char* ggml_type_name(ggml_type_t type) {
         case GGML_TYPE_Q5_K:  return "Q5_K";
         case GGML_TYPE_Q6_K:  return "Q6_K";
         case GGML_TYPE_Q8_K:  return "Q8_K";
+        case GGML_TYPE_IQ2_XXS: return "IQ2_XXS";
+        case GGML_TYPE_IQ2_XS:  return "IQ2_XS";
+        case GGML_TYPE_IQ3_XXS: return "IQ3_XXS";
+        case GGML_TYPE_IQ1_S:   return "IQ1_S";
+        case GGML_TYPE_IQ4_NL:  return "IQ4_NL";
+        case GGML_TYPE_IQ3_S:   return "IQ3_S";
+        case GGML_TYPE_IQ2_S:   return "IQ2_S";
+        case GGML_TYPE_IQ4_XS:  return "IQ4_XS";
+        case GGML_TYPE_I8:      return "I8";
+        case GGML_TYPE_I16:     return "I16";
+        case GGML_TYPE_I32:     return "I32";
+        case GGML_TYPE_I64:     return "I64";
+        case GGML_TYPE_F64:     return "F64";
+        case GGML_TYPE_IQ1_M:   return "IQ1_M";
+        case GGML_TYPE_BF16:    return "BF16";
         default:              return "UNKNOWN";
     }
 }
