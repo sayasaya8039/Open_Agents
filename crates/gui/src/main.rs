@@ -22,6 +22,8 @@ use project_explorer::{
 pub const BG: u32 = 0x1e1e1e;
 pub const SIDEBAR_BG: u32 = 0x252526;
 pub const TITLEBAR_BG: u32 = 0x2d2d2d;
+pub const TITLEBAR_GRADIENT_TOP: u32 = 0x4a4a4c;
+pub const TITLEBAR_GRADIENT_BOTTOM: u32 = 0x2f2f31;
 pub const BORDER: u32 = 0x3d3d3d;
 pub const HOVER_BG: u32 = 0x37373d;
 pub const PANEL_BG: u32 = 0x252526;
@@ -41,6 +43,13 @@ pub const TRAFFIC_YELLOW: u32 = 0xfebc2e;
 pub const TRAFFIC_GREEN: u32 = 0x28c840;
 #[allow(dead_code)]
 pub const PURPLE: u32 = 0xa855f7;
+/// Figma Make（MacOS-style UI）セクション見出し用アイコン色
+pub const FIGMA_ICON_ORANGE: u32 = 0xf97316;
+pub const FIGMA_ICON_BLUE: u32 = 0x3b82f6;
+pub const FIGMA_ICON_GREEN: u32 = 0x22c55e;
+/// コントロール背景（Figma `bg-[#3d3d3d]` と揃え、既存 BORDER と同値）
+pub const CONTROL_BG: u32 = 0x3d3d3d;
+pub const CONTROL_BORDER: u32 = 0x4d4d4d;
 
 pub fn hex(c: u32) -> Hsla {
     let r = ((c >> 16) & 0xFF) as f32 / 255.0;
@@ -68,26 +77,17 @@ enum Page {
     Terminal,
 }
 
-/// 設定サイドバー（macOS システム設定風ナビ）
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-enum SettingsNav {
-    #[default]
-    General,
-    Appearance,
-    AiAssistant,
-    ModelsHardware,
-    Privacy,
-    ApiKeys,
-}
-
 struct ChatMsg {
     role: String,
     content: String,
+    thinking: Option<String>,
 }
 
 struct AppView {
     page: Page,
     chat_messages: Vec<ChatMsg>,
+    /// Figma Chat ヘッダー「思考を表示」トグル
+    chat_show_thinking: bool,
     /// 開いているワークスペースのルート（Zed worktree root）
     workspace_root: PathBuf,
     /// 仮想ファイルツリー
@@ -97,7 +97,6 @@ struct AppView {
     /// フォーカス/選択行
     explorer_selection: Option<Vec<String>>,
     editor_view: Entity<EditorView>,
-    settings_nav: SettingsNav,
 }
 
 impl AppView {
@@ -230,8 +229,8 @@ impl Render for AppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: AnyElement = match self.page {
             Page::Editor => self.render_editor(cx).into_any_element(),
-            Page::Chat => self.render_chat_page().into_any_element(),
-            Page::Settings => self.render_settings(cx).into_any_element(),
+            Page::Chat => self.render_chat_page(cx).into_any_element(),
+            Page::Settings => self.render_settings().into_any_element(),
             Page::Terminal => self.render_terminal().into_any_element(),
         };
 
@@ -271,9 +270,13 @@ impl AppView {
     fn render_titlebar(&self) -> impl IntoElement {
         div()
             .h(px(44.))
-            .bg(hex(TITLEBAR_BG))
+            .bg(linear_gradient(
+                180.0,
+                linear_color_stop(hex_a(TITLEBAR_GRADIENT_TOP, 0.85), 0.0),
+                linear_color_stop(hex_a(TITLEBAR_GRADIENT_BOTTOM, 0.94), 1.0),
+            ))
             .border_b_1()
-            .border_color(hex(BORDER))
+            .border_color(hex_a(0xffffff, 0.03))
             .child(
                 canvas(
                     |bounds, window, _cx| {
@@ -733,192 +736,13 @@ impl AppView {
     }
 
     // ============================================================
-    // Chat View
+    // Chat View（Figma Make: ChatView.tsx に合わせたレイアウト）
     // ============================================================
 
-    fn render_chat_page(&self) -> impl IntoElement {
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .bg(hex(BG))
-            .child(
-                div()
-                    .h(px(48.))
-                    .bg(hex(PANEL_BG))
-                    .border_b_1()
-                    .border_color(hex(BORDER))
-                    .flex()
-                    .items_center()
-                    .px(px(16.))
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .w(px(24.))
-                            .h(px(24.))
-                            .rounded(px(6.))
-                            .bg(hex(ACCENT_ORANGE))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(12.))
-                            .text_color(hex(0xFFFFFF))
-                            .child("✦"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(hex(TEXT_PRIMARY))
-                            .child("Open Agents"),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .max_w(px(800.))
-                            .mx_auto()
-                            .px(px(24.))
-                            .py(px(32.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(24.))
-                            .child(
-                                div()
-                                    .mb(px(16.))
-                                    .child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .text_color(hex(TEXT_MUTED))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .mb(px(12.))
-                                            .child("提案"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_wrap()
-                                            .gap(px(8.))
-                                            .child(self.suggestion_chip("Reactコンポーネントを作成"))
-                                            .child(self.suggestion_chip("バグを修正"))
-                                            .child(self.suggestion_chip("コードをリファクタリング"))
-                                            .child(self.suggestion_chip("テストを追加")),
-                                    ),
-                            )
-                            .children(self.chat_messages.iter().map(|msg| {
-                                let is_user = msg.role == "user";
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(8.))
-                                            .child(if is_user {
-                                                div()
-                                                    .w(px(24.))
-                                                    .h(px(24.))
-                                                    .rounded(px(6.))
-                                                    .bg(hex(ACCENT_BLUE))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_size(px(11.))
-                                                    .text_color(hex(0xFFFFFF))
-                                                    .child("U")
-                                                    .into_any_element()
-                                            } else {
-                                                div()
-                                                    .w(px(24.))
-                                                    .h(px(24.))
-                                                    .rounded(px(6.))
-                                                    .bg(hex(ACCENT_ORANGE))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_size(px(11.))
-                                                    .text_color(hex(0xFFFFFF))
-                                                    .child("✦")
-                                                    .into_any_element()
-                                            })
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .text_color(hex(TEXT_SECONDARY))
-                                                    .child(if is_user {
-                                                        "You"
-                                                    } else {
-                                                        "Agent"
-                                                    }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .pl(px(32.))
-                                            .text_size(px(13.))
-                                            .text_color(hex(TEXT_PRIMARY))
-                                            .child(msg.content.clone()),
-                                    )
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .border_t_1()
-                    .border_color(hex(BORDER))
-                    .bg(hex(PANEL_BG))
-                    .p(px(16.))
-                    .child(
-                        div()
-                            .max_w(px(800.))
-                            .mx_auto()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .bg(hex(BG))
-                                    .border_1()
-                                    .border_color(hex(BORDER))
-                                    .rounded(px(12.))
-                                    .px(px(16.))
-                                    .py(px(12.))
-                                    .text_size(px(13.))
-                                    .text_color(hex(TEXT_MUTED))
-                                    .child("メッセージを入力してください..."),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(8.))
-                                    .text_size(px(11.))
-                                    .text_color(hex(TEXT_MUTED))
-                                    .child("Enter で送信、Shift + Enter で改行"),
-                            ),
-                    ),
-            )
-    }
+    fn render_chat_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_suggestions = self.chat_messages.len() == 1;
+        let thinking_toggle = self.chat_show_thinking;
 
-    fn suggestion_chip(&self, label: &str) -> impl IntoElement {
-        div()
-            .px(px(16.))
-            .py(px(12.))
-            .bg(hex(PANEL_BG))
-            .border_1()
-            .border_color(hex(BORDER))
-            .rounded(px(8.))
-            .text_size(px(12.))
-            .text_color(hex(TEXT_SECONDARY))
-            .cursor_pointer()
-            .child(label.to_string())
-    }
-
-    // ============================================================
-    // Settings View（Figma: MacOS-style AI Coding Tool /settings 相当の二段ペイン）
-    // ============================================================
-
-    fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_1()
             .flex()
@@ -928,165 +752,379 @@ impl AppView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .py(px(20.))
-                    .px(px(28.))
+                    .h(px(48.))
+                    .bg(hex(PANEL_BG))
                     .border_b_1()
                     .border_color(hex(BORDER))
-                    .bg(hex_a(0x000000, 0.2))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(16.))
                     .child(
                         div()
-                            .text_size(px(22.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(hex(TEXT_PRIMARY))
-                            .mb(px(4.))
-                            .child("設定"),
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .w(px(24.))
+                                    .h(px(24.))
+                                    .rounded(px(6.))
+                                    .bg(hex(ACCENT_ORANGE))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(px(12.))
+                                    .text_color(hex(0xFFFFFF))
+                                    .child("✦"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child("Open Agents"),
+                            ),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .text_color(hex(TEXT_MUTED))
-                            .child("Open Agents の外観・AI・モデル・プライバシーを変更します。"),
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                    this.chat_show_thinking = !this.chat_show_thinking;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(if thinking_toggle {
+                                "思考を非表示"
+                            } else {
+                                "思考を表示"
+                            }),
                     ),
             )
             .child(
                 div()
+                    .id("chat-messages-scroll")
                     .flex_1()
-                    .flex()
                     .min_h(px(0.))
-                    .overflow_hidden()
+                    .overflow_y_scroll()
                     .child(
                         div()
-                            .w(px(232.))
-                            .flex_shrink_0()
-                            .h_full()
-                            .border_r_1()
-                            .border_color(hex(BORDER))
-                            .bg(hex(SIDEBAR_BG))
-                            .py(px(12.))
+                            .max_w(px(896.))
+                            .mx_auto()
+                            .px(px(24.))
+                            .py(px(32.))
                             .flex()
                             .flex_col()
-                            .gap(px(2.))
-                            .child(self.settings_sidebar_item(
-                                "一般",
-                                "",
-                                SettingsNav::General,
-                                cx,
-                            ))
-                            .child(self.settings_sidebar_item(
-                                "外観",
-                                "",
-                                SettingsNav::Appearance,
-                                cx,
-                            ))
-                            .child(self.settings_sidebar_item(
-                                "AI アシスタント",
-                                "",
-                                SettingsNav::AiAssistant,
-                                cx,
-                            ))
-                            .child(self.settings_sidebar_item(
-                                "モデルとハードウェア",
-                                "",
-                                SettingsNav::ModelsHardware,
-                                cx,
-                            ))
-                            .child(self.settings_sidebar_item(
-                                "プライバシー",
-                                "",
-                                SettingsNav::Privacy,
-                                cx,
-                            ))
-                            .child(self.settings_sidebar_item(
-                                "API キー",
-                                "",
-                                SettingsNav::ApiKeys,
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .overflow_hidden()
+                            .when(show_suggestions, |d| {
+                                d.child(
+                                    div()
+                                        .mb(px(32.))
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_size(px(10.))
+                                                .text_color(hex(TEXT_MUTED))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .mb(px(12.))
+                                                .child("提案"),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(8.))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .gap(px(8.))
+                                                        .child(self.suggestion_chip("Reactコンポーネントを作成"))
+                                                        .child(self.suggestion_chip("バグを修正")),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .gap(px(8.))
+                                                        .child(self.suggestion_chip("コードをリファクタリング"))
+                                                        .child(self.suggestion_chip("テストを追加")),
+                                                ),
+                                        ),
+                                )
+                            })
                             .child(
                                 div()
-                                    .id("settings-detail-scroll")
-                                    .flex_1()
-                                    .min_h(px(0.))
-                                    .h_full()
-                                    .overflow_y_scroll()
-                                    .px(px(32.))
-                                    .py(px(28.))
-                                    .child(self.render_settings_detail()),
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(32.))
+                                    .children(self.chat_messages.iter().map(|msg| {
+                                        let is_user = msg.role == "user";
+                                        let mut block = div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(12.))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(8.))
+                                                    .child(if is_user {
+                                                        div()
+                                                            .w(px(24.))
+                                                            .h(px(24.))
+                                                            .rounded(px(6.))
+                                                            .bg(hex(ACCENT_BLUE))
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .text_size(px(11.))
+                                                            .text_color(hex(0xFFFFFF))
+                                                            .child("U")
+                                                            .into_any_element()
+                                                    } else {
+                                                        div()
+                                                            .w(px(24.))
+                                                            .h(px(24.))
+                                                            .rounded(px(6.))
+                                                            .bg(hex(ACCENT_ORANGE))
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .text_size(px(11.))
+                                                            .text_color(hex(0xFFFFFF))
+                                                            .child("✦")
+                                                            .into_any_element()
+                                                    })
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(TEXT_SECONDARY))
+                                                            .child(if is_user {
+                                                                "You"
+                                                            } else {
+                                                                "Agent"
+                                                            }),
+                                                    ),
+                                            );
+                                        if let Some(th) = &msg.thinking {
+                                            if self.chat_show_thinking {
+                                                block = block.child(
+                                                    div()
+                                                        .ml(px(32.))
+                                                        .flex()
+                                                        .gap(px(0.))
+                                                        .child(
+                                                            div()
+                                                                .w(px(2.))
+                                                                .flex_shrink_0()
+                                                                .bg(hex(PURPLE)),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .p(px(12.))
+                                                                .bg(hex(PANEL_BG))
+                                                                .rounded(px(4.))
+                                                                .text_size(px(12.))
+                                                                .text_color(hex(TEXT_SECONDARY))
+                                                                .child(th.clone()),
+                                                        ),
+                                                );
+                                            }
+                                        }
+                                        block.child(
+                                            div()
+                                                .ml(px(32.))
+                                                .text_size(px(13.))
+                                                .text_color(hex(TEXT_PRIMARY))
+                                                .child(msg.content.clone()),
+                                        )
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .border_t_1()
+                    .border_color(hex(BORDER))
+                    .bg(hex(PANEL_BG))
+                    .p(px(16.))
+                    .child(
+                        div()
+                            .max_w(px(896.))
+                            .mx_auto()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_h(px(72.))
+                                    .flex()
+                                    .gap(px(8.))
+                                    .items_end()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h(px(72.))
+                                            .bg(hex(BG))
+                                            .border_1()
+                                            .border_color(hex(BORDER))
+                                            .rounded(px(12.))
+                                            .px(px(16.))
+                                            .py(px(12.))
+                                            .flex()
+                                            .items_start()
+                                            .child(
+                                                div()
+                                                    .text_size(px(13.))
+                                                    .text_color(hex(TEXT_MUTED))
+                                                    .child("メッセージを入力してください..."),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .mb(px(4.))
+                                            .mr(px(4.))
+                                            .p(px(8.))
+                                            .rounded(px(8.))
+                                            .bg(hex(ACCENT_BLUE))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(hex(0xFFFFFF))
+                                            .child("➤"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(8.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_MUTED))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .child("⌨".to_string())
+                                    .child(
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .bg(hex(BORDER))
+                                            .rounded(px(4.))
+                                            .text_size(px(10.))
+                                            .child("Enter"),
+                                    )
+                                    .child("で送信、".to_string())
+                                    .child(
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .bg(hex(BORDER))
+                                            .rounded(px(4.))
+                                            .text_size(px(10.))
+                                            .child("Shift + Enter"),
+                                    )
+                                    .child("で改行".to_string()),
                             ),
                     ),
             )
     }
 
-    fn settings_sidebar_item(
-        &mut self,
-        label: &str,
-        _icon: &str,
-        nav: SettingsNav,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let selected = self.settings_nav == nav;
+    fn suggestion_chip(&self, label: &str) -> impl IntoElement {
         div()
-            .mx(px(10.))
-            .px(px(12.))
-            .py(px(9.))
+            .flex_1()
+            .min_w(px(0.))
+            .px(px(16.))
+            .py(px(12.))
+            .bg(hex(PANEL_BG))
+            .border_1()
+            .border_color(hex(BORDER))
             .rounded(px(8.))
-            .when(selected, |d| d.bg(hex_a(ACCENT_BLUE, 0.22)))
+            .text_size(px(12.))
+            .text_color(hex(TEXT_SECONDARY))
             .cursor_pointer()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                    this.settings_nav = nav;
-                    cx.notify();
-                }),
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .text_color(hex(ACCENT_BLUE))
+                    .child("⚡"),
+            )
+            .child(label.to_string())
+    }
+
+    // ============================================================
+    // Settings View（Figma Make: SettingsView.tsx — 単一スクロール + セクションカード）
+    // ============================================================
+
+    fn settings_figma_heading(&self, icon: &str, icon_color: u32, title: &str) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .mb(px(16.))
+            .child(
+                div()
+                    .text_size(px(18.))
+                    .text_color(hex(icon_color))
+                    .child(icon.to_string()),
             )
             .child(
                 div()
-                    .text_size(px(13.))
-                    .font_weight(if selected {
-                        FontWeight::SEMIBOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .text_color(if selected {
-                        hex(TEXT_PRIMARY)
-                    } else {
-                        hex(TEXT_SECONDARY)
-                    })
-                    .child(label.to_string()),
+                    .text_size(px(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(hex(TEXT_PRIMARY))
+                    .child(title.to_string()),
             )
     }
 
-    fn settings_inset_group(
-        &self,
-        caption: &str,
-        rows: Vec<(&str, &str)>,
-    ) -> impl IntoElement {
-        let n = rows.len();
-        let mut card = div()
-            .bg(hex_a(0xffffff, 0.04))
+    fn settings_fake_dropdown(&self, label: &str) -> impl IntoElement {
+        div()
+            .px(px(12.))
+            .py(px(6.))
+            .min_w(px(180.))
+            .bg(hex(CONTROL_BG))
             .border_1()
-            .border_color(hex(BORDER))
-            .rounded(px(10.))
-            .overflow_hidden()
+            .border_color(hex(CONTROL_BORDER))
+            .rounded(px(6.))
+            .text_size(px(12.))
+            .text_color(hex(TEXT_SECONDARY))
+            .child(label.to_string())
+    }
+
+    fn settings_labeled_block(&self, title: &str, subtitle: &str) -> impl IntoElement {
+        div()
             .flex()
-            .flex_col();
-        for (i, (label, value)) in rows.into_iter().enumerate() {
-            let last = i + 1 == n;
-            card = card.child(
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(hex(TEXT_PRIMARY))
+                    .child(title.to_string()),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(hex(TEXT_MUTED))
+                    .child(subtitle.to_string()),
+            )
+    }
+
+    fn settings_slider_row(&self, label: &str, value: &str, hint: Option<&str>) -> impl IntoElement {
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(16.))
-                    .px(px(16.))
-                    .py(px(13.))
-                    .when(!last, |d| d.border_b_1().border_color(hex(BORDER)))
                     .child(
                         div()
                             .text_size(px(13.))
@@ -1095,156 +1133,550 @@ impl AppView {
                     )
                     .child(
                         div()
+                            .text_size(px(12.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child(value.to_string()),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(4.))
+                    .w_full()
+                    .rounded(px(2.))
+                    .bg(hex(CONTROL_BG)),
+            );
+        if let Some(h) = hint {
+            col = col.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_DIM))
+                    .child(h.to_string()),
+            );
+        }
+        col
+    }
+
+    fn settings_toggle_row(&self, title: &str, subtitle: &str, on: bool) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .child(self.settings_labeled_block(title, subtitle))
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(9999.))
+                    .bg(if on {
+                        hex_a(ACCENT_BLUE, 0.35)
+                    } else {
+                        hex(CONTROL_BG)
+                    })
+                    .text_size(px(11.))
+                    .text_color(if on {
+                        hex(TEXT_PRIMARY)
+                    } else {
+                        hex(TEXT_MUTED)
+                    })
+                    .child(if on { "オン" } else { "オフ" }),
+            )
+    }
+
+    fn render_settings(&self) -> impl IntoElement {
+        let ver = env!("CARGO_PKG_VERSION");
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .min_h(px(0.))
+            .bg(hex(BG))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .h(px(48.))
+                    .bg(hex(PANEL_BG))
+                    .border_b_1()
+                    .border_color(hex(BORDER))
+                    .flex()
+                    .items_center()
+                    .px(px(16.))
+                    .child(
+                        div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(px(16.))
                                     .text_color(hex(TEXT_SECONDARY))
-                                    .child(value.to_string()),
+                                    .child("⚙"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child("Settings"),
                             ),
                     ),
-            );
-        }
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
+            )
             .child(
                 div()
-                    .px(px(4.))
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(hex(TEXT_MUTED))
-                    .child(caption.to_string()),
+                    .id("settings-figma-scroll")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .max_w(px(768.))
+                            .mx_auto()
+                            .p(px(24.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(32.))
+                            // --- ローカル LLM ---
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .child(self.settings_figma_heading(
+                                        "💾",
+                                        FIGMA_ICON_ORANGE,
+                                        "ローカルLLM設定",
+                                    ))
+                                    .child(
+                                        div()
+                                            .bg(hex(PANEL_BG))
+                                            .rounded(px(8.))
+                                            .p(px(16.))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(16.))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .gap(px(16.))
+                                                    .child(self.settings_labeled_block(
+                                                        "モデル形式",
+                                                        "使用するモデル形式を選択",
+                                                    ))
+                                                    .child(self.settings_fake_dropdown("GGUF")),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(8.))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.))
+                                                            .text_color(hex(TEXT_PRIMARY))
+                                                            .child("モデルファイル"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .w_full()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .gap(px(8.))
+                                                            .px(px(16.))
+                                                            .py(px(12.))
+                                                            .bg(hex(CONTROL_BG))
+                                                            .border_1()
+                                                            .border_color(hex(CONTROL_BORDER))
+                                                            .rounded(px(8.))
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(TEXT_SECONDARY))
+                                                            .child("⬆")
+                                                            .child("モデルファイルを読み込む"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(11.))
+                                                            .text_color(hex(TEXT_DIM))
+                                                            .child("GGUF または ONNX 形式のモデルファイルを選択してください"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(8.))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.))
+                                                            .text_color(hex(TEXT_PRIMARY))
+                                                            .child("読み込み済みモデル"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .p(px(12.))
+                                                            .bg(hex(BG))
+                                                            .border_1()
+                                                            .border_color(hex(BORDER))
+                                                            .rounded(px(8.))
+                                                            .child(
+                                                                div()
+                                                                    .flex_1()
+                                                                    .min_w(px(0.))
+                                                                    .flex()
+                                                                    .flex_col()
+                                                                    .gap(px(4.))
+                                                                    .child(
+                                                                        div()
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .gap(px(8.))
+                                                                            .child(
+                                                                                div()
+                                                                                    .text_size(px(12.))
+                                                                                    .text_color(hex(TEXT_PRIMARY))
+                                                                                    .child("llama-3-8b-instruct-q4.gguf"),
+                                                                            )
+                                                                            .child(
+                                                                                div()
+                                                                                    .text_size(px(12.))
+                                                                                    .text_color(hex(0x22c55e))
+                                                                                    .child("✓"),
+                                                                            ),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(11.))
+                                                                            .text_color(hex(TEXT_MUTED))
+                                                                            .child("GGUF • 4.7 GB"),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(11.))
+                                                                            .text_color(hex(TEXT_DIM))
+                                                                            .child("C:/Models/…"),
+                                                                    ),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .px(px(10.))
+                                                                    .py(px(4.))
+                                                                    .rounded(px(4.))
+                                                                    .bg(hex(0x2d2d2d))
+                                                                    .text_size(px(11.))
+                                                                    .text_color(hex(TEXT_MUTED))
+                                                                    .child("🗑"),
+                                                            ),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .pt(px(16.))
+                                                    .border_t_1()
+                                                    .border_color(hex(BORDER))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(16.))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.))
+                                                            .text_color(hex(TEXT_PRIMARY))
+                                                            .child("モデルパラメータ"),
+                                                    )
+                                                    .child(self.settings_slider_row(
+                                                        "Temperature",
+                                                        "0.7",
+                                                        Some("低い値ほど決定論的、高い値ほど創造的"),
+                                                    ))
+                                                    .child(self.settings_slider_row("最大トークン数", "2048", None))
+                                                    .child(self.settings_slider_row("コンテキスト長", "4096", None)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .pt(px(16.))
+                                                    .border_t_1()
+                                                    .border_color(hex(BORDER))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(16.))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.))
+                                                            .text_color(hex(TEXT_PRIMARY))
+                                                            .child("ハードウェア設定"),
+                                                    )
+                                                    .child(self.settings_toggle_row(
+                                                        "GPU アクセラレーション",
+                                                        "利用可能な場合、GPUを使用",
+                                                        true,
+                                                    ))
+                                                    .child(self.settings_slider_row(
+                                                        "GPU レイヤー数",
+                                                        "32",
+                                                        Some("GPUにオフロードするレイヤー数"),
+                                                    ))
+                                                    .child(self.settings_slider_row("スレッド数", "8", None))
+                                                    .child(self.settings_slider_row("バッチサイズ", "512", None)),
+                                            ),
+                                    ),
+                            )
+                            // --- 外観 ---
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .child(self.settings_figma_heading(
+                                        "🎨",
+                                        FIGMA_ICON_BLUE,
+                                        "外観",
+                                    ))
+                                    .child(
+                                        div()
+                                            .bg(hex(PANEL_BG))
+                                            .rounded(px(8.))
+                                            .p(px(16.))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(16.))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .gap(px(16.))
+                                                    .child(self.settings_labeled_block(
+                                                        "テーマ",
+                                                        "エディタのカラーテーマを選択",
+                                                    ))
+                                                    .child(self.settings_fake_dropdown("Dark")),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .gap(px(16.))
+                                                    .child(self.settings_labeled_block(
+                                                        "フォントサイズ",
+                                                        "エディタのフォントサイズ",
+                                                    ))
+                                                    .child(self.settings_fake_dropdown("14px")),
+                                            )
+                                            .child(self.settings_toggle_row(
+                                                "行番号を表示",
+                                                "エディタに行番号を表示",
+                                                true,
+                                            )),
+                                    ),
+                            )
+                            // --- AI 設定 ---
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .child(self.settings_figma_heading(
+                                        "🧠",
+                                        PURPLE,
+                                        "AI設定",
+                                    ))
+                                    .child(
+                                        div()
+                                            .bg(hex(PANEL_BG))
+                                            .rounded(px(8.))
+                                            .p(px(16.))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(16.))
+                                            .child(self.settings_toggle_row(
+                                                "自動補完",
+                                                "AI による自動補完を有効化",
+                                                true,
+                                            ))
+                                            .child(self.settings_toggle_row(
+                                                "コード提案",
+                                                "リアルタイムのコード提案を表示",
+                                                true,
+                                            ))
+                                            .child(self.settings_toggle_row(
+                                                "ストリーミング応答",
+                                                "応答をリアルタイムで表示",
+                                                true,
+                                            )),
+                                    ),
+                            )
+                            // --- API キー ---
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .child(self.settings_figma_heading(
+                                        "🔑",
+                                        FIGMA_ICON_GREEN,
+                                        "APIキー管理",
+                                    ))
+                                    .child(
+                                        div()
+                                            .bg(hex(PANEL_BG))
+                                            .rounded(px(8.))
+                                            .p(px(16.))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(16.))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .gap(px(16.))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(TEXT_MUTED))
+                                                            .child("外部APIを使用する場合のキー管理"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .px(px(12.))
+                                                            .py(px(6.))
+                                                            .rounded(px(6.))
+                                                            .bg(hex(ACCENT_BLUE))
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(0xFFFFFF))
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap(px(4.))
+                                                            .child("+")
+                                                            .child("追加"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(8.))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.))
+                                                            .text_color(hex(TEXT_PRIMARY))
+                                                            .child("登録済みAPIキー"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .p(px(12.))
+                                                            .bg(hex(BG))
+                                                            .border_1()
+                                                            .border_color(hex(BORDER))
+                                                            .rounded(px(8.))
+                                                            .child(
+                                                                div()
+                                                                    .flex()
+                                                                    .flex_col()
+                                                                    .gap(px(6.))
+                                                                    .child(
+                                                                        div()
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .gap(px(8.))
+                                                                            .child(
+                                                                                div()
+                                                                                    .text_size(px(12.))
+                                                                                    .text_color(hex(TEXT_PRIMARY))
+                                                                                    .child("OpenAI API Key"),
+                                                                            )
+                                                                            .child(
+                                                                                div()
+                                                                                    .text_size(px(12.))
+                                                                                    .text_color(hex(0x22c55e))
+                                                                                    .child("✓"),
+                                                                            ),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(11.))
+                                                                            .text_color(hex(TEXT_MUTED))
+                                                                            .child("OPENAI"),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(11.))
+                                                                            .font_family("Cascadia Code")
+                                                                            .text_color(hex(TEXT_SECONDARY))
+                                                                            .child("••••••••••••••••"),
+                                                                    ),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(12.))
+                                                                    .text_color(hex(TEXT_MUTED))
+                                                                    .child("👁"),
+                                                            ),
+                                                    ),
+                                            ),
+                                    ),
+                            )
+                            // --- アプリ情報 ---
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .child(self.settings_figma_heading(
+                                        "ℹ",
+                                        TEXT_SECONDARY,
+                                        "アプリ情報",
+                                    ))
+                                    .child(
+                                        div()
+                                            .bg(hex(PANEL_BG))
+                                            .rounded(px(8.))
+                                            .p(px(16.))
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(8.))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(TEXT_MUTED))
+                                                            .child("バージョン"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(TEXT_PRIMARY))
+                                                            .child(ver),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(TEXT_MUTED))
+                                                            .child("ビルド"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .text_color(hex(TEXT_PRIMARY))
+                                                            .child("2026.04.05"),
+                                                    ),
+                                            ),
+                                    ),
+                            ),
+                    ),
             )
-            .child(card)
-    }
-
-    fn render_settings_detail(&self) -> impl IntoElement {
-        let title = match self.settings_nav {
-            SettingsNav::General => "一般",
-            SettingsNav::Appearance => "外観",
-            SettingsNav::AiAssistant => "AI アシスタント",
-            SettingsNav::ModelsHardware => "モデルとハードウェア",
-            SettingsNav::Privacy => "プライバシー",
-            SettingsNav::ApiKeys => "API キー",
-        };
-
-        let body = match self.settings_nav {
-            SettingsNav::General => div()
-                .flex()
-                .flex_col()
-                .gap(px(22.))
-                .child(self.settings_inset_group(
-                    "アプリケーション",
-                    vec![
-                        ("起動時のページ", "エディタ"),
-                        ("言語", "日本語（システムに追従）"),
-                        ("更新", "自動で確認（β）"),
-                    ],
-                ))
-                .child(self.settings_inset_group(
-                    "ファイル",
-                    vec![
-                        ("既定の改行", "LF"),
-                        ("既定のエンコーディング", "UTF-8"),
-                    ],
-                )),
-            SettingsNav::Appearance => div()
-                .flex()
-                .flex_col()
-                .gap(px(22.))
-                .child(self.settings_inset_group(
-                    "テーマ",
-                    vec![
-                        ("カラーテーマ", "ダーク（VS Code 風）"),
-                        ("アクセント", "ブルー"),
-                    ],
-                ))
-                .child(self.settings_inset_group(
-                    "エディタ",
-                    vec![
-                        ("エディタフォント", "Cascadia Code 13pt"),
-                        ("行番号", "表示"),
-                        ("ミニマップ", "オフ"),
-                    ],
-                )),
-            SettingsNav::AiAssistant => div()
-                .flex()
-                .flex_col()
-                .gap(px(22.))
-                .child(self.settings_inset_group(
-                    "応答",
-                    vec![
-                        ("創造性（Temperature）", "0.7"),
-                        ("最大出力トークン", "2048"),
-                        ("システムプロンプト", "既定のまま"),
-                    ],
-                ))
-                .child(self.settings_inset_group(
-                    "コンテキスト",
-                    vec![("会話ウィンドウ", "約 4096 トークン相当")],
-                )),
-            SettingsNav::ModelsHardware => div()
-                .flex()
-                .flex_col()
-                .gap(px(22.))
-                .child(self.settings_inset_group(
-                    "ローカルモデル",
-                    vec![
-                        ("形式", "GGUF / ONNX"),
-                        ("読み込み先", "未設定"),
-                    ],
-                ))
-                .child(self.settings_inset_group(
-                    "ハードウェア",
-                    vec![
-                        ("GPU アクセラレーション", "オン"),
-                        ("オフロード層数", "32"),
-                        ("CPU スレッド", "8"),
-                    ],
-                )),
-            SettingsNav::Privacy => div()
-                .flex()
-                .flex_col()
-                .gap(px(22.))
-                .child(self.settings_inset_group(
-                    "データ",
-                    vec![
-                        ("クラウド補完へコードを送る", "オフ"),
-                        ("クラッシュレポート", "オフ"),
-                    ],
-                )),
-            SettingsNav::ApiKeys => div()
-                .flex()
-                .flex_col()
-                .gap(px(22.))
-                .child(self.settings_inset_group(
-                    "プロバイダー",
-                    vec![
-                        ("OpenAI API", "未設定"),
-                        ("Anthropic API", "未設定"),
-                        ("カスタムエンドポイント", "未設定"),
-                    ],
-                )),
-        };
-
-        div()
-            .max_w(px(720.))
-            .flex()
-            .flex_col()
-            .gap(px(18.))
-            .child(
-                div()
-                    .text_size(px(17.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(hex(TEXT_PRIMARY))
-                    .child(title.to_string()),
-            )
-            .child(body)
     }
 
     // ============================================================
@@ -1370,14 +1802,15 @@ fn main() {
                         page: Page::Editor,
                         chat_messages: vec![ChatMsg {
                             role: "assistant".into(),
-                            content: "こんにちは！Open Agents AIコーディングアシスタントです。".into(),
+                            content: "こんにちは！Open Agents AIコーディングアシスタントです。コードの作成、編集、リファクタリングなど、お手伝いします。".into(),
+                            thinking: None,
                         }],
+                        chat_show_thinking: true,
                         workspace_root,
                         file_tree,
                         explorer_expanded,
                         explorer_selection: None,
                         editor_view,
-                        settings_nav: SettingsNav::default(),
                     }
                 })
             },
