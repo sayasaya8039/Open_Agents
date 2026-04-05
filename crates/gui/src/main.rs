@@ -1,21 +1,28 @@
 use gpui::*;
 
 // ============================================================
-// Design System Colors (Graphite Mono)
+// Figma Design Colors (VS Code Dark / macOS style)
+// From: figma.com/make/R9zPYmdxXBKlNsptbTt6dF
 // ============================================================
 
-const BG: u32 = 0x131313;
-const SURFACE: u32 = 0x1b1b1c;
-const SURFACE_HIGH: u32 = 0x2a2a2a;
-const SURFACE_HIGHEST: u32 = 0x353535;
-const SURFACE_LOWEST: u32 = 0x0e0e0e;
-const PRIMARY: u32 = 0xadc6ff;
-const TERTIARY: u32 = 0xffb595;
-const OUTLINE: u32 = 0x8b90a0;
-const ON_SURFACE: u32 = 0xe5e2e1;
-const OK_GREEN: u32 = 0x27c93f;
-const WARN_YELLOW: u32 = 0xffbd2e;
-const ERR_RED: u32 = 0xff5f56;
+const BG: u32 = 0x1e1e1e;          // Main background
+const SIDEBAR_BG: u32 = 0x252526;   // Sidebar
+const TITLEBAR_BG: u32 = 0x2d2d2d;  // Title bar
+const BORDER: u32 = 0x3d3d3d;       // Borders
+const HOVER_BG: u32 = 0x37373d;     // Active/hover state
+const PANEL_BG: u32 = 0x252526;     // Panel headers
+const TEXT_PRIMARY: u32 = 0xe5e5e5;  // Primary text (gray-200)
+const TEXT_SECONDARY: u32 = 0x9ca3af; // Secondary text (gray-400)
+const TEXT_MUTED: u32 = 0x6b7280;    // Muted text (gray-500)
+const TEXT_DIM: u32 = 0x4b5563;      // Dim text (gray-600)
+const ACCENT_BLUE: u32 = 0x2563eb;   // Blue accent (blue-600)
+const ACCENT_ORANGE: u32 = 0xfb923c; // Orange accent
+const ACCENT_PINK: u32 = 0xdb2777;   // Pink accent
+const STATUSBAR_BG: u32 = 0x007acc;  // VS Code blue status bar
+const TRAFFIC_RED: u32 = 0xff5f57;
+const TRAFFIC_YELLOW: u32 = 0xfebc2e;
+const TRAFFIC_GREEN: u32 = 0x28c840;
+const PURPLE: u32 = 0xa855f7;
 
 fn hex(c: u32) -> Hsla {
     let r = ((c >> 16) & 0xFF) as f32 / 255.0;
@@ -35,14 +42,18 @@ fn hex_a(c: u32, a: f32) -> Hsla {
 // State
 // ============================================================
 
-struct ChatMsg {
-    role: String,
-    content: String,
-}
+#[derive(Clone, Copy, PartialEq)]
+enum Page { Editor, Chat, Settings, Terminal }
+
+struct ChatMsg { role: String, content: String }
+
+struct FileEntry { name: &'static str, is_folder: bool }
 
 struct AppView {
+    page: Page,
     chat_messages: Vec<ChatMsg>,
     code: String,
+    files: Vec<FileEntry>,
 }
 
 // ============================================================
@@ -51,318 +62,688 @@ struct AppView {
 
 impl Render for AppView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let content: AnyElement = match self.page {
+            Page::Editor => self.render_editor().into_any_element(),
+            Page::Chat => self.render_chat_page().into_any_element(),
+            Page::Settings => self.render_settings().into_any_element(),
+            Page::Terminal => self.render_terminal().into_any_element(),
+        };
+
+        // Root: rounded window with macOS feel
         div()
-            .flex()
             .size_full()
             .bg(hex(BG))
-            .text_color(hex(ON_SURFACE))
-            // Sidebar
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .w(px(64.))
-                    .h_full()
-                    .bg(hex_a(SURFACE, 0.85))
-                    .border_r_1()
-                    .border_color(hex_a(0xFFFFFF, 0.06))
-                    .py(px(16.))
-                    // Logo
-                    .child(
-                        div()
-                            .w(px(36.))
-                            .h(px(36.))
-                            .rounded(px(10.))
-                            .bg(hex(PRIMARY))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .mb(px(24.))
-                            .child(
-                                div()
-                                    .text_size(px(14.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(hex(0x001a41))
-                                    .child("OA"),
-                            ),
-                    )
-                    // Nav icons
-                    .child(self.nav_icon("E", true))
-                    .child(self.nav_icon("M", false))
-                    .child(self.nav_icon("K", false))
-                    .child(self.nav_icon("L", false))
-                    .child(div().flex_1())
-                    .child(self.nav_icon("S", false)),
-            )
-            // Main area
+            .flex()
+            .flex_col()
+            .rounded(px(20.))
+            .overflow_hidden()
+            .child(self.render_titlebar())
             .child(
                 div()
                     .flex_1()
                     .flex()
-                    .flex_col()
-                    // Topbar
+                    .overflow_hidden()
+                    .child(self.render_sidebar())
+                    // Separator
+                    .child(div().w(px(1.)).h_full().bg(hex(BORDER)))
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .h(px(44.))
-                            .px(px(20.))
-                            .border_b_1()
-                            .border_color(hex_a(0xFFFFFF, 0.06))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(12.))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap(px(6.))
-                                            .child(
-                                                div()
-                                                    .w(px(12.))
-                                                    .h(px(12.))
-                                                    .rounded_full()
-                                                    .bg(hex(ERR_RED)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(px(12.))
-                                                    .h(px(12.))
-                                                    .rounded_full()
-                                                    .bg(hex(WARN_YELLOW)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(px(12.))
-                                                    .h(px(12.))
-                                                    .rounded_full()
-                                                    .bg(hex(OK_GREEN)),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(14.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .child("Open_Agents"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(24.))
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(
-                                        div()
-                                            .text_color(hex(PRIMARY))
-                                            .border_b_2()
-                                            .border_color(hex(PRIMARY))
-                                            .pb(px(4.))
-                                            .child("PROJECT"),
-                                    )
-                                    .child(div().text_color(hex(OUTLINE)).child("BUILD"))
-                                    .child(div().text_color(hex(OUTLINE)).child("DEBUG")),
-                            )
-                            .child(
-                                div()
-                                    .px(px(16.))
-                                    .py(px(6.))
-                                    .rounded(px(8.))
-                                    .bg(hex(PRIMARY))
-                                    .text_color(hex(0x001a41))
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .cursor_pointer()
-                                    .child("Deploy"),
-                            ),
-                    )
-                    // Content: Editor + Chat
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .overflow_hidden()
-                            // Editor
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .bg(hex(SURFACE_LOWEST))
-                                    // Tabs
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .h(px(36.))
-                                            .bg(hex(SURFACE))
-                                            .border_b_1()
-                                            .border_color(hex_a(0xFFFFFF, 0.04))
-                                            .child(
-                                                div()
-                                                    .px(px(16.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .bg(hex(SURFACE_LOWEST))
-                                                    .border_t_2()
-                                                    .border_color(hex(PRIMARY))
-                                                    .text_size(px(12.))
-                                                    .text_color(hex(PRIMARY))
-                                                    .child("main.c"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .px(px(16.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .text_size(px(12.))
-                                                    .text_color(hex(OUTLINE))
-                                                    .child("model.h"),
-                                            ),
-                                    )
-                                    // Code
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .p(px(20.))
-                                            .text_size(px(13.))
-                                            .overflow_hidden()
-                                            .child(self.code.clone()),
-                                    ),
-                            )
-                            // Chat
-                            .child(self.render_chat()),
-                    )
-                    // Status bar
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .h(px(28.))
-                            .px(px(16.))
-                            .gap(px(16.))
-                            .text_size(px(11.))
-                            .text_color(hex(OUTLINE))
-                            .border_t_1()
-                            .border_color(hex_a(0xFFFFFF, 0.04))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(
-                                        div()
-                                            .w(px(6.))
-                                            .h(px(6.))
-                                            .rounded_full()
-                                            .bg(hex(OK_GREEN)),
-                                    )
-                                    .child("System Ready"),
-                            )
-                            .child(div().flex_1())
-                            .child("Open_Agents v0.2.0"),
+                        div().flex_1().flex().flex_col().child(content),
                     ),
             )
     }
 }
 
 impl AppView {
-    fn nav_icon(&self, label: &str, active: bool) -> impl IntoElement {
-        let bg = if active {
-            hex(SURFACE_HIGH)
-        } else {
-            hex_a(0x000000, 0.0)
-        };
-        let fg = if active { hex(PRIMARY) } else { hex(OUTLINE) };
+    // ============================================================
+    // Title Bar (macOS traffic lights)
+    // ============================================================
 
+    fn render_titlebar(&self) -> impl IntoElement {
         div()
-            .w(px(40.))
-            .h(px(40.))
-            .rounded(px(10.))
+            .h(px(44.))
+            .bg(hex(TITLEBAR_BG))
+            .border_b_1()
+            .border_color(hex(BORDER))
             .flex()
             .items_center()
-            .justify_center()
-            .my(px(4.))
+            .px(px(16.))
+            .rounded_t(px(20.))
+            // Traffic lights
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .mr(px(16.))
+                    .child(div().w(px(12.)).h(px(12.)).rounded_full().bg(hex(TRAFFIC_RED)))
+                    .child(div().w(px(12.)).h(px(12.)).rounded_full().bg(hex(TRAFFIC_YELLOW)))
+                    .child(div().w(px(12.)).h(px(12.)).rounded_full().bg(hex(TRAFFIC_GREEN))),
+            )
+            // Title (centered)
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child("AI Coding Assistant"),
+                    ),
+            )
+            // Spacer for symmetry
+            .child(div().w(px(60.)))
+    }
+
+    // ============================================================
+    // Sidebar (Figma: Editor / Chat / Settings + Explorer + Terminal)
+    // ============================================================
+
+    fn render_sidebar(&self) -> impl IntoElement {
+        div()
+            .w(px(220.))
+            .h_full()
+            .bg(hex(SIDEBAR_BG))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            // Navigation
+            .child(
+                div()
+                    .p(px(12.))
+                    .pt(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(self.nav_item("Editor", Page::Editor))
+                    .child(self.nav_item("Chat", Page::Chat))
+                    .child(self.nav_item("Settings", Page::Settings)),
+            )
+            // File Explorer
+            .child(
+                div()
+                    .flex_1()
+                    .border_t_1()
+                    .border_color(hex(BORDER))
+                    .p(px(12.))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .mb(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("EXPLORER"),
+                            ),
+                    )
+                    .children(self.files.iter().map(|f| {
+                        let icon = if f.is_folder { "📁" } else { "📄" };
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .px(px(8.))
+                            .py(px(6.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_size(px(13.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child(icon)
+                            .child(f.name.to_string())
+                    })),
+            )
+            // Terminal shortcut at bottom
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(hex(BORDER))
+                    .p(px(12.))
+                    .child(self.nav_item("Terminal", Page::Terminal)),
+            )
+    }
+
+    fn nav_item(&self, label: &str, page: Page) -> impl IntoElement {
+        let active = self.page == page;
+        let bg = if active { hex(HOVER_BG) } else { hex_a(0x000000, 0.0) };
+        let fg = if active { hex(TEXT_PRIMARY) } else { hex(TEXT_SECONDARY) };
+
+        let icon = match page {
+            Page::Editor => "💻",
+            Page::Chat => "💬",
+            Page::Settings => "⚙",
+            Page::Terminal => "▶",
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .px(px(12.))
+            .py(px(8.))
+            .rounded(px(6.))
             .bg(bg)
             .text_color(fg)
-            .text_size(px(16.))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text_size(px(13.))
             .cursor_pointer()
+            .child(icon)
             .child(label.to_string())
     }
 
-    fn render_chat(&self) -> impl IntoElement {
-        let mut msgs = div().flex().flex_col().gap(px(12.)).flex_1().p(px(16.));
+    // ============================================================
+    // Editor View (Figma: tabs + code + line numbers + status bar)
+    // ============================================================
 
-        for msg in &self.chat_messages {
-            let is_user = msg.role == "user";
-            let bg = if is_user {
-                hex(SURFACE_HIGH)
-            } else {
-                hex(SURFACE)
-            };
-            let role = if is_user { "You" } else { "AI" };
-            let role_color = if is_user { hex(PRIMARY) } else { hex(TERTIARY) };
-
-            msgs = msgs.child(
+    fn render_editor(&self) -> impl IntoElement {
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .bg(hex(BG))
+            // Editor Header (tabs + Run button)
+            .child(
                 div()
+                    .h(px(48.))
+                    .bg(hex(PANEL_BG))
+                    .border_b_1()
+                    .border_color(hex(BORDER))
+                    .flex()
+                    .items_center()
+                    .justify_between()
                     .px(px(16.))
-                    .py(px(12.))
-                    .rounded(px(12.))
-                    .bg(bg)
+                    // Tabs
                     .child(
                         div()
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(role_color)
-                            .mb(px(6.))
-                            .child(role.to_string()),
+                            .flex()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .px(px(12.))
+                                    .py(px(6.))
+                                    .bg(hex(BG))
+                                    .border_1()
+                                    .border_color(hex(BORDER))
+                                    .rounded_t(px(6.))
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child("App.tsx")
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .child("×"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px(px(12.))
+                                    .py(px(6.))
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .child("index.tsx"),
+                            ),
+                    )
+                    // Run button
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(12.))
+                                    .py(px(6.))
+                                    .bg(hex(ACCENT_BLUE))
+                                    .rounded(px(6.))
+                                    .text_size(px(12.))
+                                    .text_color(hex(0xFFFFFF))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .cursor_pointer()
+                                    .child("▶ Run"),
+                            ),
+                    ),
+            )
+            // Code content with line numbers
+            .child(
+                div()
+                    .flex_1()
+                    .p(px(24.))
+                    .text_size(px(13.))
+                    .font_family("Cascadia Code")
+                    .overflow_hidden()
+                    .child(
+                        div().flex().flex_col().gap(px(2.)).children(
+                            self.code.lines().enumerate().map(|(i, line)| {
+                                div()
+                                    .flex()
+                                    .child(
+                                        div()
+                                            .w(px(48.))
+                                            .text_align(TextAlign::Right)
+                                            .pr(px(16.))
+                                            .text_color(hex(TEXT_DIM))
+                                            .child(format!("{}", i + 1)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child(line.to_string()),
+                                    )
+                            }),
+                        ),
+                    ),
+            )
+            // Status bar (VS Code blue)
+            .child(
+                div()
+                    .h(px(32.))
+                    .bg(hex(STATUSBAR_BG))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(16.))
+                    .text_size(px(11.))
+                    .text_color(hex(0xFFFFFF))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(16.))
+                            .child("TypeScript React")
+                            .child("UTF-8")
+                            .child("LF"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(16.))
+                            .child("Ln 1, Col 1")
+                            .child("Spaces: 2"),
+                    ),
+            )
+    }
+
+    // ============================================================
+    // Chat View (Figma: Open Agents branded, suggestions, messages)
+    // ============================================================
+
+    fn render_chat_page(&self) -> impl IntoElement {
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .bg(hex(BG))
+            // Chat header
+            .child(
+                div()
+                    .h(px(48.))
+                    .bg(hex(PANEL_BG))
+                    .border_b_1()
+                    .border_color(hex(BORDER))
+                    .flex()
+                    .items_center()
+                    .px(px(16.))
+                    .gap(px(8.))
+                    // Gradient icon
+                    .child(
+                        div()
+                            .w(px(24.))
+                            .h(px(24.))
+                            .rounded(px(6.))
+                            .bg(hex(ACCENT_ORANGE))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(12.))
+                            .text_color(hex(0xFFFFFF))
+                            .child("✦"),
                     )
                     .child(
                         div()
                             .text_size(px(13.))
-                            .text_color(hex(ON_SURFACE))
-                            .child(msg.content.clone()),
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child("Open Agents"),
+                    ),
+            )
+            // Messages area
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .max_w(px(800.))
+                            .mx_auto()
+                            .px(px(24.))
+                            .py(px(32.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(24.))
+                            // Suggestions (show when only welcome msg)
+                            .child(
+                                div()
+                                    .mb(px(16.))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .mb(px(12.))
+                                            .child("提案"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap(px(8.))
+                                            .child(self.suggestion_chip("Reactコンポーネントを作成"))
+                                            .child(self.suggestion_chip("バグを修正"))
+                                            .child(self.suggestion_chip("コードをリファクタリング"))
+                                            .child(self.suggestion_chip("テストを追加")),
+                                    ),
+                            )
+                            // Messages
+                            .children(self.chat_messages.iter().map(|msg| {
+                                let is_user = msg.role == "user";
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.))
+                                    // Role header
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.))
+                                            .child(if is_user {
+                                                div()
+                                                    .w(px(24.))
+                                                    .h(px(24.))
+                                                    .rounded(px(6.))
+                                                    .bg(hex(ACCENT_BLUE))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_size(px(11.))
+                                                    .text_color(hex(0xFFFFFF))
+                                                    .child("U")
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .w(px(24.))
+                                                    .h(px(24.))
+                                                    .rounded(px(6.))
+                                                    .bg(hex(ACCENT_ORANGE))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_size(px(11.))
+                                                    .text_color(hex(0xFFFFFF))
+                                                    .child("✦")
+                                                    .into_any_element()
+                                            })
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(hex(TEXT_SECONDARY))
+                                                    .child(if is_user { "You" } else { "Agent" }),
+                                            ),
+                                    )
+                                    // Content
+                                    .child(
+                                        div()
+                                            .pl(px(32.))
+                                            .text_size(px(13.))
+                                            .text_color(hex(TEXT_PRIMARY))
+                                            .child(msg.content.clone()),
+                                    )
+                            })),
+                    ),
+            )
+            // Input area
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(hex(BORDER))
+                    .bg(hex(PANEL_BG))
+                    .p(px(16.))
+                    .child(
+                        div()
+                            .max_w(px(800.))
+                            .mx_auto()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .bg(hex(BG))
+                                    .border_1()
+                                    .border_color(hex(BORDER))
+                                    .rounded(px(12.))
+                                    .px(px(16.))
+                                    .py(px(12.))
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_MUTED))
+                                    .child("メッセージを入力してください..."),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(8.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_MUTED))
+                                    .child("Enter で送信、Shift + Enter で改行"),
+                            ),
+                    ),
+            )
+    }
+
+    fn suggestion_chip(&self, label: &str) -> impl IntoElement {
+        div()
+            .px(px(16.))
+            .py(px(12.))
+            .bg(hex(PANEL_BG))
+            .border_1()
+            .border_color(hex(BORDER))
+            .rounded(px(8.))
+            .text_size(px(12.))
+            .text_color(hex(TEXT_SECONDARY))
+            .cursor_pointer()
+            .child(label.to_string())
+    }
+
+    // ============================================================
+    // Settings View (Figma: LLM settings, appearance, API keys)
+    // ============================================================
+
+    fn render_settings(&self) -> impl IntoElement {
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .bg(hex(BG))
+            .child(
+                div()
+                    .h(px(48.))
+                    .bg(hex(PANEL_BG))
+                    .border_b_1()
+                    .border_color(hex(BORDER))
+                    .flex()
+                    .items_center()
+                    .px(px(16.))
+                    .gap(px(8.))
+                    .child(div().text_size(px(13.)).text_color(hex(TEXT_SECONDARY)).child("⚙"))
+                    .child(div().text_size(px(13.)).text_color(hex(TEXT_PRIMARY)).child("Settings")),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .max_w(px(700.))
+                            .mx_auto()
+                            .p(px(24.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(32.))
+                            // LLM Settings
+                            .child(self.settings_section("ローカルLLM設定", "🔶", vec![
+                                ("モデル形式", "GGUF / ONNX"),
+                                ("Temperature", "0.7"),
+                                ("最大トークン数", "2048"),
+                                ("コンテキスト長", "4096"),
+                            ]))
+                            // Hardware
+                            .child(self.settings_section("ハードウェア設定", "🖥", vec![
+                                ("GPU アクセラレーション", "ON"),
+                                ("GPU レイヤー数", "32"),
+                                ("スレッド数", "8"),
+                                ("バッチサイズ", "512"),
+                            ]))
+                            // Appearance
+                            .child(self.settings_section("外観", "🎨", vec![
+                                ("テーマ", "Dark"),
+                                ("フォントサイズ", "14px"),
+                                ("行番号を表示", "ON"),
+                            ]))
+                            // API Keys
+                            .child(self.settings_section("APIキー管理", "🔑", vec![
+                                ("OpenAI", "sk-••••••••"),
+                                ("Anthropic", "未設定"),
+                            ])),
+                    ),
+            )
+    }
+
+    fn settings_section(&self, title: &str, icon: &str, items: Vec<(&str, &str)>) -> impl IntoElement {
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .mb(px(4.))
+                    .child(div().text_size(px(16.)).child(icon.to_string()))
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child(title.to_string()),
+                    ),
+            );
+
+        let mut card = div()
+            .bg(hex(PANEL_BG))
+            .rounded(px(8.))
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(16.));
+
+        for (label, value) in items {
+            card = card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child(label.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child(value.to_string()),
                     ),
             );
         }
 
+        section = section.child(card);
+        section
+    }
+
+    // ============================================================
+    // Terminal View (Figma: green prompt, command history)
+    // ============================================================
+
+    fn render_terminal(&self) -> impl IntoElement {
         div()
-            .w(px(340.))
+            .flex_1()
             .flex()
             .flex_col()
             .bg(hex(BG))
-            .border_l_1()
-            .border_color(hex_a(0xFFFFFF, 0.04))
             .child(
                 div()
-                    .px(px(20.))
-                    .py(px(16.))
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(hex(OUTLINE))
+                    .h(px(44.))
+                    .bg(hex(TITLEBAR_BG))
                     .border_b_1()
-                    .border_color(hex_a(0xFFFFFF, 0.04))
-                    .child("AI ASSISTANT"),
-            )
-            .child(msgs)
-            .child(
-                div()
-                    .p(px(12.))
-                    .border_t_1()
-                    .border_color(hex_a(0xFFFFFF, 0.04))
+                    .border_color(hex(BORDER))
+                    .flex()
+                    .items_center()
+                    .px(px(16.))
+                    .gap(px(8.))
+                    .child(div().text_size(px(13.)).child("▶"))
                     .child(
                         div()
-                            .w_full()
-                            .bg(hex(SURFACE_HIGHEST))
-                            .rounded(px(12.))
-                            .px(px(16.))
-                            .py(px(10.))
                             .text_size(px(13.))
-                            .text_color(hex(OUTLINE))
-                            .child("Ask AI anything..."),
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child("Terminal"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .p(px(16.))
+                    .font_family("Cascadia Code")
+                    .text_size(px(12.))
+                    .text_color(hex(TEXT_PRIMARY))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child("Open Agents Terminal v1.0.0")
+                            .child("Type 'help' for available commands")
+                            .child("")
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .text_color(hex(TRAFFIC_GREEN))
+                                            .child("$"),
+                                    )
+                                    .child("open_agents --gpus"),
+                            )
+                            .child(
+                                div()
+                                    .text_color(hex(TRAFFIC_GREEN))
+                                    .child("GPU detected: NVIDIA RTX 4090 (15.7 GB)"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(8.))
+                                    .child(div().text_color(hex(TRAFFIC_GREEN)).child("$"))
+                                    .child("_"),
+                            ),
                     ),
             )
     }
@@ -380,32 +761,27 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Open_Agents — The Intelligent Workspace".into()),
+                    title: Some("Open_Agents — AI Coding Assistant".into()),
                     ..Default::default()
                 }),
                 ..Default::default()
             },
             |_window, cx| {
                 cx.new(|_cx| AppView {
+                    page: Page::Editor,
                     chat_messages: vec![ChatMsg {
-                        role: "ai".into(),
-                        content: "Open_Agents へようこそ！コードの作成・レビュー・デバッグをお手伝いします。"
-                            .into(),
+                        role: "assistant".into(),
+                        content: "こんにちは！Open Agents AIコーディングアシスタントです。コードの作成、編集、リファクタリングなど、お手伝いします。".into(),
                     }],
-                    code: concat!(
-                        "// Open_Agents — AI Coding Engine\n",
-                        "#include \"core/inference.h\"\n",
-                        "\n",
-                        "int main(int argc, char** argv) {\n",
-                        "    oag_inference_t* inf = oag_inference_create(argv[1]);\n",
-                        "    if (!inf) return 1;\n",
-                        "\n",
-                        "    run_interactive(inf);\n",
-                        "    oag_inference_free(inf);\n",
-                        "    return 0;\n",
-                        "}\n",
-                    )
-                    .into(),
+                    code: "import React from 'react';\nimport { useState } from 'react';\n\nfunction App() {\n  const [count, setCount] = useState(0);\n\n  return (\n    <div className=\"app\">\n      <h1>Counter App</h1>\n      <div className=\"counter\">\n        <button onClick={() => setCount(count - 1)}>-</button>\n        <span>{count}</span>\n        <button onClick={() => setCount(count + 1)}>+</button>\n      </div>\n    </div>\n  );\n}\n\nexport default App;".into(),
+                    files: vec![
+                        FileEntry { name: "src", is_folder: true },
+                        FileEntry { name: "App.tsx", is_folder: false },
+                        FileEntry { name: "index.tsx", is_folder: false },
+                        FileEntry { name: "components", is_folder: true },
+                        FileEntry { name: "utils.ts", is_folder: false },
+                        FileEntry { name: "styles.css", is_folder: false },
+                    ],
                 })
             },
         )
