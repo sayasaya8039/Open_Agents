@@ -706,20 +706,6 @@ impl Render for EditorView {
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
                     .on_mouse_move(cx.listener(Self::handle_mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
-                    // editor_bounds を記録する canvas
-                    .child({
-                        let bounds_entity = entity.clone();
-                        canvas(
-                            |bounds, _window, _cx| bounds,
-                            move |_bounds, prepaint_bounds, _window, cx| {
-                                bounds_entity.update(cx, |this: &mut Self, _cx| {
-                                    this.editor_bounds = prepaint_bounds;
-                                });
-                            },
-                        )
-                        .absolute()
-                        .size_full()
-                    })
                     .child(
                         // uniform_list で仮想スクロール
                         uniform_list("editor-lines", line_count, {
@@ -734,6 +720,23 @@ impl Render for EditorView {
                 .flex_1()
                 .track_scroll(scroll_handle),
                     ) // close editor-content div's .child(uniform_list)
+                    // editor_bounds を記録（uniform_list の後に配置、描画に影響なし）
+                    .child({
+                        let bounds_entity = entity.clone();
+                        canvas(
+                            |bounds, _window, _cx| bounds,
+                            move |_bounds, parent_bounds, _window, cx| {
+                                bounds_entity.update(cx, |this: &mut Self, _cx| {
+                                    this.editor_bounds = parent_bounds;
+                                });
+                            },
+                        )
+                        .absolute()
+                        .top(px(0.))
+                        .left(px(0.))
+                        .w(px(1.))
+                        .h(px(1.))
+                    })
             ) // close .child(editor-content div)
             // InputHandler 登録用の不可視 canvas
             .child(
