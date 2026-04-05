@@ -401,18 +401,24 @@ impl EditorView {
                 .into_any_element()
         };
 
+        // ガターは行高いっぱいに取り、行番号だけ縦中央（本文行とのズレ防止）
         let gutter = div()
             .w(px(48.))
-            .text_align(TextAlign::Right)
+            .h(lh)
+            .flex()
+            .items_center()
+            .justify_end()
             .pr(px(16.))
             .text_color(editor.gutter_label_color(is_current))
             .text_size(fs)
             .font_family("Cascadia Code")
+            .text_align(TextAlign::Right)
             .child(line_num);
 
         div()
             .h(lh)
             .flex()
+            .items_center()
             .when(is_current, |d| d.bg(editor.current_line_bg()))
             .when(editor.show_line_numbers, |d| d.child(gutter))
             .child(text_element)
