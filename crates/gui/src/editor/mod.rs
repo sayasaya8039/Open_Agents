@@ -777,17 +777,19 @@ impl Render for EditorView {
                     .child(
                         // uniform_list で仮想スクロール
                         uniform_list("editor-lines", line_count, {
-                    let entity = entity.clone();
-                    move |range: Range<usize>, _window: &mut Window, cx: &mut App| {
-                        let editor = entity.read(cx);
-                        range
-                            .map(|ix| Self::render_line(editor, ix))
-                            .collect()
-                    }
-                })
-                .flex_1()
-                .min_h(px(0.))
-                .track_scroll(scroll_handle),
+                            let entity = entity.clone();
+                            move |range: Range<usize>, _window: &mut Window, cx: &mut App| {
+                                let editor = entity.read(cx);
+                                range
+                                    .map(|ix| Self::render_line(editor, ix))
+                                    .collect()
+                            }
+                        })
+                        // Auto（デフォルト）だと flex 内でビューポート高さが 0 になり一行も描画されないことがある
+                        .with_sizing_behavior(ListSizingBehavior::Infer)
+                        .flex_1()
+                        .min_h(px(0.))
+                        .track_scroll(scroll_handle),
                     ) // close editor-content div's .child(uniform_list)
                     // editor_bounds を記録（uniform_list の後に配置、描画に影響なし）
                     .child({
