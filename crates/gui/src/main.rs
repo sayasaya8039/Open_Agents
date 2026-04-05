@@ -178,6 +178,13 @@ enum HardwareParamAdjustKind {
     BatchSize,
 }
 
+#[derive(Clone, Copy)]
+enum AiToggleKind {
+    AutoComplete,
+    CodeSuggestions,
+    StreamingResponses,
+}
+
 struct AppView {
     page: Page,
     chat_messages: Vec<ChatMsg>,
@@ -189,6 +196,10 @@ struct AppView {
     model_params: model_prefs::ModelParams,
     /// GPU スレッド・バッチ等（`model_params.json` の `hardware` と同期）
     hardware_params: model_prefs::HardwareParams,
+    /// エディタのテーマ・フォント・行番号（`appearance` と同期）
+    appearance_prefs: model_prefs::AppearancePrefs,
+    /// AI 補助機能の ON/OFF（`ai` と同期）
+    ai_prefs: model_prefs::AiPrefs,
     /// 開いているワークスペースのルート（Zed worktree root）
     workspace_root: PathBuf,
     /// 仮想ファイルツリー
@@ -335,6 +346,7 @@ impl AppView {
                     let _ = cx.update(|ecx| {
                         let _ = app.update(ecx, |this: &mut AppView, ecx| {
                             this.settings_model_path = Some(path);
+                            this.persist_local_llm_prefs();
                             ecx.notify();
                         });
                     });
@@ -1341,7 +1353,262 @@ impl AppView {
         model_prefs::save_local_llm_prefs(&model_prefs::LocalLlmPrefs {
             model: self.model_params.clone(),
             hardware: self.hardware_params.clone(),
+            appearance: self.appearance_prefs.clone(),
+            ai: self.ai_prefs.clone(),
+            model_path: self.settings_model_path.clone(),
         });
+    }
+
+    fn sync_editor_appearance(&self, cx: &mut Context<Self>) {
+        let ap = self.appearance_prefs.clone();
+        self.editor_view.update(cx, |ed, ecx| {
+            ed.apply_appearance(&ap, ecx);
+        });
+    }
+
+    fn cycle_appearance_theme(&mut self, cx: &mut Context<Self>) {
+        self.appearance_prefs.theme = model_prefs::AppearancePrefs::cycle_theme(
+            self.appearance_prefs.theme,
+        );
+        self.appearance_prefs.clamp();
+        self.persist_local_llm_prefs();
+        self.sync_editor_appearance(cx);
+        cx.notify();
+    }
+
+    fn adjust_appearance_font(&mut self, delta: i32, cx: &mut Context<Self>) {
+        self.appearance_prefs.font_size_px = model_prefs::AppearancePrefs::step_font_size(
+            self.appearance_prefs.font_size_px,
+            delta,
+        );
+        self.appearance_prefs.clamp();
+        self.persist_local_llm_prefs();
+        self.sync_editor_appearance(cx);
+        cx.notify();
+    }
+
+    fn toggle_appearance_line_numbers(&mut self, cx: &mut Context<Self>) {
+        self.appearance_prefs.show_line_numbers = !self.appearance_prefs.show_line_numbers;
+        self.persist_local_llm_prefs();
+        self.sync_editor_appearance(cx);
+        cx.notify();
+    }
+
+    fn settings_appearance_theme_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme_label: SharedString = self.appearance_prefs.theme.label().into();
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .child(self.settings_labeled_block(
+                "テーマ",
+                "エディタの背景・テキスト配色（自動は当面ダーク相当）",
+            ))
+            .child(
+                div()
+                    .px(px(12.))
+                    .py(px(6.))
+                    .min_w(px(160.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .bg(hex(CONTROL_BG))
+                    .border_1()
+                    .border_color(hex(CONTROL_BORDER))
+                    .text_size(px(12.))
+                    .text_color(hex(TEXT_SECONDARY))
+                    .text_center()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.cycle_appearance_theme(cx);
+                        }),
+                    )
+                    .child(theme_label),
+            )
+    }
+
+    fn settings_appearance_font_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let value_str: SharedString = format!("{} px", self.appearance_prefs.font_size_px).into();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child("フォントサイズ"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(hex(CONTROL_BG))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            this.adjust_appearance_font(-1, cx);
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child("−"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .min_w(px(52.))
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_MUTED))
+                                    .text_center()
+                                    .child(value_str),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(hex(CONTROL_BG))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            this.adjust_appearance_font(1, cx);
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child("+"),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_DIM))
+                    .child("12 / 14 / 16 / 18 px から選択"),
+            )
+    }
+
+    fn settings_appearance_line_numbers_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let on = self.appearance_prefs.show_line_numbers;
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .child(self.settings_labeled_block(
+                "行番号を表示",
+                "エディタ左端に行番号を表示",
+            ))
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(9999.))
+                    .cursor_pointer()
+                    .bg(if on {
+                        hex_a(ACCENT_BLUE, 0.35)
+                    } else {
+                        hex(CONTROL_BG)
+                    })
+                    .text_size(px(11.))
+                    .text_color(if on {
+                        hex(TEXT_PRIMARY)
+                    } else {
+                        hex(TEXT_MUTED)
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.toggle_appearance_line_numbers(cx);
+                        }),
+                    )
+                    .child(if on { "オン" } else { "オフ" }),
+            )
+    }
+
+    fn ai_toggle_value(&self, kind: AiToggleKind) -> bool {
+        match kind {
+            AiToggleKind::AutoComplete => self.ai_prefs.auto_complete,
+            AiToggleKind::CodeSuggestions => self.ai_prefs.code_suggestions,
+            AiToggleKind::StreamingResponses => self.ai_prefs.streaming_responses,
+        }
+    }
+
+    fn toggle_ai_setting(&mut self, kind: AiToggleKind, cx: &mut Context<Self>) {
+        match kind {
+            AiToggleKind::AutoComplete => {
+                self.ai_prefs.auto_complete = !self.ai_prefs.auto_complete;
+            }
+            AiToggleKind::CodeSuggestions => {
+                self.ai_prefs.code_suggestions = !self.ai_prefs.code_suggestions;
+            }
+            AiToggleKind::StreamingResponses => {
+                self.ai_prefs.streaming_responses = !self.ai_prefs.streaming_responses;
+            }
+        }
+        self.persist_local_llm_prefs();
+        cx.notify();
+    }
+
+    fn settings_ai_toggle_row(
+        &mut self,
+        cx: &mut Context<Self>,
+        kind: AiToggleKind,
+        title: &'static str,
+        subtitle: &'static str,
+    ) -> impl IntoElement {
+        let on = self.ai_toggle_value(kind);
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .child(self.settings_labeled_block(title, subtitle))
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(9999.))
+                    .cursor_pointer()
+                    .bg(if on {
+                        hex_a(ACCENT_BLUE, 0.35)
+                    } else {
+                        hex(CONTROL_BG)
+                    })
+                    .text_size(px(11.))
+                    .text_color(if on {
+                        hex(TEXT_PRIMARY)
+                    } else {
+                        hex(TEXT_MUTED)
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            this.toggle_ai_setting(kind, cx);
+                        }),
+                    )
+                    .child(if on { "オン" } else { "オフ" }),
+            )
     }
 
     fn adjust_hardware_param(
@@ -1840,6 +2107,7 @@ impl AppView {
                                                                              _,
                                                                              cx: &mut Context<AppView>| {
                                                                                 this.settings_model_path = None;
+                                                                                this.persist_local_llm_prefs();
                                                                                 cx.notify();
                                                                             },
                                                                         ),
@@ -1932,38 +2200,12 @@ impl AppView {
                                             .bg(hex(PANEL_BG))
                                             .rounded(px(8.))
                                             .p(px(16.))
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(16.))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .gap(px(16.))
-                                                    .child(self.settings_labeled_block(
-                                                        "テーマ",
-                                                        "エディタのカラーテーマを選択",
-                                                    ))
-                                                    .child(self.settings_fake_dropdown("Dark")),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .gap(px(16.))
-                                                    .child(self.settings_labeled_block(
-                                                        "フォントサイズ",
-                                                        "エディタのフォントサイズ",
-                                                    ))
-                                                    .child(self.settings_fake_dropdown("14px")),
-                                            )
-                                            .child(self.settings_toggle_row(
-                                                "行番号を表示",
-                                                "エディタに行番号を表示",
-                                                true,
-                                            )),
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(16.))
+                                    .child(self.settings_appearance_theme_row(cx))
+                                    .child(self.settings_appearance_font_row(cx))
+                                    .child(self.settings_appearance_line_numbers_row(cx)),
                                     ),
                             )
                             // --- AI 設定 ---
@@ -1984,20 +2226,23 @@ impl AppView {
                                             .flex()
                                             .flex_col()
                                             .gap(px(16.))
-                                            .child(self.settings_toggle_row(
+                                            .child(self.settings_ai_toggle_row(
+                                                cx,
+                                                AiToggleKind::AutoComplete,
                                                 "自動補完",
                                                 "AI による自動補完を有効化",
-                                                true,
                                             ))
-                                            .child(self.settings_toggle_row(
+                                            .child(self.settings_ai_toggle_row(
+                                                cx,
+                                                AiToggleKind::CodeSuggestions,
                                                 "コード提案",
                                                 "リアルタイムのコード提案を表示",
-                                                true,
                                             ))
-                                            .child(self.settings_toggle_row(
+                                            .child(self.settings_ai_toggle_row(
+                                                cx,
+                                                AiToggleKind::StreamingResponses,
                                                 "ストリーミング応答",
                                                 "応答をリアルタイムで表示",
-                                                true,
                                             )),
                                     ),
                             )
@@ -2275,10 +2520,7 @@ fn main() {
             |window, cx| {
                 window.set_client_inset(px(44.));
 
-                // EditorView Entity を作成
-                let editor_view = cx.new(|cx| EditorView::new(cx));
-
-                cx.new(|_cx| {
+                cx.new(|cx| {
                     let workspace_root = workspace_prefs::resolve_workspace_at_launch();
                     let (file_tree, explorer_expanded) =
                         match read_tree_from_disk(&workspace_root) {
@@ -2294,6 +2536,8 @@ fn main() {
                             }
                         };
                     let local_llm = model_prefs::load_local_llm_prefs();
+                    let appearance = local_llm.appearance.clone();
+                    let editor_view = cx.new(|ecx| EditorView::new(ecx, &appearance));
                     AppView {
                         page: Page::Editor,
                         chat_messages: vec![ChatMsg {
@@ -2302,9 +2546,11 @@ fn main() {
                             thinking: None,
                         }],
                         chat_show_thinking: true,
-                        settings_model_path: None,
+                        settings_model_path: local_llm.model_path,
                         model_params: local_llm.model,
                         hardware_params: local_llm.hardware,
+                        appearance_prefs: local_llm.appearance,
+                        ai_prefs: local_llm.ai,
                         workspace_root,
                         file_tree,
                         explorer_expanded,

@@ -1,7 +1,8 @@
-//! ローカル LLM のモデルパラメータとハードウェア設定を永続化する。
+//! モデル・ハードウェア・外観・AI 設定を永続化する。
 //! 保存先: `%LOCALAPPDATA%\\open_agents_gui\\model_params.json`
 //!
-//! JSON はルートにモデル用キー（flatten）とオプションの `hardware` オブジェクトを持つ。
+//! JSON はルートにモデル用キー（flatten）とオプションの `hardware` / `appearance`
+//! / `ai` オブジェクト、および `model_path` を持つ。
 //! 以前のフラットな `model_params.json`（モデルのみ）も `load_local_llm_prefs` で読み込み可能。
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,7 @@ impl ModelParams {
 
 /// ローカル推論のハードウェア関連（llama.cpp 系の CLI フラグに相当する目安）
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct HardwareParams {
     /// `-ngl` 利用の ON/OFF（レイヤー 0 のときは実質 CPU のイメージでも可）
     pub gpu_acceleration: bool,
@@ -88,13 +90,153 @@ impl HardwareParams {
     }
 }
 
-/// モデル（ルートに flatten）＋ `hardware` サブオブジェクト
+/// エディタ UI テーマ（`Auto` は当面 Dark と同じ配色）
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UiTheme {
+    #[default]
+    Dark,
+    Light,
+    Auto,
+}
+
+impl UiTheme {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "ダーク",
+            Self::Light => "ライト",
+            Self::Auto => "自動",
+        }
+    }
+}
+
+/// 許容フォントサイズ（px）
+pub const APPEARANCE_FONT_SIZES: [i32; 4] = [12, 14, 16, 18];
+
+/// エディタ外観（`model_params.json` の `appearance`）
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AppearancePrefs {
+    #[serde(default)]
+    pub theme: UiTheme,
+    #[serde(default = "default_font_size_px")]
+    pub font_size_px: i32,
+    #[serde(default = "default_show_line_numbers")]
+    pub show_line_numbers: bool,
+}
+
+fn default_font_size_px() -> i32 {
+    14
+}
+
+fn default_show_line_numbers() -> bool {
+    true
+}
+
+impl Default for AppearancePrefs {
+    fn default() -> Self {
+        Self {
+            theme: UiTheme::default(),
+            font_size_px: default_font_size_px(),
+            show_line_numbers: default_show_line_numbers(),
+        }
+    }
+}
+
+impl AppearancePrefs {
+    pub fn sanitize(mut self) -> Self {
+        if !APPEARANCE_FONT_SIZES.contains(&self.font_size_px) {
+            self.font_size_px = APPEARANCE_FONT_SIZES
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    let da = (a - self.font_size_px).abs();
+                    let db = (b - self.font_size_px).abs();
+                    da.cmp(&db).then_with(|| b.cmp(a))
+                })
+                .unwrap_or(14);
+        }
+        self
+    }
+
+    pub fn clamp(&mut self) {
+        *self = self.clone().sanitize();
+    }
+
+    /// ステップ `delta`（-1 / +1）で許容サイズ一覧上を移動
+    pub fn step_font_size(current: i32, delta: i32) -> i32 {
+        let idx = APPEARANCE_FONT_SIZES
+            .iter()
+            .position(|&s| s == current)
+            .unwrap_or(1);
+        let n = idx as i32 + delta;
+        let clamped = n.clamp(0, APPEARANCE_FONT_SIZES.len() as i32 - 1);
+        APPEARANCE_FONT_SIZES[clamped as usize]
+    }
+
+    pub fn cycle_theme(theme: UiTheme) -> UiTheme {
+        match theme {
+            UiTheme::Dark => UiTheme::Light,
+            UiTheme::Light => UiTheme::Auto,
+            UiTheme::Auto => UiTheme::Dark,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AiPrefs {
+    #[serde(default = "default_true")]
+    pub auto_complete: bool,
+    #[serde(default = "default_true")]
+    pub code_suggestions: bool,
+    #[serde(default = "default_true")]
+    pub streaming_responses: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+impl Default for AiPrefs {
+    fn default() -> Self {
+        Self {
+            auto_complete: true,
+            code_suggestions: true,
+            streaming_responses: true,
+        }
+    }
+}
+
+impl AiPrefs {
+    pub fn sanitize(self) -> Self {
+        self
+    }
+}
+
+fn sanitize_model_path(path: Option<PathBuf>) -> Option<PathBuf> {
+    path.and_then(|path| {
+        if path.as_os_str().is_empty() {
+            None
+        } else {
+            Some(path.canonicalize().unwrap_or(path))
+        }
+    })
+}
+
+/// モデル（ルートに flatten）＋ `hardware` / `appearance` / `ai` サブオブジェクト
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LocalLlmPrefs {
     #[serde(flatten)]
     pub model: ModelParams,
     #[serde(default)]
     pub hardware: HardwareParams,
+    #[serde(default)]
+    pub appearance: AppearancePrefs,
+    #[serde(default)]
+    pub ai: AiPrefs,
+    #[serde(default)]
+    pub model_path: Option<PathBuf>,
 }
 
 impl Default for LocalLlmPrefs {
@@ -102,6 +244,9 @@ impl Default for LocalLlmPrefs {
         Self {
             model: ModelParams::default(),
             hardware: HardwareParams::default(),
+            appearance: AppearancePrefs::default(),
+            ai: AiPrefs::default(),
+            model_path: None,
         }
     }
 }
@@ -110,12 +255,17 @@ impl LocalLlmPrefs {
     pub fn sanitize(mut self) -> Self {
         self.model = self.model.sanitize();
         self.hardware = self.hardware.sanitize();
+        self.appearance = self.appearance.sanitize();
+        self.ai = self.ai.sanitize();
+        self.model_path = sanitize_model_path(self.model_path);
         self
     }
 
     pub fn clamp(&mut self) {
         self.model.clamp();
         self.hardware.clamp();
+        self.appearance.clamp();
+        self.ai = self.ai.clone().sanitize();
     }
 }
 
@@ -139,7 +289,7 @@ pub fn load_local_llm_prefs() -> LocalLlmPrefs {
                 .sanitize();
             LocalLlmPrefs {
                 model,
-                hardware: HardwareParams::default(),
+                ..LocalLlmPrefs::default()
             }
             .sanitize()
         }
@@ -205,5 +355,38 @@ mod tests {
         assert!((p.model.temperature - 0.5).abs() < 1e-6);
         assert_eq!(p.model.max_output_tokens, 1024);
         assert_eq!(p.hardware, HardwareParams::default());
+        assert_eq!(p.appearance, AppearancePrefs::default());
+        assert_eq!(p.ai, AiPrefs::default());
+        assert_eq!(p.model_path, None);
+    }
+
+    #[test]
+    fn appearance_json_roundtrip() {
+        let raw = r#"{"temperature":0.7,"max_output_tokens":2048,"context_length":4096,"hardware":{},"appearance":{"theme":"light","font_size_px":16,"show_line_numbers":false}}"#;
+        let p: LocalLlmPrefs = serde_json::from_str(raw).unwrap();
+        assert_eq!(p.appearance.theme, UiTheme::Light);
+        assert_eq!(p.appearance.font_size_px, 16);
+        assert!(!p.appearance.show_line_numbers);
+    }
+
+    #[test]
+    fn appearance_sanitize_snaps_font() {
+        let a = AppearancePrefs {
+            theme: UiTheme::Dark,
+            font_size_px: 13,
+            show_line_numbers: true,
+        }
+        .sanitize();
+        assert_eq!(a.font_size_px, 14); // 13 は 12/14 同距離のとき大きい方へスナップ
+    }
+
+    #[test]
+    fn sanitize_drops_empty_model_path() {
+        let p = LocalLlmPrefs {
+            model_path: Some(PathBuf::new()),
+            ..LocalLlmPrefs::default()
+        }
+        .sanitize();
+        assert_eq!(p.model_path, None);
     }
 }

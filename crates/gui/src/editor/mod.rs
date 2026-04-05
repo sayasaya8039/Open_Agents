@@ -13,6 +13,7 @@ use gpui::*;
 use gpui::prelude::*;
 use std::ops::Range;
 
+use crate::model_prefs::{AppearancePrefs, UiTheme};
 use crate::{hex, hex_a, BG, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY};
 
 const SYNTAX_COMMENT: u32 = 0x5c6370;
@@ -40,15 +41,19 @@ pub struct EditorView {
     dragging: bool,
     /// エディタ content 領域の bounds（マウス座標変換用）
     editor_bounds: Bounds<Pixels>,
+    font_size_px: i32,
+    show_line_numbers: bool,
+    ui_theme: UiTheme,
 }
 
 impl EditorView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>, appearance: &AppearancePrefs) -> Self {
         let focus_handle = cx.focus_handle();
         let buffer = TextBuffer::from_string(
             "// Open Agents エディタへようこそ！\n// ここにコードを書いてください。\n\nfn main() {\n    println!(\"Hello, world!\");\n}\n",
         );
         let highlighted_lines = highlight_buffer(buffer.file_path(), buffer.lines());
+        let ap = appearance.clone().sanitize();
         Self {
             buffer,
             highlighted_lines,
@@ -59,6 +64,79 @@ impl EditorView {
             ime_range: None,
             dragging: false,
             editor_bounds: Bounds::default(),
+            font_size_px: ap.font_size_px,
+            show_line_numbers: ap.show_line_numbers,
+            ui_theme: ap.theme,
+        }
+    }
+
+    pub fn apply_appearance(&mut self, appearance: &AppearancePrefs, cx: &mut Context<Self>) {
+        let ap = appearance.clone().sanitize();
+        self.font_size_px = ap.font_size_px;
+        self.show_line_numbers = ap.show_line_numbers;
+        self.ui_theme = ap.theme;
+        cx.notify();
+    }
+
+    fn is_editor_light(&self) -> bool {
+        matches!(self.ui_theme, UiTheme::Light)
+    }
+
+    fn line_height_px(&self) -> Pixels {
+        px((self.font_size_px as f32 * 20.0 / 13.0).max(16.0))
+    }
+
+    fn gutter_width_px(&self) -> Pixels {
+        if self.show_line_numbers {
+            px(48.)
+        } else {
+            px(0.)
+        }
+    }
+
+    fn editor_bg(&self) -> Hsla {
+        if self.is_editor_light() {
+            hex(0xf3f3f3)
+        } else {
+            hex(BG)
+        }
+    }
+
+    fn plain_text_color(&self) -> Hsla {
+        if self.is_editor_light() {
+            hex(0x1e1e1e)
+        } else {
+            hex(TEXT_PRIMARY)
+        }
+    }
+
+    fn current_line_bg(&self) -> Hsla {
+        if self.is_editor_light() {
+            hex_a(0x000000, 0.06)
+        } else {
+            hex_a(0xffffff, 0.04)
+        }
+    }
+
+    fn selection_block_colors(&self) -> (Hsla, Hsla) {
+        if self.is_editor_light() {
+            (hex_a(0x0066cc, 0.22), hex(0x111111))
+        } else {
+            (hex_a(0x264f78, 0.7), hex(0xffffff))
+        }
+    }
+
+    fn gutter_label_color(&self, is_current: bool) -> Hsla {
+        if self.is_editor_light() {
+            if is_current {
+                hex(0x555555)
+            } else {
+                hex(0x9a9a9a)
+            }
+        } else if is_current {
+            hex(TEXT_SECONDARY)
+        } else {
+            hex(TEXT_DIM)
         }
     }
 
@@ -153,9 +231,9 @@ impl EditorView {
             })
     }
 
-    fn role_color(role: SyntaxColorRole) -> Hsla {
+    fn role_color(&self, role: SyntaxColorRole) -> Hsla {
         match role {
-            SyntaxColorRole::Plain => hex(TEXT_PRIMARY),
+            SyntaxColorRole::Plain => self.plain_text_color(),
             SyntaxColorRole::Comment => hex(SYNTAX_COMMENT),
             SyntaxColorRole::Keyword => hex(SYNTAX_KEYWORD),
             SyntaxColorRole::String => hex(SYNTAX_STRING),
@@ -203,14 +281,15 @@ impl EditorView {
         result
     }
 
-    fn render_spans(spans: &[SyntaxSpan], override_color: Option<Hsla>) -> AnyElement {
+    fn render_spans(editor: &EditorView, spans: &[SyntaxSpan], override_color: Option<Hsla>) -> AnyElement {
+        let fs = px(editor.font_size_px as f32);
         div()
             .flex()
             .children(spans.iter().filter(|span| !span.text.is_empty()).map(|span| {
                 div()
-                    .text_size(px(13.))
+                    .text_size(fs)
                     .font_family("Cascadia Code")
-                    .text_color(override_color.unwrap_or_else(|| Self::role_color(span.role)))
+                    .text_color(override_color.unwrap_or_else(|| editor.role_color(span.role)))
                     .child(span.text.clone())
                     .into_any_element()
             }))
@@ -227,10 +306,13 @@ impl EditorView {
         let line_text = editor.buffer.line(line_idx).to_string();
         let line_num = format!("{:>4}", line_idx + 1);
         let spans = editor.line_spans(line_idx);
+        let lh = editor.line_height_px();
+        let fs = px(editor.font_size_px as f32);
+        let cursor_h = px(editor.font_size_px as f32 * (18.0 / 13.0));
+        let (sel_bg, sel_fg) = editor.selection_block_colors();
 
         // カーソルが現在行にある場合、カーソル位置で行を分割して描画
         let text_element: AnyElement = if is_current && !editor.cursor.has_selection() {
-            // 多バイト文字の途中を指す場合に備えて char_boundary にスナップ
             let col = (0..=line_text.len())
                 .rev()
                 .find(|&i| i <= editor.cursor.position.column && line_text.is_char_boundary(i))
@@ -241,32 +323,29 @@ impl EditorView {
                 .flex_1()
                 .flex()
                 .child(Self::render_spans(
+                    editor,
                     &Self::slice_spans(&spans, 0, before.len()),
                     None,
                 ))
-                // カーソル（縦線）
                 .child(
                     div()
                         .w(px(2.))
-                        .h(px(18.))
+                        .h(cursor_h)
                         .bg(hex(0x569cd6))
                         .flex_shrink_0(),
                 )
                 .child(Self::render_spans(
+                    editor,
                     &Self::slice_spans(&spans, line_text.len() - after.len(), line_text.len()),
                     None,
                 ))
                 .into_any_element()
         } else if editor.cursor.has_selection() {
-            // 選択範囲ハイライト描画
             let (sel_start, sel_end) = editor.cursor.selection_range().unwrap();
             let line_len = line_text.len();
-
-            // この行が選択範囲内かチェック
             let line_in_selection = line_idx >= sel_start.line && line_idx <= sel_end.line;
 
             if line_in_selection {
-                // この行での選択開始/終了カラムを計算
                 let sel_col_start = if line_idx == sel_start.line {
                     sel_start.column.min(line_len)
                 } else {
@@ -278,7 +357,6 @@ impl EditorView {
                     line_len
                 };
 
-                // char boundary にスナップ
                 let sc = (0..=line_len).rev()
                     .find(|&i| i <= sel_col_start && line_text.is_char_boundary(i))
                     .unwrap_or(0);
@@ -286,23 +364,26 @@ impl EditorView {
                     .find(|&i| i <= sel_col_end && line_text.is_char_boundary(i))
                     .unwrap_or(0);
 
-                let before = line_text[..sc].to_string();
+                let before_len = sc;
                 div()
                     .flex_1()
                     .flex()
                     .child(Self::render_spans(
-                        &Self::slice_spans(&spans, 0, before.len()),
+                        editor,
+                        &Self::slice_spans(&spans, 0, before_len),
                         None,
                     ))
                     .child(
                         div()
-                            .bg(hex_a(0x264f78, 0.7)) // VS Code 選択色
+                            .bg(sel_bg)
                             .child(Self::render_spans(
+                                editor,
                                 &Self::slice_spans(&spans, sc, ec),
-                                Some(hex(0xffffff)),
+                                Some(sel_fg),
                             )),
                     )
                     .child(Self::render_spans(
+                        editor,
                         &Self::slice_spans(&spans, ec, line_text.len()),
                         None,
                     ))
@@ -310,36 +391,30 @@ impl EditorView {
             } else {
                 div()
                     .flex_1()
-                    .child(Self::render_spans(&spans, None))
+                    .child(Self::render_spans(editor, &spans, None))
                     .into_any_element()
             }
         } else {
             div()
                 .flex_1()
-                .child(Self::render_spans(&spans, None))
+                .child(Self::render_spans(editor, &spans, None))
                 .into_any_element()
         };
 
+        let gutter = div()
+            .w(px(48.))
+            .text_align(TextAlign::Right)
+            .pr(px(16.))
+            .text_color(editor.gutter_label_color(is_current))
+            .text_size(fs)
+            .font_family("Cascadia Code")
+            .child(line_num);
+
         div()
-            .h(px(20.))
+            .h(lh)
             .flex()
-            .when(is_current, |d| d.bg(hex_a(0xffffff, 0.04)))
-            // 行番号
-            .child(
-                div()
-                    .w(px(48.))
-                    .text_align(TextAlign::Right)
-                    .pr(px(16.))
-                    .text_color(if is_current {
-                        hex(TEXT_SECONDARY)
-                    } else {
-                        hex(TEXT_DIM)
-                    })
-                    .text_size(px(13.))
-                    .font_family("Cascadia Code")
-                    .child(line_num),
-            )
-            // テキスト行
+            .when(is_current, |d| d.bg(editor.current_line_bg()))
+            .when(editor.show_line_numbers, |d| d.child(gutter))
             .child(text_element)
     }
 
@@ -684,7 +759,7 @@ impl EditorView {
         [TextRun {
             len: byte_len,
             font: font("Cascadia Code"),
-            color: hex(TEXT_PRIMARY),
+            color: self.plain_text_color(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -694,9 +769,8 @@ impl EditorView {
     /// ピクセル座標からバッファ位置を計算
     /// point はウィンドウ座標。`editor_bounds` は editor-content のレイアウト境界（フルサイズ canvas で更新）
     fn position_from_point(&self, point: Point<Pixels>, window: &Window) -> Position {
-        let line_height = px(20.);
-        // 行番号列の幅（`render_line` の gutter と一致）
-        let gutter_width = px(48.);
+        let line_height = self.line_height_px();
+        let gutter_width = self.gutter_width_px();
 
         let local_x = point.x - self.editor_bounds.origin.x;
         let local_y = point.y - self.editor_bounds.origin.y;
@@ -716,7 +790,7 @@ impl EditorView {
         let runs = self.editor_text_runs(line_text.len());
         let shaped = window
             .text_system()
-            .shape_line(line_text, px(13.), &runs, None);
+            .shape_line(line_text, px(self.font_size_px as f32), &runs, None);
         let mut col = shaped
             .closest_index_for_x(rel_x)
             .min(self.buffer.line_len(line));
@@ -870,7 +944,7 @@ impl Render for EditorView {
             .flex()
             .flex_col()
             .relative()
-            .bg(hex(BG))
+            .bg(self.editor_bg())
             .font_family("Cascadia Code")
             // IME: 先に描画し、エディタ内容より手前にスタックされないようにする
             .child(
@@ -1061,13 +1135,13 @@ impl EntityInputHandler for EditorView {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let pos = self.buffer.offset_to_position(range_utf16.start);
-        let line_height = px(20.);
-        let gutter = px(48.);
+        let line_height = self.line_height_px();
+        let gutter = self.gutter_width_px();
         let line_text: SharedString = self.buffer.line(pos.line).to_string().into();
         let runs = self.editor_text_runs(line_text.len());
         let shaped = window
             .text_system()
-            .shape_line(line_text, px(13.), &runs, None);
+            .shape_line(line_text, px(self.font_size_px as f32), &runs, None);
         let scroll_y = self.scroll_handle.0.borrow().base_handle.offset().y;
         let x = self.editor_bounds.origin.x + gutter + shaped.x_for_index(pos.column);
         let y = self.editor_bounds.origin.y + scroll_y + line_height * pos.line as f32;
