@@ -3,16 +3,19 @@
 pub mod actions;
 pub mod buffer;
 pub mod cursor;
+pub mod grid_renderer;
 mod syntax_highlight;
 
 use buffer::{Position, TextBuffer};
 use cursor::CursorState;
+use grid_renderer::{GridCell, GridRenderer};
 use syntax_highlight::{SyntaxColorRole, SyntaxSpan, highlight_buffer};
 
 use gpui::*;
 use gpui::prelude::*;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::model_prefs::{AppearancePrefs, UiTheme};
 use crate::{hex, hex_a, BG, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY};
@@ -45,6 +48,10 @@ pub struct EditorView {
     font_size_px: i32,
     show_line_numbers: bool,
     ui_theme: UiTheme,
+    /// GPU グリッドレンダラ（オプション — フォールバックは uniform_list）
+    grid_renderer: Option<GridRenderer>,
+    /// グリッドレンダラを使用するかどうか
+    use_grid_renderer: bool,
 }
 
 impl EditorView {
@@ -68,6 +75,8 @@ impl EditorView {
             font_size_px: ap.font_size_px,
             show_line_numbers: ap.show_line_numbers,
             ui_theme: ap.theme,
+            grid_renderer: None,
+            use_grid_renderer: true,
         }
     }
 
@@ -241,6 +250,66 @@ impl EditorView {
 
     fn refresh_highlights(&mut self) {
         self.highlighted_lines = highlight_buffer(self.buffer.file_path(), self.buffer.lines());
+    }
+
+    /// SyntaxColorRole → RGB u32 (grid renderer 用)
+    fn color_for_role(role: SyntaxColorRole, default_fg: u32) -> u32 {
+        match role {
+            SyntaxColorRole::Plain => default_fg,
+            SyntaxColorRole::Comment => SYNTAX_COMMENT,
+            SyntaxColorRole::Keyword => SYNTAX_KEYWORD,
+            SyntaxColorRole::String => SYNTAX_STRING,
+            SyntaxColorRole::Number => SYNTAX_NUMBER,
+            SyntaxColorRole::Type => SYNTAX_TYPE,
+            SyntaxColorRole::Function => SYNTAX_FUNCTION,
+            SyntaxColorRole::Property => SYNTAX_PROPERTY,
+            SyntaxColorRole::Macro => SYNTAX_MACRO,
+            SyntaxColorRole::Heading => SYNTAX_HEADING,
+            SyntaxColorRole::Accent => SYNTAX_ACCENT,
+        }
+    }
+
+    /// バッファ内容を GridCell の2D配列に変換（syntax highlight 色付き）
+    fn buffer_to_grid_cells(
+        &self,
+        cols: u32,
+        rows: u32,
+        scroll_y: usize,
+    ) -> Vec<Vec<GridCell>> {
+        let default_fg = if self.is_editor_light() { 0x1E1E1Eu32 } else { 0xE5E5E5u32 };
+        let default_bg = if self.is_editor_light() { 0xF3F3F3u32 } else { 0x1E1E1Eu32 };
+        let line_count = self.buffer.line_count();
+
+        (0..rows as usize).map(|screen_row| {
+            let line_idx = scroll_y + screen_row;
+            let mut row_cells = vec![GridCell::default(); cols as usize];
+
+            // デフォルト bg を設定
+            for cell in row_cells.iter_mut() {
+                cell.bg = default_bg;
+                cell.fg = default_fg;
+            }
+
+            if line_idx < line_count {
+                let spans = self.line_spans(line_idx);
+                let mut col = 0usize;
+                for span in &spans {
+                    let fg = Self::color_for_role(span.role, default_fg);
+                    for ch in span.text.chars() {
+                        if col >= cols as usize { break; }
+                        row_cells[col] = GridCell {
+                            ch,
+                            fg,
+                            bg: default_bg,
+                            flags: 0,
+                        };
+                        col += 1;
+                    }
+                }
+            }
+
+            row_cells
+        }).collect()
     }
 
     fn line_spans(&self, line_idx: usize) -> Vec<SyntaxSpan> {
@@ -943,6 +1012,25 @@ impl Render for EditorView {
         let line_count = self.buffer.line_count();
         let scroll_handle = self.scroll_handle.clone();
 
+        // グリッドレンダラパス: render tree 構築前に画像を生成
+        let grid_image: Option<Arc<RenderImage>> = if self.use_grid_renderer {
+            let cols = 120u32;
+            let rows = 40u32;
+            if self.grid_renderer.is_none() {
+                self.grid_renderer = Some(GridRenderer::new(cols, rows));
+            }
+            let scroll_y = 0usize; // TODO: scroll_handle から取得
+            let cells = self.buffer_to_grid_cells(cols, rows, scroll_y);
+            if let Some(ref mut gr) = self.grid_renderer {
+                gr.update_cells(&cells);
+                Some(gr.render_image())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // InputHandler 登録用の canvas
         let input_entity = entity.clone();
         let input_focus = focus.clone();
@@ -1024,7 +1112,16 @@ impl Render for EditorView {
                         .absolute()
                         .size_full()
                     })
-                    .child(
+                    .child(if let Some(render_image) = grid_image {
+                        // グリッドレンダラパス: CPU bitmap → img()
+                        img(render_image)
+                            .w_full()
+                            .h_full()
+                            .object_fit(ObjectFit::Fill)
+                            .flex_1()
+                            .into_any_element()
+                    } else {
+                        // フォールバック: 既存の uniform_list パス
                         uniform_list("editor-lines", line_count, {
                             let entity = entity.clone();
                             move |range: Range<usize>, _window: &mut Window, cx: &mut App| {
@@ -1037,8 +1134,9 @@ impl Render for EditorView {
                         .with_sizing_behavior(ListSizingBehavior::Infer)
                         .flex_1()
                         .min_h(px(0.))
-                        .track_scroll(scroll_handle),
-                    ),
+                        .track_scroll(scroll_handle)
+                        .into_any_element()
+                    }),
             )
     }
 }
