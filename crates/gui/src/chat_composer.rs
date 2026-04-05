@@ -1,13 +1,13 @@
-//! Chat ページ用の単一行入力（gpui `input` 例をベースに改変）
+//! Chat ページ用の複数行入力（Enter 送信 / Shift+Enter 改行）
 
 use std::ops::Range;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle,     Window, actions, div, fill, point,
-    prelude::*, px, relative, rgba, size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine,
+    actions, div, fill, point, prelude::*, px, relative, rgba, size,
 };
 use unicode_segmentation::*;
 
@@ -30,6 +30,7 @@ actions!(
         Cut,
         Copy,
         ChatSubmit,
+        InsertNewline,
     ]
 );
 
@@ -44,9 +45,74 @@ pub struct ChatComposer {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Option<ShapedLine>,
+    /// `shape_text` 結果（改行・折り返しあり）
+    last_wrapped: Option<Vec<WrappedLine>>,
     last_bounds: Option<Bounds<Pixels>>,
+    last_line_height: Option<Pixels>,
     is_selecting: bool,
+}
+
+/// ビュー座標から UTF-8 バイトインデックスへ（`WrappedLine` 列用）
+fn byte_index_for_point(
+    lines: &[WrappedLine],
+    position: Point<Pixels>,
+    bounds: &Bounds<Pixels>,
+    line_height: Pixels,
+) -> usize {
+    if lines.is_empty() {
+        return 0;
+    }
+    let mut line_origin = bounds.origin;
+    let mut line_start_ix = 0usize;
+    for line in lines {
+        let line_h = line.size(line_height).height;
+        let line_bottom = line_origin.y + line_h;
+        if position.y > line_bottom {
+            line_origin.y = line_bottom;
+            line_start_ix += line.len() + 1;
+            continue;
+        }
+        let pos_in_line = position - line_origin;
+        let ix = match line.closest_index_for_position(pos_in_line, line_height) {
+            Ok(i) | Err(i) => i,
+        };
+        return (line_start_ix + ix).min(line_start_ix + line.len());
+    }
+    let mut total = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        total += line.len();
+        if i + 1 < lines.len() {
+            total += 1;
+        }
+    }
+    total
+}
+
+fn position_for_utf8_index(
+    lines: &[WrappedLine],
+    index: usize,
+    bounds: &Bounds<Pixels>,
+    line_height: Pixels,
+) -> Option<Point<Pixels>> {
+    if lines.is_empty() {
+        return Some(bounds.origin);
+    }
+    let mut line_origin = bounds.origin;
+    let mut line_start_ix = 0usize;
+    for line in lines {
+        let line_end_ix = line_start_ix + line.len();
+        if index < line_start_ix {
+            break;
+        } else if index > line_end_ix {
+            line_origin.y += line.size(line_height).height;
+            line_start_ix = line_end_ix + 1;
+            continue;
+        } else {
+            let ix_within = index - line_start_ix;
+            return Some(line_origin + line.position_for_index(ix_within, line_height)?);
+        }
+    }
+    None
 }
 
 impl ChatComposer {
@@ -138,8 +204,12 @@ impl ChatComposer {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace("\n", " "), window, cx);
+            self.replace_text_in_range(None, &text, window, cx);
         }
+    }
+
+    fn insert_newline(&mut self, _: &InsertNewline, window: &mut Window, cx: &mut Context<Self>) {
+        self.replace_text_in_range(None, "\n", window, cx);
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -176,17 +246,22 @@ impl ChatComposer {
             return 0;
         }
 
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
-        else {
+        let Some(bounds) = self.last_bounds.as_ref() else {
             return 0;
         };
+        let lh = self.last_line_height.unwrap_or(px(20.));
+        if let Some(lines) = self.last_wrapped.as_ref() {
+            if !lines.is_empty() {
+                return byte_index_for_point(lines, position, bounds, lh);
+            }
+        }
         if position.y < bounds.top() {
             return 0;
         }
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        0
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -262,8 +337,9 @@ impl ChatComposer {
         self.selected_range = 0..0;
         self.selection_reversed = false;
         self.marked_range = None;
-        self.last_layout = None;
+        self.last_wrapped = None;
         self.last_bounds = None;
+        self.last_line_height = None;
         self.is_selecting = false;
     }
 
@@ -275,8 +351,9 @@ impl ChatComposer {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
-            last_layout: None,
+            last_wrapped: None,
             last_bounds: None,
+            last_line_height: None,
             is_selecting: false,
         }
     }
@@ -399,35 +476,38 @@ impl EntityInputHandler for ChatComposer {
         &mut self,
         range_utf16: Range<usize>,
         bounds: Bounds<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
-        Some(Bounds::from_corners(
-            point(
-                bounds.left() + last_layout.x_for_index(range.start),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + last_layout.x_for_index(range.end),
-                bounds.bottom(),
-            ),
-        ))
+        let lines = self.last_wrapped.as_ref()?;
+        let lb = self.last_bounds?;
+        let lh = self
+            .last_line_height
+            .unwrap_or_else(|| window.line_height());
+        let p0 = position_for_utf8_index(lines, range.start, &lb, lh)?;
+        let p1 = position_for_utf8_index(lines, range.end, &lb, lh)?;
+        let _ = bounds;
+        Some(Bounds::from_corners(p0, p1))
     }
 
     fn character_index_for_point(
         &mut self,
         point: gpui::Point<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let line_point = self.last_bounds?.localize(&point)?;
-        let last_layout = self.last_layout.as_ref()?;
-
-        assert_eq!(last_layout.text, self.content);
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
-        Some(self.offset_to_utf16(utf8_index))
+        let bounds = self.last_bounds.as_ref()?;
+        let lh = self
+            .last_line_height
+            .unwrap_or_else(|| window.line_height());
+        if let Some(lines) = self.last_wrapped.as_ref() {
+            if !lines.is_empty() {
+                let utf8_index = byte_index_for_point(lines, point, bounds, lh);
+                return Some(self.offset_to_utf16(utf8_index));
+            }
+        }
+        None
     }
 }
 
@@ -436,9 +516,9 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    line: Option<ShapedLine>,
+    lines: Vec<WrappedLine>,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    selection: Vec<PaintQuad>,
 }
 
 impl IntoElement for TextElement {
@@ -468,9 +548,15 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        let input = self.input.read(cx);
+        let content = input.content.as_str();
+        let lh = window.line_height();
+        let hard_lines = content.matches('\n').count() + 1;
+        let est_wrap = content.len().saturating_div(96);
+        let rows = (hard_lines + est_wrap).min(24).max(1);
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        style.size.height = (lh * rows as f32 + px(8.0)).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -531,44 +617,68 @@ impl Element for TextElement {
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
+        let lines: Vec<WrappedLine> = window
             .text_system()
-            .shape_line(display_text, font_size, &runs, None);
+            .shape_text(
+                display_text.clone(),
+                font_size,
+                &runs,
+                Some(bounds.size.width),
+                None,
+            )
+            .map(|s| s.into_vec())
+            .unwrap_or_default();
 
-        let cursor_pos = line.x_for_index(cursor);
-        let (selection, cursor) = if selected_range.is_empty() {
-            (
-                None,
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.), bounds.bottom() - bounds.top()),
-                    ),
+        let lh = window.line_height();
+
+        let cursor_quad = if selected_range.is_empty() {
+            position_for_utf8_index(&lines, cursor, &bounds, lh).map(|p| {
+                fill(
+                    Bounds::new(point(p.x, p.y), size(px(2.), lh)),
                     gpui::blue(),
-                )),
-            )
+                )
+            })
         } else {
-            (
-                Some(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.start),
-                            bounds.top(),
-                        ),
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.end),
-                            bounds.bottom(),
-                        ),
-                    ),
-                    rgba(0x3311ff30),
-                )),
-                None,
-            )
+            None
         };
+
+        let mut selection_quads = Vec::new();
+        if !selected_range.is_empty() {
+            let lo = selected_range.start.min(selected_range.end);
+            let hi = selected_range.start.max(selected_range.end);
+            let mut line_origin = bounds.origin;
+            let mut line_start = 0usize;
+            for line in &lines {
+                let line_end = line_start + line.len();
+                let seg_lo = lo.max(line_start);
+                let seg_hi = hi.min(line_end);
+                if seg_lo < seg_hi {
+                    if let (Some(p0), Some(p1)) = (
+                        line.position_for_index(seg_lo - line_start, lh),
+                        line.position_for_index(seg_hi - line_start, lh),
+                    ) {
+                        let p0 = line_origin + p0;
+                        let p1 = line_origin + p1;
+                        let left = p0.x.min(p1.x);
+                        let right = p0.x.max(p1.x).max(left + px(2.));
+                        let top = p0.y.min(p1.y);
+                        selection_quads.push(fill(
+                            Bounds::from_corners(
+                                point(left, top),
+                                point(right, top + lh),
+                            ),
+                            rgba(0x3311ff30),
+                        ));
+                    }
+                }
+                line_origin.y += line.size(lh).height;
+                line_start = line_end + 1;
+            }
+        }
         PrepaintState {
-            line: Some(line),
-            cursor,
-            selection,
+            lines,
+            cursor: cursor_quad,
+            selection: selection_quads,
         }
     }
 
@@ -588,12 +698,28 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection)
+        for q in prepaint.selection.drain(..) {
+            window.paint_quad(q);
         }
-        let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
+
+        let lh = window.line_height();
+        let mut y = bounds.origin.y;
+        for line in &prepaint.lines {
+            let h = line.size(lh).height;
+            line.paint(
+                point(bounds.origin.x, y),
+                lh,
+                TextAlign::Left,
+                Some(Bounds::new(
+                    point(bounds.origin.x, y),
+                    size(bounds.size.width, h),
+                )),
+                window,
+                cx,
+            )
+            .ok();
+            y += h;
+        }
 
         if focus_handle.is_focused(window) {
             if let Some(cursor) = prepaint.cursor.take() {
@@ -602,8 +728,9 @@ impl Element for TextElement {
         }
 
         self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(line);
+            input.last_wrapped = Some(prepaint.lines.clone());
             input.last_bounds = Some(bounds);
+            input.last_line_height = Some(lh);
         });
     }
 }
@@ -630,6 +757,7 @@ impl Render for ChatComposer {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::insert_newline))
             .on_action(cx.listener(Self::submit_chat))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -640,7 +768,7 @@ impl Render for ChatComposer {
             .text_size(px(13.))
             .child(
                 div()
-                    .h(px(30. + 4. * 2.))
+                    .min_h(px(30. + 4. * 2.))
                     .w_full()
                     .p(px(4.))
                     .bg(hex(BG))
@@ -674,6 +802,7 @@ pub fn register_keybindings(cx: &mut App) {
         KeyBinding::new("cmd-x", Cut, Some("ChatComposer")),
         KeyBinding::new("home", Home, Some("ChatComposer")),
         KeyBinding::new("end", End, Some("ChatComposer")),
+        KeyBinding::new("shift-enter", InsertNewline, Some("ChatComposer")),
         KeyBinding::new("enter", ChatSubmit, Some("ChatComposer")),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("ChatComposer")),
     ]);

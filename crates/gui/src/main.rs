@@ -1675,7 +1675,17 @@ impl AppView {
                                             .text_size(px(10.))
                                             .child("Enter"),
                                     )
-                                    .child("で送信".to_string()),
+                                    .child("送信".to_string())
+                                    .child(
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .bg(hex(BORDER))
+                                            .rounded(px(4.))
+                                            .text_size(px(10.))
+                                            .child("Shift+Enter"),
+                                    )
+                                    .child("改行".to_string()),
                             ),
                     ),
             )
