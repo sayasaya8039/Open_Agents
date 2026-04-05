@@ -1,5 +1,6 @@
 mod editor;
 mod project_explorer;
+mod workspace_prefs;
 
 use editor::EditorView;
 use gpui::*;
@@ -158,6 +159,47 @@ impl AppView {
             Err(e) => eprintln!("explorer: 新規フォルダ {e}"),
         }
     }
+
+    /// EXPLORER 右端: フォルダを開く（ワークスペースルートを差し替え）
+    fn explorer_open_folder_dialog(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                if let Some(path) = paths.first() {
+                    let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let _ = cx.update(|ecx| {
+                        let _ = app.update(ecx, |this: &mut AppView, ecx| {
+                            if !path.is_dir() {
+                                return;
+                            }
+                            this.workspace_root = path;
+                            workspace_prefs::save_last_workspace(&this.workspace_root);
+                            match read_tree_from_disk(&this.workspace_root) {
+                                Ok(tree) => {
+                                    this.file_tree = tree;
+                                    // フォルダを開いた直後はツリーはすべて閉じた状態
+                                    this.explorer_expanded.clear();
+                                }
+                                Err(e) => {
+                                    eprintln!("explorer: フォルダ読込 {e}");
+                                    this.file_tree = TreeNode::dir("", vec![]);
+                                    this.explorer_expanded.clear();
+                                }
+                            }
+                            this.explorer_selection = None;
+                            ecx.notify();
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+    }
 }
 
 // ============================================================
@@ -184,12 +226,18 @@ impl Render for AppView {
             .child(
                 div()
                     .flex_1()
+                    .min_h(px(0.))
                     .flex()
                     .overflow_hidden()
                     .child(self.render_sidebar(cx))
                     .child(div().w(px(1.)).h_full().bg(hex(BORDER)))
                     .child(
-                        div().flex_1().flex().flex_col().child(content),
+                        div()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .flex()
+                            .flex_col()
+                            .child(content),
                     ),
             )
     }
@@ -417,8 +465,7 @@ impl AppView {
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                                    this.explorer_expanded.clear();
-                                                    cx.notify();
+                                                    this.explorer_open_folder_dialog(cx);
                                                 }),
                                             )
                                             .child("📂"),
@@ -470,23 +517,28 @@ impl AppView {
                                     .text_color(hex(TEXT_SECONDARY))
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(move |this, _ev: &MouseDownEvent, _window, cx| {
-                                            this.explorer_selection = Some(path.clone());
-                                            if is_dir {
-                                                if this.explorer_expanded.contains(&path) {
-                                                    this.explorer_expanded.remove(&path);
+                                        cx.listener(
+                                            move |this, _ev: &MouseDownEvent, window, cx| {
+                                                this.explorer_selection = Some(path.clone());
+                                                if is_dir {
+                                                    if this.explorer_expanded.contains(&path) {
+                                                        this.explorer_expanded.remove(&path);
+                                                    } else {
+                                                        this.explorer_expanded.insert(path.clone());
+                                                    }
                                                 } else {
-                                                    this.explorer_expanded.insert(path.clone());
+                                                    // Chat 等のページだとエディタが描画されないため必ず Editor へ
+                                                    this.page = Page::Editor;
+                                                    let wr = this.workspace_root.clone();
+                                                    let segs = path.clone();
+                                                    this.editor_view.update(cx, |ed, ecx| {
+                                                        ed.open_project_path(&wr, &segs, ecx);
+                                                    });
+                                                    this.editor_view.read(cx).focus_editor(window);
                                                 }
-                                            } else {
-                                                let wr = this.workspace_root.clone();
-                                                let segs = path.clone();
-                                                this.editor_view.update(cx, |ed, ecx| {
-                                                    ed.open_project_path(&wr, &segs, ecx);
-                                                });
-                                            }
-                                            cx.notify();
-                                        }),
+                                                cx.notify();
+                                            },
+                                        ),
                                     )
                                     .child(
                                         div()
@@ -574,6 +626,7 @@ impl AppView {
 
         div()
             .flex_1()
+            .min_h(px(0.))
             .flex()
             .flex_col()
             .bg(hex(BG))
@@ -1088,8 +1141,10 @@ fn main() {
                 let editor_view = cx.new(|cx| EditorView::new(cx));
 
                 cx.new(|_cx| {
-                    let workspace_root =
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    let workspace_root = workspace_prefs::load_last_workspace()
+                        .unwrap_or_else(|| {
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                        });
                     let (file_tree, explorer_expanded) =
                         match read_tree_from_disk(&workspace_root) {
                             Ok(tree) => {

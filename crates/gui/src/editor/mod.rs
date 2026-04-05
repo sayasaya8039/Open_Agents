@@ -47,16 +47,33 @@ impl EditorView {
 
     /// ファイルからロード
     pub fn load_file(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.reset_list_scroll_to_top();
         match TextBuffer::from_file(path) {
             Ok(buf) => {
                 self.buffer = buf;
                 self.cursor = CursorState::new();
                 cx.notify();
             }
-            Err(e) => {
-                eprintln!("ファイル読み込みエラー: {}", e);
+            Err(_) => {
+                // 不正 UTF-8 などはロスレスに読めないので lossy で表示
+                match std::fs::read(path) {
+                    Ok(bytes) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        self.buffer =
+                            TextBuffer::from_string_with_path(text.as_ref(), Some(path.to_path_buf()));
+                        self.cursor = CursorState::new();
+                        cx.notify();
+                    }
+                    Err(e) => {
+                        eprintln!("ファイル読み込みエラー: {}", e);
+                    }
+                }
             }
         }
+    }
+
+    pub fn focus_editor(&self, window: &mut Window) {
+        self.focus_handle.focus(window);
     }
 
     /// ワークスペース相対パスを開く。実ファイルがあれば読み込み、なければプレースホルダーを表示
@@ -66,11 +83,16 @@ impl EditorView {
         segments: &[String],
         cx: &mut Context<Self>,
     ) {
-        let path: std::path::PathBuf = segments.iter().fold(workspace_root.to_path_buf(), |a, s| a.join(s));
+        let path: std::path::PathBuf =
+            segments.iter().fold(workspace_root.to_path_buf(), |a, s| a.join(s));
+        let path = path
+            .canonicalize()
+            .unwrap_or(path);
         if path.is_file() {
             self.load_file(&path, cx);
             return;
         }
+        self.reset_list_scroll_to_top();
         let stub = format!(
             "// {}\n// （プレースホルダー: ディスク上にファイルがないか読み込めませんでした）\n\n",
             path.display()
@@ -86,6 +108,13 @@ impl EditorView {
             self.cursor.position.line,
             gpui::ScrollStrategy::Top,
         );
+    }
+
+    /// バッファ差し替え後に古いスクロール位置が残ると、可視行範囲が空になりテキストが一切描画されない。
+    fn reset_list_scroll_to_top(&self) {
+        let mut st = self.scroll_handle.0.borrow_mut();
+        st.base_handle.set_offset(point(px(0.), px(0.)));
+        st.deferred_scroll_to_item = None;
     }
 
     // --- 行描画 ---
@@ -687,6 +716,7 @@ impl Render for EditorView {
         div()
             .key_context("Editor")
             .track_focus(&focus)
+            .min_h(px(0.))
             .on_action(cx.listener(Self::handle_move_up))
             .on_action(cx.listener(Self::handle_move_down))
             .on_action(cx.listener(Self::handle_move_left))
@@ -716,13 +746,30 @@ impl Render for EditorView {
             .flex_1()
             .flex()
             .flex_col()
+            .relative()
             .bg(hex(BG))
             .font_family("Cascadia Code")
+            // IME: 先に描画し、エディタ内容より手前にスタックされないようにする
+            .child(
+                canvas(
+                    |bounds, _window, _cx| bounds,
+                    move |_bounds, prepaint_bounds, window, cx| {
+                        if input_focus.is_focused(window) {
+                            let handler =
+                                ElementInputHandler::new(prepaint_bounds, input_entity.clone());
+                            window.handle_input(&input_focus, handler, cx);
+                        }
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 // マウスイベント + bounds 記録は uniform_list を含む div に限定
                 div()
                     .id("editor-content")
                     .flex_1()
+                    .min_h(px(0.))
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
                     .on_mouse_move(cx.listener(Self::handle_mouse_move))
@@ -739,6 +786,7 @@ impl Render for EditorView {
                     }
                 })
                 .flex_1()
+                .min_h(px(0.))
                 .track_scroll(scroll_handle),
                     ) // close editor-content div's .child(uniform_list)
                     // editor_bounds を記録（uniform_list の後に配置、描画に影響なし）
@@ -757,22 +805,7 @@ impl Render for EditorView {
                         .left(px(0.))
                         .w(px(1.))
                         .h(px(1.))
-                    })
-            ) // close .child(editor-content div)
-            // InputHandler 登録用の不可視 canvas
-            .child(
-                canvas(
-                    |bounds, _window, _cx| bounds,
-                    move |_bounds, prepaint_bounds, window, cx| {
-                        if input_focus.is_focused(window) {
-                            let handler =
-                                ElementInputHandler::new(prepaint_bounds, input_entity.clone());
-                            window.handle_input(&input_focus, handler, cx);
-                        }
-                    },
-                )
-                .absolute()
-                .size_full(),
+                    }),
             )
     }
 }
