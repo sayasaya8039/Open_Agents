@@ -75,6 +75,17 @@ pub fn complete_native_chat_blocking(
     temperature: f32,
     max_tokens: i32,
 ) -> Result<String, String> {
+    let ext = model_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if ext.eq_ignore_ascii_case("onnx") {
+        return Err(
+            "ネイティブ Chat は現状 GGUF のみ対応です。ONNX の場合は推論先を Ollama またはクラウド API に切り替えるか、GGUF に変換してください。"
+                .into(),
+        );
+    }
+
     let path_str = model_path
         .to_str()
         .ok_or_else(|| "モデルパスが UTF-8 ではありません".to_string())?;
@@ -83,7 +94,7 @@ pub fn complete_native_chat_blocking(
     let inf = unsafe { oag_inference_create(path_c.as_ptr()) };
     if inf.is_null() {
         return Err(
-            "ネイティブ推論の初期化に失敗しました（GGUF/ONNX、メモリ、CPU バックエンドを確認してください）"
+            "ネイティブ推論の初期化に失敗しました。有効な LLM 用 .gguf か確認してください（破損・別形式・メモリ不足）。ONNX はネイティブ Chat 未対応です。"
                 .to_string(),
         );
     }
@@ -136,4 +147,20 @@ pub fn complete_native_chat_blocking(
         free(out as *mut c_void);
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn onnx_path_rejected_before_loading() {
+        let err = complete_native_chat_blocking(Path::new(r"C:\dummy\model.onnx"), &[], 0.7, 32)
+            .unwrap_err();
+        assert!(
+            err.contains("GGUF"),
+            "expected GGUF-only message, got: {err}"
+        );
+    }
 }

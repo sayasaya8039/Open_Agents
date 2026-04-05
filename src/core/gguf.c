@@ -159,11 +159,31 @@ static gguf_string_t read_string(reader_t* r) {
 // ============================================================
 
 #ifdef _WIN32
+// Rust/UTF-8 パスを渡すため CreateFileW を使う（CreateFileA は ANSI のみで日本語パスが失敗する）
+static wchar_t* gguf_utf8_to_wide(const char* utf8) {
+    if (!utf8) return NULL;
+    int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (n <= 0) return NULL;
+    wchar_t* w = (wchar_t*)malloc((size_t)n * sizeof(wchar_t));
+    if (!w) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, n) <= 0) {
+        free(w);
+        return NULL;
+    }
+    return w;
+}
+
 static void* mmap_file(const char* path, size_t* out_size) {
-    HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ,
+    wchar_t* wpath = gguf_utf8_to_wide(path);
+    if (!wpath) {
+        fprintf(stderr, "[GGUF] Invalid UTF-8 path or out of memory\n");
+        return NULL;
+    }
+    HANDLE file = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ,
                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wpath);
     if (file == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[GGUF] Cannot open: %s\n", path);
+        fprintf(stderr, "[GGUF] Cannot open file (check path and permissions)\n");
         return NULL;
     }
 
