@@ -4,6 +4,7 @@ mod workspace_prefs;
 
 use editor::EditorView;
 use gpui::*;
+use gpui::prelude::FluentBuilder;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
@@ -67,6 +68,18 @@ enum Page {
     Terminal,
 }
 
+/// 設定サイドバー（macOS システム設定風ナビ）
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum SettingsNav {
+    #[default]
+    General,
+    Appearance,
+    AiAssistant,
+    ModelsHardware,
+    Privacy,
+    ApiKeys,
+}
+
 struct ChatMsg {
     role: String,
     content: String,
@@ -84,6 +97,7 @@ struct AppView {
     /// フォーカス/選択行
     explorer_selection: Option<Vec<String>>,
     editor_view: Entity<EditorView>,
+    settings_nav: SettingsNav,
 }
 
 impl AppView {
@@ -217,7 +231,7 @@ impl Render for AppView {
         let content: AnyElement = match self.page {
             Page::Editor => self.render_editor(cx).into_any_element(),
             Page::Chat => self.render_chat_page().into_any_element(),
-            Page::Settings => self.render_settings().into_any_element(),
+            Page::Settings => self.render_settings(cx).into_any_element(),
             Page::Terminal => self.render_terminal().into_any_element(),
         };
 
@@ -901,128 +915,178 @@ impl AppView {
     }
 
     // ============================================================
-    // Settings View
+    // Settings View（Figma: MacOS-style AI Coding Tool /settings 相当の二段ペイン）
     // ============================================================
 
-    fn render_settings(&self) -> impl IntoElement {
+    fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_1()
             .flex()
             .flex_col()
+            .min_h(px(0.))
             .bg(hex(BG))
             .child(
                 div()
-                    .h(px(48.))
-                    .bg(hex(PANEL_BG))
+                    .flex_shrink_0()
+                    .py(px(20.))
+                    .px(px(28.))
                     .border_b_1()
                     .border_color(hex(BORDER))
-                    .flex()
-                    .items_center()
-                    .px(px(16.))
-                    .gap(px(8.))
+                    .bg(hex_a(0x000000, 0.2))
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .text_color(hex(TEXT_SECONDARY))
-                            .child("⚙"),
+                            .text_size(px(22.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hex(TEXT_PRIMARY))
+                            .mb(px(4.))
+                            .child("設定"),
                     )
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .text_color(hex(TEXT_PRIMARY))
-                            .child("Settings"),
+                            .text_size(px(12.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child("Open Agents の外観・AI・モデル・プライバシーを変更します。"),
                     ),
             )
             .child(
                 div()
                     .flex_1()
+                    .flex()
+                    .min_h(px(0.))
                     .overflow_hidden()
                     .child(
                         div()
-                            .max_w(px(700.))
-                            .mx_auto()
-                            .p(px(24.))
+                            .w(px(232.))
+                            .flex_shrink_0()
+                            .h_full()
+                            .border_r_1()
+                            .border_color(hex(BORDER))
+                            .bg(hex(SIDEBAR_BG))
+                            .py(px(12.))
                             .flex()
                             .flex_col()
-                            .gap(px(32.))
-                            .child(self.settings_section(
-                                "ローカルLLM設定",
-                                "🔶",
-                                vec![
-                                    ("モデル形式", "GGUF / ONNX"),
-                                    ("Temperature", "0.7"),
-                                    ("最大トークン数", "2048"),
-                                    ("コンテキスト長", "4096"),
-                                ],
+                            .gap(px(2.))
+                            .child(self.settings_sidebar_item(
+                                "一般",
+                                "",
+                                SettingsNav::General,
+                                cx,
                             ))
-                            .child(self.settings_section(
-                                "ハードウェア設定",
-                                "🖥",
-                                vec![
-                                    ("GPU アクセラレーション", "ON"),
-                                    ("GPU レイヤー数", "32"),
-                                    ("スレッド数", "8"),
-                                    ("バッチサイズ", "512"),
-                                ],
-                            ))
-                            .child(self.settings_section(
+                            .child(self.settings_sidebar_item(
                                 "外観",
-                                "🎨",
-                                vec![
-                                    ("テーマ", "Dark"),
-                                    ("フォントサイズ", "14px"),
-                                    ("行番号を表示", "ON"),
-                                ],
+                                "",
+                                SettingsNav::Appearance,
+                                cx,
                             ))
-                            .child(self.settings_section(
-                                "APIキー管理",
-                                "🔑",
-                                vec![("OpenAI", "sk-••••••••"), ("Anthropic", "未設定")],
+                            .child(self.settings_sidebar_item(
+                                "AI アシスタント",
+                                "",
+                                SettingsNav::AiAssistant,
+                                cx,
+                            ))
+                            .child(self.settings_sidebar_item(
+                                "モデルとハードウェア",
+                                "",
+                                SettingsNav::ModelsHardware,
+                                cx,
+                            ))
+                            .child(self.settings_sidebar_item(
+                                "プライバシー",
+                                "",
+                                SettingsNav::Privacy,
+                                cx,
+                            ))
+                            .child(self.settings_sidebar_item(
+                                "API キー",
+                                "",
+                                SettingsNav::ApiKeys,
+                                cx,
                             )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .id("settings-detail-scroll")
+                                    .flex_1()
+                                    .min_h(px(0.))
+                                    .h_full()
+                                    .overflow_y_scroll()
+                                    .px(px(32.))
+                                    .py(px(28.))
+                                    .child(self.render_settings_detail()),
+                            ),
                     ),
             )
     }
 
-    fn settings_section(
-        &self,
-        title: &str,
-        icon: &str,
-        items: Vec<(&str, &str)>,
+    fn settings_sidebar_item(
+        &mut self,
+        label: &str,
+        _icon: &str,
+        nav: SettingsNav,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
+        let selected = self.settings_nav == nav;
+        div()
+            .mx(px(10.))
+            .px(px(12.))
+            .py(px(9.))
+            .rounded(px(8.))
+            .when(selected, |d| d.bg(hex_a(ACCENT_BLUE, 0.22)))
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    this.settings_nav = nav;
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .mb(px(4.))
-                    .child(div().text_size(px(16.)).child(icon.to_string()))
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(hex(TEXT_PRIMARY))
-                            .child(title.to_string()),
-                    ),
-            );
+                    .text_size(px(13.))
+                    .font_weight(if selected {
+                        FontWeight::SEMIBOLD
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .text_color(if selected {
+                        hex(TEXT_PRIMARY)
+                    } else {
+                        hex(TEXT_SECONDARY)
+                    })
+                    .child(label.to_string()),
+            )
+    }
 
+    fn settings_inset_group(
+        &self,
+        caption: &str,
+        rows: Vec<(&str, &str)>,
+    ) -> impl IntoElement {
+        let n = rows.len();
         let mut card = div()
-            .bg(hex(PANEL_BG))
-            .rounded(px(8.))
-            .p(px(16.))
+            .bg(hex_a(0xffffff, 0.04))
+            .border_1()
+            .border_color(hex(BORDER))
+            .rounded(px(10.))
+            .overflow_hidden()
             .flex()
-            .flex_col()
-            .gap(px(16.));
-
-        for (label, value) in items {
+            .flex_col();
+        for (i, (label, value)) in rows.into_iter().enumerate() {
+            let last = i + 1 == n;
             card = card.child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap(px(16.))
+                    .px(px(16.))
+                    .py(px(13.))
+                    .when(!last, |d| d.border_b_1().border_color(hex(BORDER)))
                     .child(
                         div()
                             .text_size(px(13.))
@@ -1031,15 +1095,156 @@ impl AppView {
                     )
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .text_color(hex(TEXT_SECONDARY))
-                            .child(value.to_string()),
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .child(value.to_string()),
+                            ),
                     ),
             );
         }
 
-        section = section.child(card);
-        section
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .px(px(4.))
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(hex(TEXT_MUTED))
+                    .child(caption.to_string()),
+            )
+            .child(card)
+    }
+
+    fn render_settings_detail(&self) -> impl IntoElement {
+        let title = match self.settings_nav {
+            SettingsNav::General => "一般",
+            SettingsNav::Appearance => "外観",
+            SettingsNav::AiAssistant => "AI アシスタント",
+            SettingsNav::ModelsHardware => "モデルとハードウェア",
+            SettingsNav::Privacy => "プライバシー",
+            SettingsNav::ApiKeys => "API キー",
+        };
+
+        let body = match self.settings_nav {
+            SettingsNav::General => div()
+                .flex()
+                .flex_col()
+                .gap(px(22.))
+                .child(self.settings_inset_group(
+                    "アプリケーション",
+                    vec![
+                        ("起動時のページ", "エディタ"),
+                        ("言語", "日本語（システムに追従）"),
+                        ("更新", "自動で確認（β）"),
+                    ],
+                ))
+                .child(self.settings_inset_group(
+                    "ファイル",
+                    vec![
+                        ("既定の改行", "LF"),
+                        ("既定のエンコーディング", "UTF-8"),
+                    ],
+                )),
+            SettingsNav::Appearance => div()
+                .flex()
+                .flex_col()
+                .gap(px(22.))
+                .child(self.settings_inset_group(
+                    "テーマ",
+                    vec![
+                        ("カラーテーマ", "ダーク（VS Code 風）"),
+                        ("アクセント", "ブルー"),
+                    ],
+                ))
+                .child(self.settings_inset_group(
+                    "エディタ",
+                    vec![
+                        ("エディタフォント", "Cascadia Code 13pt"),
+                        ("行番号", "表示"),
+                        ("ミニマップ", "オフ"),
+                    ],
+                )),
+            SettingsNav::AiAssistant => div()
+                .flex()
+                .flex_col()
+                .gap(px(22.))
+                .child(self.settings_inset_group(
+                    "応答",
+                    vec![
+                        ("創造性（Temperature）", "0.7"),
+                        ("最大出力トークン", "2048"),
+                        ("システムプロンプト", "既定のまま"),
+                    ],
+                ))
+                .child(self.settings_inset_group(
+                    "コンテキスト",
+                    vec![("会話ウィンドウ", "約 4096 トークン相当")],
+                )),
+            SettingsNav::ModelsHardware => div()
+                .flex()
+                .flex_col()
+                .gap(px(22.))
+                .child(self.settings_inset_group(
+                    "ローカルモデル",
+                    vec![
+                        ("形式", "GGUF / ONNX"),
+                        ("読み込み先", "未設定"),
+                    ],
+                ))
+                .child(self.settings_inset_group(
+                    "ハードウェア",
+                    vec![
+                        ("GPU アクセラレーション", "オン"),
+                        ("オフロード層数", "32"),
+                        ("CPU スレッド", "8"),
+                    ],
+                )),
+            SettingsNav::Privacy => div()
+                .flex()
+                .flex_col()
+                .gap(px(22.))
+                .child(self.settings_inset_group(
+                    "データ",
+                    vec![
+                        ("クラウド補完へコードを送る", "オフ"),
+                        ("クラッシュレポート", "オフ"),
+                    ],
+                )),
+            SettingsNav::ApiKeys => div()
+                .flex()
+                .flex_col()
+                .gap(px(22.))
+                .child(self.settings_inset_group(
+                    "プロバイダー",
+                    vec![
+                        ("OpenAI API", "未設定"),
+                        ("Anthropic API", "未設定"),
+                        ("カスタムエンドポイント", "未設定"),
+                    ],
+                )),
+        };
+
+        div()
+            .max_w(px(720.))
+            .flex()
+            .flex_col()
+            .gap(px(18.))
+            .child(
+                div()
+                    .text_size(px(17.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(hex(TEXT_PRIMARY))
+                    .child(title.to_string()),
+            )
+            .child(body)
     }
 
     // ============================================================
@@ -1172,6 +1377,7 @@ fn main() {
                         explorer_expanded,
                         explorer_selection: None,
                         editor_view,
+                        settings_nav: SettingsNav::default(),
                     }
                 })
             },
