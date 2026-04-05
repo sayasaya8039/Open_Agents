@@ -128,7 +128,7 @@ oag_model_t* oag_model_load(const char* path, oag_backend_t* backend) {
 
     if (!m->output && m->tok_embd) {
         m->output = oag_tensor_clone(m->tok_embd);
-        printf("[Model] output.weight / lm_head.weight なし; 埋め込み行列を出力用に共有（tied）\n");
+        printf("[Model] No output.weight / lm_head.weight; tied token embeddings for LM head\n");
     }
 
     // Load layers
@@ -163,15 +163,22 @@ oag_model_t* oag_model_load(const char* path, oag_backend_t* backend) {
         snprintf(name, sizeof(name), "blk.%u.ffn_up.weight", l);
         m->layers[l].w3 = load_tensor_f32(gguf, name);
 
-        if (l == 0) {
-            printf("[Model] Layer 0 loaded: attn_norm=%s wq=%s\n",
-                   m->layers[l].attn_norm ? "OK" : "MISS",
-                   m->layers[l].wq ? "OK" : "MISS");
+        if (l == 0 || l + 1 == m->n_layer || (l + 1) % 7 == 0) {
+            printf("[Model] Layer %u/%u ...\n", l + 1, m->n_layer);
         }
     }
 
-    // Create KV cache
-    m->kv_cache = oag_kv_cache_create(m->n_layer, m->n_ctx, m->n_embd);
+    /* KV は n_ctx フルではなくキャップ（メモリ・初期化時間が現実的な範囲に） */
+    uint32_t ctx_meta  = m->n_ctx;
+    uint32_t kv_slots  = ctx_meta;
+    if (kv_slots > OAG_KV_CTX_CAP) {
+        printf("[Model] KV cache context: %u -> %u slots (GGUF train max was %u)\n",
+               ctx_meta, OAG_KV_CTX_CAP, ctx_meta);
+        kv_slots = OAG_KV_CTX_CAP;
+    } else {
+        printf("[Model] KV cache context: %u slots\n", kv_slots);
+    }
+    m->kv_cache = oag_kv_cache_create(m->n_layer, kv_slots, m->n_embd);
 
     double t1 = get_time_ms();
     printf("[Model] Loaded in %.1f ms\n", t1 - t0);
@@ -450,7 +457,22 @@ int32_t* oag_model_generate(oag_model_t* model,
                              int32_t* out_n_generated) {
     oag_sampler_t* sampler = oag_sampler_create(params.sampler);
     int32_t max_gen = params.max_tokens;
-    int32_t* output = (int32_t*)malloc((n_prompt + max_gen) * sizeof(int32_t));
+    int32_t kv_lim = model->kv_cache ? model->kv_cache->n_ctx : 0;
+    if (kv_lim > 0 && n_prompt > kv_lim) {
+        fprintf(stderr, "[Gen] Prompt length %d > KV context %d; raise OAG_KV_CTX_CAP or shorten prompt\n",
+                n_prompt, kv_lim);
+        oag_sampler_free(sampler);
+        *out_n_generated = 0;
+        return NULL;
+    }
+    if (kv_lim > 0 && n_prompt + max_gen > kv_lim) {
+        int32_t allowed = kv_lim - n_prompt;
+        if (allowed < 0) allowed = 0;
+        fprintf(stderr, "[Gen] Clamping max_tokens %d -> %d (KV context %d)\n",
+                max_gen, allowed, kv_lim);
+        max_gen = allowed;
+    }
+    int32_t* output = (int32_t*)malloc((size_t)(n_prompt + max_gen + 1) * sizeof(int32_t));
     memcpy(output, prompt_tokens, n_prompt * sizeof(int32_t));
 
     // Reset KV cache

@@ -48,7 +48,7 @@ static void init_device_scheduler(oag_device_scheduler_t* ds) {
             oag_device_info_t info;
             if (ds->gpu->vt->get_device_info) {
                 ds->gpu->vt->get_device_info(ds->gpu, &info);
-                printf("[Scheduler] GPU: %s (%.1f GB) → %s\n",
+                printf("[Scheduler] GPU: %s (%.1f GB) -> %s\n",
                        info.name,
                        info.memory_total / (1024.0 * 1024.0 * 1024.0),
                        oag_backend_type_name(gpu_type));
@@ -196,6 +196,10 @@ char* oag_inference_chat(oag_inference_t* inf, oag_chat_params_t params) {
 
     int32_t n_gen;
     int32_t* output = oag_model_generate(inf->model, tokens, (int32_t)n_tokens, gen, &n_gen);
+    if (!output) {
+        free(tokens);
+        return strdup("[Error: generation failed (prompt too long for KV cache or OOM)]");
+    }
 
     // Decode generated tokens
     char* result = oag_tokenizer_decode_batch(inf->model->tokenizer,
@@ -217,18 +221,18 @@ char* oag_inference_chat(oag_inference_t* inf, oag_chat_params_t params) {
 // ============================================================
 
 void oag_inference_print_stats(const oag_inference_t* inf) {
-    printf("╔══════════════════════════════════════╗\n");
-    printf("║     Open_Agents Performance Stats    ║\n");
-    printf("╠══════════════════════════════════════╣\n");
-    printf("║ Total tokens:  %8lld              ║\n", (long long)inf->total_tokens);
-    printf("║ Total time:    %8.1f ms           ║\n", inf->total_time_ms);
+    printf("+--------------------------------------+\n");
+    printf("|     Open_Agents Performance Stats    |\n");
+    printf("+--------------------------------------+\n");
+    printf("| Total tokens:  %8lld              |\n", (long long)inf->total_tokens);
+    printf("| Total time:    %8.1f ms           |\n", inf->total_time_ms);
     if (inf->total_time_ms > 0) {
-        printf("║ Throughput:    %8.1f tok/s        ║\n",
+        printf("| Throughput:    %8.1f tok/s        |\n",
                inf->total_tokens / (inf->total_time_ms / 1000.0));
     }
-    printf("║ Backend:       CPU");
+    printf("| Backend:       CPU");
     if (inf->devices.use_gpu) printf("+GPU");
     if (inf->devices.use_npu) printf("+NPU");
-    printf("              ║\n");
-    printf("╚══════════════════════════════════════╝\n");
+    printf("              |\n");
+    printf("+--------------------------------------+\n");
 }

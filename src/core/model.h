@@ -2,6 +2,11 @@
 #ifndef OAG_MODEL_H
 #define OAG_MODEL_H
 
+/* GGUF の n_ctx は学習時最大（例: 131072）。それをそのまま KV 確保すると数十〜百 GB になりフリーズする */
+#ifndef OAG_KV_CTX_CAP
+#define OAG_KV_CTX_CAP 8192u
+#endif
+
 #include "core/gguf.h"
 #include "core/tensor.h"
 #include "core/tokenizer.h"
