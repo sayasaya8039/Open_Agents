@@ -24,6 +24,8 @@ pub struct EditorView {
     ime_range: Option<Range<usize>>,
     /// マウスドラッグ中フラグ
     dragging: bool,
+    /// エディタ content 領域の bounds（マウス座標変換用）
+    editor_bounds: Bounds<Pixels>,
 }
 
 impl EditorView {
@@ -39,6 +41,7 @@ impl EditorView {
             ime_text: None,
             ime_range: None,
             dragging: false,
+            editor_bounds: Bounds::default(),
         }
     }
 
@@ -520,21 +523,30 @@ impl EditorView {
 
     // --- マウス操作 ---
 
-    /// ピクセル座標からバッファ位置を計算（スクロールオフセット考慮）
+    /// ピクセル座標からバッファ位置を計算
+    /// point はウィンドウ座標、editor_bounds を引いてローカル座標にする
     fn position_from_point(&self, point: Point<Pixels>) -> Position {
         let line_height = px(20.);
         let char_width = px(8.);
         let gutter_width = px(48.);
 
-        // uniform_list のスクロールオフセットを取得
+        // ウィンドウ座標 → エディタローカル座標
+        let local_x = point.x - self.editor_bounds.origin.x;
+        let local_y = point.y - self.editor_bounds.origin.y;
+
+        // スクロールオフセット考慮（scroll offset.y は負値）
         let scroll_offset = self.scroll_handle.0.borrow()
             .base_handle.offset();
-        // scroll_offset.y は負の値（上にスクロールした分）
-        let adjusted_y = point.y - scroll_offset.y;
+        let scrolled_y = local_y - scroll_offset.y;
 
-        let line = ((adjusted_y / line_height) as usize)
-            .min(self.buffer.line_count().saturating_sub(1));
-        let adjusted_x = (point.x - gutter_width).max(px(0.));
+        let line = if scrolled_y < px(0.) {
+            0
+        } else {
+            ((scrolled_y / line_height) as usize)
+                .min(self.buffer.line_count().saturating_sub(1))
+        };
+
+        let adjusted_x = (local_x - gutter_width).max(px(0.));
         let mut col = ((adjusted_x / char_width) as usize)
             .min(self.buffer.line_len(line));
         // char boundary にスナップ
@@ -688,6 +700,20 @@ impl Render for EditorView {
             .flex_col()
             .bg(hex(BG))
             .font_family("Cascadia Code")
+            // editor_bounds を記録する canvas
+            .child({
+                let bounds_entity = entity.clone();
+                canvas(
+                    |bounds, _window, _cx| bounds,
+                    move |_bounds, prepaint_bounds, _window, cx| {
+                        bounds_entity.update(cx, |this: &mut Self, _cx| {
+                            this.editor_bounds = prepaint_bounds;
+                        });
+                    },
+                )
+                .absolute()
+                .size_full()
+            })
             .child(
                 // uniform_list で仮想スクロール
                 uniform_list("editor-lines", line_count, {
