@@ -70,6 +70,19 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("shell32");
     exe.linkSystemLibrary("user32");
 
+    // ========== SIMD Zig Module ==========
+    // Build as separate object and link into exe
+    const simd_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/simd_ops.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const simd_obj = b.addObject(.{
+        .name = "oag_simd",
+        .root_module = simd_mod,
+    });
+    exe.addObject(simd_obj);
+
     b.installArtifact(exe);
 
     // ========== Run step ==========
