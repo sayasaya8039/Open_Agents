@@ -4,10 +4,10 @@ use std::ops::Range;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window,
-    WrappedLine, actions, div, fill, point, prelude::*, px, relative, rgba, size,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    SharedString, Style, Subscription, TextAlign, TextRun, UTF16Selection, UnderlineStyle,
+    Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative, rgba, size,
 };
 use unicode_segmentation::*;
 
@@ -377,30 +377,6 @@ impl ChatComposer {
             cx.emit(SubmitChat);
         }
     }
-
-    /// Windows などで `enter` のキーマップがフォーカスパスで解決されない場合、`WM_CHAR` 側は
-    /// 制御文字として捨てられ送信も起きない。Capture でフォールバックする。
-    fn capture_enter_submit(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if event.keystroke.key != "enter" {
-            return;
-        }
-        if event.keystroke.modifiers.modified() {
-            return;
-        }
-        if !self.focus_handle.is_focused(window) {
-            return;
-        }
-        if self.marked_range.is_some() {
-            return;
-        }
-        self.submit_chat(&ChatSubmit, window, cx);
-        cx.stop_propagation();
-    }
 }
 
 impl EventEmitter<SubmitChat> for ChatComposer {}
@@ -768,7 +744,6 @@ impl Render for ChatComposer {
             .key_context("ChatComposer")
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
-            .capture_key_down(cx.listener(Self::capture_enter_submit))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
@@ -831,4 +806,23 @@ pub fn register_keybindings(cx: &mut App) {
         KeyBinding::new("enter", ChatSubmit, Some("ChatComposer")),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("ChatComposer")),
     ]);
+}
+
+pub fn install_enter_submit_interceptor(cx: &mut App) -> Subscription {
+    cx.intercept_keystrokes(|event, window, cx| {
+        if event.keystroke.key != "enter" {
+            return;
+        }
+        if event.keystroke.modifiers.modified() {
+            return;
+        }
+        if !window.is_action_available(&ChatSubmit, cx) {
+            return;
+        }
+        let Some(focused) = window.focused(cx) else {
+            return;
+        };
+        focused.dispatch_action(&ChatSubmit, window, cx);
+        cx.stop_propagation();
+    })
 }

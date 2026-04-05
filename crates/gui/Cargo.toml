@@ -1,7 +1,10 @@
 [package]
 name = "open-agents-gui"
-version = "0.2.37"
+version = "0.2.39"
 edition = "2021"
+
+[features]
+test-support = ["gpui/test-support"]
 
 [[bin]]
 name = "open_agents"

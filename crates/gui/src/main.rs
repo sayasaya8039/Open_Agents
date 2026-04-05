@@ -116,6 +116,67 @@ mod tests {
         assert_eq!(human_readable_size(1024), "1.0 KB");
         assert_eq!(human_readable_size(5 * 1024 * 1024), "5.0 MB");
     }
+
+    #[cfg(feature = "test-support")]
+    mod chat_submit_tests {
+        use super::super::{chat_composer, install_chat_submit_fallback};
+        use gpui::{
+            AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
+            TestAppContext, Window, div,
+        };
+
+        struct ChatSubmitHarness {
+            composer: Entity<chat_composer::ChatComposer>,
+            submit_count: usize,
+        }
+
+        impl ChatSubmitHarness {
+            fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+                let composer =
+                    cx.new(|ecx| chat_composer::ChatComposer::new(ecx, "メッセージを入力…"));
+                composer.read(cx).focus(window);
+                cx.subscribe(
+                    &composer,
+                    |this: &mut Self, _, _: &chat_composer::SubmitChat, cx| {
+                        this.submit_count += 1;
+                        cx.notify();
+                    },
+                )
+                .detach();
+
+                Self {
+                    composer,
+                    submit_count: 0,
+                }
+            }
+        }
+
+        impl Render for ChatSubmitHarness {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().child(self.composer.clone())
+            }
+        }
+
+        #[gpui::test]
+        async fn enter_submit_fallback_remains_active(cx: &mut TestAppContext) {
+            cx.update(|cx| install_chat_submit_fallback(cx));
+            let (view, cx) = cx.add_window_view(ChatSubmitHarness::new);
+            cx.update(|window, cx| {
+                view.read(cx).composer.read(cx).focus(window);
+                window.activate_window();
+            });
+
+            cx.simulate_input("hello");
+            cx.simulate_keystrokes("enter");
+
+            let submit_count = cx.update(|_, cx| view.read(cx).submit_count);
+            assert_eq!(submit_count, 1);
+        }
+    }
 }
 
 // ============================================================
@@ -3233,11 +3294,16 @@ impl AppView {
 // Entry Point
 // ============================================================
 
+fn install_chat_submit_fallback(cx: &mut App) {
+    chat_composer::install_enter_submit_interceptor(cx).detach();
+}
+
 fn main() {
     Application::new().run(|cx: &mut App| {
         // キーバインド登録
         editor::actions::register_keybindings(cx);
         chat_composer::register_keybindings(cx);
+        install_chat_submit_fallback(cx);
 
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
 
