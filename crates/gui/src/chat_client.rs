@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 
 use crate::api_key_prefs::ApiKeyPrefs;
+use crate::llama_cpp_chat;
 use crate::model_prefs::{ChatInferenceSource, ChatPrefs};
-use crate::native_chat;
 use serde_json::{json, Value};
 
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api";
@@ -23,8 +23,8 @@ pub enum ChatBackend {
         base_url: String,
         model: String,
     },
-    /// ネイティブ C コア（GGUF / ONNX ファイルパス）
-    Native { path: PathBuf },
+    /// llama.cpp サーバ経由でローカル GGUF を実行
+    LlamaCppLocal { path: PathBuf },
 }
 
 fn trimmed_or(s: &str, default: &str) -> String {
@@ -75,7 +75,11 @@ fn resolve_local_weights(paths: &[PathBuf], index: usize) -> Result<ChatBackend,
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
     match ext.as_deref() {
-        Some("gguf") | Some("onnx") => Ok(ChatBackend::Native { path }),
+        Some("gguf") => Ok(ChatBackend::LlamaCppLocal { path }),
+        Some("onnx") => Err(
+            "Chat のローカル ONNX は現状未対応です。GGUF を選択するか、設定で「Ollama」またはクラウド API に切り替えてください。"
+                .into(),
+        ),
         Some(other) => Err(format!(
             "Chat 用ローカルモデルは .gguf または .onnx です（現在: .{other}）"
         )),
@@ -232,8 +236,8 @@ pub fn complete_chat_blocking(
                 .map(|s| s.to_string())
                 .ok_or_else(|| format!("想定外の Ollama 応答: {text}"))
         }
-        ChatBackend::Native { path } => {
-            native_chat::complete_native_chat_blocking(
+        ChatBackend::LlamaCppLocal { path } => {
+            llama_cpp_chat::complete_llama_cpp_chat_blocking(
                 path,
                 messages,
                 temperature,
@@ -342,9 +346,25 @@ mod tests {
         let paths = vec![path.clone()];
         let b = resolve_chat_backend(&p, &chat, &paths).expect("backend");
         match b {
-            ChatBackend::Native { path } => assert!(path.to_string_lossy().ends_with(".gguf")),
-            _ => panic!("expected native"),
+            ChatBackend::LlamaCppLocal { path } => {
+                assert!(path.to_string_lossy().ends_with(".gguf"))
+            }
+            _ => panic!("expected llama.cpp local backend"),
         }
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn local_weights_rejects_onnx_for_chat() {
+        let p = ApiKeyPrefs::default();
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::LocalWeights,
+            ..Default::default()
+        };
+        let path = std::env::temp_dir().join("open_agents_chat_local_model.onnx");
+        fs::write(&path, b"onnx").unwrap();
+        let err = resolve_chat_backend(&p, &chat, &[path.clone()]).unwrap_err();
+        assert!(err.contains("ONNX"));
         let _ = fs::remove_file(path);
     }
 

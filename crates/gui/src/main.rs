@@ -1,5 +1,7 @@
 mod api_key_prefs;
+#[cfg(any(test, feature = "test-support"))]
 mod native_chat;
+mod llama_cpp_chat;
 mod chat_client;
 mod chat_composer;
 mod editor;
@@ -543,7 +545,7 @@ impl AppView {
             role: "assistant".into(),
             content: match self.chat_prefs.source {
                 model_prefs::ChatInferenceSource::LocalWeights => {
-                    "GGUF モデルを準備中です… 初回ロードは時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
+                    "GGUF モデルを準備中です… llama.cpp サーバの初回起動には時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
                 }
                 _ => "応答を待っています…".into(),
             },
