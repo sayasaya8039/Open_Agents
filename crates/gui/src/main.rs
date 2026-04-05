@@ -1,4 +1,6 @@
 mod api_key_prefs;
+mod chat_client;
+mod chat_composer;
 mod editor;
 mod model_prefs;
 mod project_explorer;
@@ -214,6 +216,9 @@ struct AppView {
     /// フォーカス/選択行
     explorer_selection: Option<Vec<String>>,
     editor_view: Entity<EditorView>,
+    chat_composer: Entity<chat_composer::ChatComposer>,
+    /// Chat API リクエスト送信中（再送信ガード）
+    chat_pending: bool,
 }
 
 impl AppView {
@@ -367,6 +372,73 @@ impl AppView {
             self.persist_local_llm_prefs();
         }
         cx.notify();
+    }
+
+    /// Chat: Enter / 送信ボタンから呼ばれ、外部 API または Ollama で応答を取得する。
+    fn on_chat_submitted(&mut self, cx: &mut Context<Self>) {
+        if self.chat_pending {
+            return;
+        }
+        let text = self.chat_composer.read(cx).text().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+
+        let api_messages: Vec<(String, String)> = self
+            .chat_messages
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .chain(std::iter::once(("user".into(), text.clone())))
+            .collect();
+
+        self.chat_composer.update(cx, |c, ecx| c.clear(ecx));
+
+        self.chat_messages.push(ChatMsg {
+            role: "user".into(),
+            content: text,
+            thinking: None,
+        });
+        self.chat_messages.push(ChatMsg {
+            role: "assistant".into(),
+            content: "応答を待っています…".into(),
+            thinking: None,
+        });
+        self.chat_pending = true;
+        cx.notify();
+
+        let api_keys = self.api_keys.clone();
+        let temperature = self.model_params.temperature;
+        let max_tokens = self.model_params.max_output_tokens;
+        let chat_model = String::new();
+
+        cx.spawn(async move |this, cx| {
+            let result: Result<String, String> = smol::unblock(move || {
+                let backend = chat_client::resolve_backend(&api_keys, &chat_model)?;
+                chat_client::complete_chat_blocking(
+                    &backend,
+                    &api_messages,
+                    temperature,
+                    max_tokens,
+                )
+            })
+            .await;
+
+            let _ = cx.update(|app| {
+                let _ = this.update(app, |this: &mut AppView, cx| {
+                    this.chat_pending = false;
+                    if let Some(last) = this.chat_messages.last_mut() {
+                        if last.role == "assistant" {
+                            last.content = match result {
+                                Ok(reply) => reply,
+                                Err(e) => format!("エラー: {e}"),
+                            };
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 }
 
@@ -1241,6 +1313,7 @@ impl AppView {
     fn render_chat_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let show_suggestions = self.chat_messages.len() == 1;
         let thinking_toggle = self.chat_show_thinking;
+        let send_disabled = self.chat_pending;
 
         div()
             .flex_1()
@@ -1470,16 +1543,11 @@ impl AppView {
                                             .border_1()
                                             .border_color(hex(BORDER))
                                             .rounded(px(12.))
-                                            .px(px(16.))
-                                            .py(px(12.))
+                                            .px(px(12.))
+                                            .py(px(8.))
                                             .flex()
-                                            .items_start()
-                                            .child(
-                                                div()
-                                                    .text_size(px(13.))
-                                                    .text_color(hex(TEXT_MUTED))
-                                                    .child("メッセージを入力してください..."),
-                                            ),
+                                            .items_center()
+                                            .child(self.chat_composer.clone()),
                                     )
                                     .child(
                                         div()
@@ -1488,12 +1556,29 @@ impl AppView {
                                             .mr(px(4.))
                                             .p(px(8.))
                                             .rounded(px(8.))
-                                            .bg(hex(ACCENT_BLUE))
+                                            .bg(if send_disabled {
+                                                hex_a(ACCENT_BLUE, 0.45)
+                                            } else {
+                                                hex(ACCENT_BLUE)
+                                            })
                                             .flex()
                                             .items_center()
                                             .justify_center()
                                             .text_size(px(12.))
                                             .text_color(hex(0xFFFFFF))
+                                            .cursor(if send_disabled {
+                                                CursorStyle::OperationNotAllowed
+                                            } else {
+                                                CursorStyle::PointingHand
+                                            })
+                                            .when(!send_disabled, |d| {
+                                                d.on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.on_chat_submitted(cx);
+                                                    }),
+                                                )
+                                            })
                                             .child("➤"),
                                     ),
                             )
@@ -1515,17 +1600,7 @@ impl AppView {
                                             .text_size(px(10.))
                                             .child("Enter"),
                                     )
-                                    .child("で送信、".to_string())
-                                    .child(
-                                        div()
-                                            .px(px(6.))
-                                            .py(px(2.))
-                                            .bg(hex(BORDER))
-                                            .rounded(px(4.))
-                                            .text_size(px(10.))
-                                            .child("Shift + Enter"),
-                                    )
-                                    .child("で改行".to_string()),
+                                    .child("で送信".to_string()),
                             ),
                     ),
             )
@@ -2697,6 +2772,7 @@ fn main() {
     Application::new().run(|cx: &mut App| {
         // キーバインド登録
         editor::actions::register_keybindings(cx);
+        chat_composer::register_keybindings(cx);
 
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
 
@@ -2732,6 +2808,15 @@ fn main() {
                     let api_keys = api_key_prefs::load_api_keys();
                     let appearance = local_llm.appearance.clone();
                     let editor_view = cx.new(|ecx| EditorView::new(ecx, &appearance));
+                    let chat_composer = cx.new(|ecx| {
+                        chat_composer::ChatComposer::new(ecx, "メッセージを入力…")
+                    });
+                    let _ = cx.subscribe(
+                        &chat_composer,
+                        |this: &mut AppView, _, _: &chat_composer::SubmitChat, cx| {
+                            this.on_chat_submitted(cx);
+                        },
+                    );
                     AppView {
                         page: Page::Editor,
                         chat_messages: vec![ChatMsg {
@@ -2752,6 +2837,8 @@ fn main() {
                         explorer_expanded,
                         explorer_selection: None,
                         editor_view,
+                        chat_composer,
+                        chat_pending: false,
                     }
                 })
             },
