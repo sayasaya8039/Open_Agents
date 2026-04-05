@@ -2,6 +2,7 @@ mod api_key_prefs;
 #[cfg(any(test, feature = "test-support"))]
 mod native_chat;
 mod llama_cpp_chat;
+mod llama_cpp_runtime;
 mod chat_client;
 mod chat_composer;
 mod editor;
@@ -327,6 +328,12 @@ struct AppView {
     chat_composer: Entity<chat_composer::ChatComposer>,
     /// Chat API リクエスト送信中（再送信ガード）
     chat_pending: bool,
+    /// 同梱 llama.cpp runtime manifest
+    llama_cpp_manifest: Option<llama_cpp_runtime::BundledLlamaManifest>,
+    /// 同梱 runtime 読み込み失敗時の表示用
+    llama_cpp_bundle_error: Option<String>,
+    /// GitHub Releases の更新通知
+    llama_cpp_update_notice: Option<llama_cpp_runtime::LlamaCppUpdateNotice>,
 }
 
 impl AppView {
@@ -545,7 +552,7 @@ impl AppView {
             role: "assistant".into(),
             content: match self.chat_prefs.source {
                 model_prefs::ChatInferenceSource::LocalWeights => {
-                    "GGUF モデルを準備中です… llama.cpp サーバの初回起動には時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
+                    "GGUF モデルを準備中です… 内蔵 llama.cpp サーバの初回起動には時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
                 }
                 _ => "応答を待っています…".into(),
             },
@@ -2033,6 +2040,47 @@ impl AppView {
         }
     }
 
+    fn llama_cpp_bundle_status_line(&self) -> String {
+        if let Some(manifest) = &self.llama_cpp_manifest {
+            return format!(
+                "内蔵 llama-server: {} ({})",
+                manifest.llama_server_version, manifest.platform
+            );
+        }
+        "内蔵 llama-server: manifest 未検出".to_string()
+    }
+
+    fn copy_llama_cpp_release_url(&mut self, cx: &mut Context<Self>) {
+        if let Some(notice) = &self.llama_cpp_update_notice {
+            cx.write_to_clipboard(ClipboardItem::new_string(notice.release_url.clone()));
+        }
+    }
+
+    fn start_llama_cpp_update_check(&mut self, cx: &mut Context<Self>) {
+        let Some(manifest) = self.llama_cpp_manifest.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let notice = smol::unblock(move || {
+                let latest = llama_cpp_runtime::fetch_latest_release().ok()?;
+                llama_cpp_runtime::compute_update_notice(&manifest, &latest)
+            })
+            .await;
+
+            let Some(notice) = notice else {
+                return;
+            };
+
+            let _ = cx.update(|app| {
+                let _ = this.update(app, |this: &mut AppView, cx| {
+                    this.llama_cpp_update_notice = Some(notice);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     fn settings_chat_inference_block(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let source_label = self.chat_prefs.source.label();
         let api_disp: SharedString = if self.chat_prefs.api_model.is_empty() {
@@ -2041,6 +2089,9 @@ impl AppView {
             self.chat_prefs.api_model.clone().into()
         };
         let ollama_disp: SharedString = self.chat_prefs.ollama_model.clone().into();
+        let bundle_status: SharedString = self.llama_cpp_bundle_status_line().into();
+        let bundle_error = self.llama_cpp_bundle_error.clone();
+        let update_notice = self.llama_cpp_update_notice.clone();
 
         div()
             .pt(px(16.))
@@ -2055,14 +2106,79 @@ impl AppView {
                     .text_color(hex(TEXT_PRIMARY))
                     .child("Chat での推論"),
             )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_DIM))
                     .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(hex(TEXT_DIM))
-                            .child(
-                                "チャット送信時の推論先。「Ollama」は HTTP サーバ、「GGUF/ONNX」は設定に追加したファイルをネイティブ実行します。",
-                            ),
-                    )
+                        "チャット送信時の推論先。「Ollama」は HTTP サーバ、「GGUF/ONNX」は設定に追加したファイルを内蔵 llama.cpp runtime 経由で実行します。",
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_MUTED))
+                    .child(bundle_status),
+            )
+            .when(bundle_error.is_some(), |d| {
+                d.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(hex(ACCENT_ORANGE))
+                        .whitespace_normal()
+                        .child(bundle_error.clone().unwrap_or_default()),
+                )
+            })
+            .when(update_notice.is_some(), |d| {
+                let notice = update_notice.clone().unwrap();
+                d.child(
+                    div()
+                        .mt(px(4.))
+                        .p(px(10.))
+                        .bg(hex(0x3b2b1c))
+                        .border_1()
+                        .border_color(hex(ACCENT_ORANGE))
+                        .rounded(px(8.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(hex(ACCENT_ORANGE))
+                                .child(format!(
+                                    "llama-server 更新あり: {} → {}",
+                                    notice.current_tag, notice.latest_tag
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(hex(TEXT_MUTED))
+                                .whitespace_normal()
+                                .child(notice.release_url.clone()),
+                        )
+                        .child(
+                            div()
+                                .px(px(10.))
+                                .py(px(5.))
+                                .bg(hex(CONTROL_BG))
+                                .border_1()
+                                .border_color(hex(CONTROL_BORDER))
+                                .rounded(px(6.))
+                                .text_size(px(11.))
+                                .text_color(hex(TEXT_SECONDARY))
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                        this.copy_llama_cpp_release_url(cx);
+                                    }),
+                                )
+                                .child("リリース URL をコピー"),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -3393,6 +3509,12 @@ fn main() {
                     let chat_composer = cx.new(|ecx| {
                         chat_composer::ChatComposer::new(ecx, "メッセージを入力…")
                     });
+                    let llama_cpp_manifest_result = llama_cpp_runtime::load_bundled_manifest();
+                    let (llama_cpp_manifest, llama_cpp_bundle_error) =
+                        match llama_cpp_manifest_result {
+                            Ok(manifest) => (Some(manifest), None),
+                            Err(err) => (None, Some(err)),
+                        };
                     cx.subscribe(
                         &chat_composer,
                         |this: &mut AppView, _, _: &chat_composer::SubmitChat, cx| {
@@ -3400,7 +3522,7 @@ fn main() {
                         },
                     )
                     .detach();
-                    AppView {
+                    let mut app = AppView {
                         page: Page::Editor,
                         chat_messages: vec![ChatMsg {
                             role: "assistant".into(),
@@ -3423,7 +3545,12 @@ fn main() {
                         editor_view,
                         chat_composer,
                         chat_pending: false,
-                    }
+                        llama_cpp_manifest,
+                        llama_cpp_bundle_error,
+                        llama_cpp_update_notice: None,
+                    };
+                    app.start_llama_cpp_update_check(cx);
+                    app
                 })
             },
         )

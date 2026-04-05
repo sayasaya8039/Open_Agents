@@ -1,6 +1,5 @@
 //! ローカル GGUF を `llama-server` 経由で叩く最小ランタイム。
 
-use std::env;
 use std::io::{BufRead, BufReader, Read};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -10,6 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+use crate::llama_cpp_runtime;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -86,9 +87,8 @@ fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, Stri
         }
     }
 
-    let binary = find_llama_server_binary().ok_or_else(|| {
-        "llama-server が見つかりません。llama.cpp をインストールして `llama-server(.exe)` を PATH に追加するか、`open_agents.exe` と同じフォルダに配置してください。".to_string()
-    })?;
+    let binary = find_llama_server_binary()
+        .ok_or_else(missing_bundled_runtime_message)?;
     let port = pick_free_port()?;
     let base_url = format!("http://127.0.0.1:{port}");
     let logs = Arc::new(Mutex::new(String::new()));
@@ -282,57 +282,19 @@ fn available_thread_count() -> usize {
 }
 
 fn find_llama_server_binary() -> Option<PathBuf> {
-    for dir in candidate_search_dirs() {
-        for name in candidate_binary_names() {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    if let Some(path) = env::var_os("PATH") {
-        for dir in env::split_paths(&path) {
-            for name in candidate_binary_names() {
-                let candidate = dir.join(name);
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
-        }
-    }
-
-    None
+    llama_cpp_runtime::bundled_server_binary()
 }
 
-fn candidate_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(exe) = env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            dirs.push(dir.to_path_buf());
-        }
-    }
-    if let Ok(cwd) = env::current_dir() {
-        if !dirs.iter().any(|dir| dir == &cwd) {
-            dirs.push(cwd);
-        }
-    }
-    dirs
-}
-
-fn candidate_binary_names() -> &'static [&'static str] {
-    #[cfg(windows)]
-    {
-        &[
-            "llama-server.exe",
-            "llama-server-cuda.exe",
-            "llama-server-vulkan.exe",
-        ]
-    }
-    #[cfg(not(windows))]
-    {
-        &["llama-server"]
-    }
+fn missing_bundled_runtime_message() -> String {
+    let search_roots = llama_cpp_runtime::bundled_runtime_search_dirs();
+    format!(
+        "内蔵 llama-server が見つかりません。`open_agents.exe` と同じフォルダに同梱 runtime が配置されている必要があります。`cargo build --release -p open-agents-gui` をやり直すか、配布物を再配置してください。探索先: {}",
+        search_roots
+            .iter()
+            .map(|dir| dir.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 #[cfg(test)]
@@ -347,15 +309,15 @@ mod tests {
     }
 
     #[test]
-    fn candidate_binary_names_include_llama_server() {
-        assert!(candidate_binary_names()
-            .iter()
-            .any(|name| name.starts_with("llama-server")));
+    fn missing_runtime_message_mentions_bundled_runtime() {
+        let msg = missing_bundled_runtime_message();
+        assert!(msg.contains("内蔵 llama-server"));
+        assert!(msg.contains("cargo build --release -p open-agents-gui"));
     }
 
     #[test]
-    fn search_dirs_prefer_current_exe_or_cwd() {
-        let dirs = candidate_search_dirs();
+    fn bundled_runtime_search_dirs_are_available() {
+        let dirs = llama_cpp_runtime::bundled_runtime_search_dirs();
         assert!(!dirs.is_empty());
     }
 }
