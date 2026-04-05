@@ -23,6 +23,19 @@ actions!(
     ]
 );
 
+// 選択操作（Shift+矢印）
+actions!(
+    editor,
+    [
+        SelectUp,
+        SelectDown,
+        SelectLeft,
+        SelectRight,
+        SelectToLineStart,
+        SelectToLineEnd,
+    ]
+);
+
 /// キーバインド登録
 pub fn register_keybindings(cx: &mut gpui::App) {
     cx.bind_keys([
@@ -35,6 +48,13 @@ pub fn register_keybindings(cx: &mut gpui::App) {
         KeyBinding::new("end", MoveToLineEnd, Some("Editor")),
         KeyBinding::new("ctrl-left", MoveWordLeft, Some("Editor")),
         KeyBinding::new("ctrl-right", MoveWordRight, Some("Editor")),
+        // 選択（Shift+矢印）
+        KeyBinding::new("shift-up", SelectUp, Some("Editor")),
+        KeyBinding::new("shift-down", SelectDown, Some("Editor")),
+        KeyBinding::new("shift-left", SelectLeft, Some("Editor")),
+        KeyBinding::new("shift-right", SelectRight, Some("Editor")),
+        KeyBinding::new("shift-home", SelectToLineStart, Some("Editor")),
+        KeyBinding::new("shift-end", SelectToLineEnd, Some("Editor")),
         // 編集
         KeyBinding::new("backspace", Backspace, Some("Editor")),
         KeyBinding::new("delete", Delete, Some("Editor")),

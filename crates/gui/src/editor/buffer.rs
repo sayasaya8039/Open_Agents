@@ -96,7 +96,8 @@ impl TextBuffer {
     /// ファイル保存
     pub fn save(&mut self) -> io::Result<()> {
         if let Some(path) = &self.file_path {
-            let content = self.lines.join("\n");
+            let mut content = self.lines.join("\n");
+            content.push('\n');
             std::fs::write(path, &content)?;
             self.dirty = false;
             Ok(())

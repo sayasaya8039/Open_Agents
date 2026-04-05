@@ -53,11 +53,11 @@ impl EditorView {
         }
     }
 
-    /// カーソル位置をスクロール範囲内に維持
+    /// カーソル位置をスクロール範囲内に維持（非strict: 画面内なら何もしない）
     fn ensure_cursor_visible(&self) {
         self.scroll_handle.scroll_to_item(
             self.cursor.position.line,
-            gpui::ScrollStrategy::Center,
+            gpui::ScrollStrategy::Top,
         );
     }
 
@@ -73,7 +73,11 @@ impl EditorView {
 
         // カーソルが現在行にある場合、カーソル位置で行を分割して描画
         let text_element: AnyElement = if is_current && !editor.cursor.has_selection() {
-            let col = editor.cursor.position.column.min(line_text.len());
+            // 多バイト文字の途中を指す場合に備えて char_boundary にスナップ
+            let col = (0..=line_text.len())
+                .rev()
+                .find(|&i| i <= editor.cursor.position.column && line_text.is_char_boundary(i))
+                .unwrap_or(0);
             let before = line_text[..col].to_string();
             let after = line_text[col..].to_string();
             div()
@@ -212,6 +216,74 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         self.cursor.move_word_right(&self.buffer, false);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    // --- 選択ハンドラ（Shift+矢印） ---
+
+    fn handle_select_up(
+        &mut self,
+        _action: &actions::SelectUp,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_up(&self.buffer, true);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn handle_select_down(
+        &mut self,
+        _action: &actions::SelectDown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_down(&self.buffer, true);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn handle_select_left(
+        &mut self,
+        _action: &actions::SelectLeft,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_left(&self.buffer, true);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn handle_select_right(
+        &mut self,
+        _action: &actions::SelectRight,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_right(&self.buffer, true);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn handle_select_to_line_start(
+        &mut self,
+        _action: &actions::SelectToLineStart,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_to_line_start(true);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn handle_select_to_line_end(
+        &mut self,
+        _action: &actions::SelectToLineEnd,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_to_line_end(&self.buffer, true);
         self.ensure_cursor_visible();
         cx.notify();
     }
@@ -401,6 +473,12 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::handle_move_to_line_end))
             .on_action(cx.listener(Self::handle_move_word_left))
             .on_action(cx.listener(Self::handle_move_word_right))
+            .on_action(cx.listener(Self::handle_select_up))
+            .on_action(cx.listener(Self::handle_select_down))
+            .on_action(cx.listener(Self::handle_select_left))
+            .on_action(cx.listener(Self::handle_select_right))
+            .on_action(cx.listener(Self::handle_select_to_line_start))
+            .on_action(cx.listener(Self::handle_select_to_line_end))
             .on_action(cx.listener(Self::handle_backspace))
             .on_action(cx.listener(Self::handle_delete))
             .on_action(cx.listener(Self::handle_enter))
@@ -579,9 +657,11 @@ impl EntityInputHandler for EditorView {
     ) -> Option<usize> {
         let line_height = px(20.);
         let char_width = px(8.);
+        let gutter_width = px(48.);
         let line = ((point.y / line_height) as usize)
             .min(self.buffer.line_count().saturating_sub(1));
-        let col = ((point.x / char_width) as usize)
+        let adjusted_x = (point.x - gutter_width).max(px(0.));
+        let col = ((adjusted_x / char_width) as usize)
             .min(self.buffer.line_len(line));
         Some(
             self.buffer
