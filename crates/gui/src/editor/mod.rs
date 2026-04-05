@@ -12,6 +12,7 @@ use syntax_highlight::{SyntaxColorRole, SyntaxSpan, highlight_buffer};
 use gpui::*;
 use gpui::prelude::*;
 use std::ops::Range;
+use std::path::PathBuf;
 
 use crate::model_prefs::{AppearancePrefs, UiTheme};
 use crate::{hex, hex_a, BG, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY};
@@ -701,12 +702,9 @@ impl EditorView {
         cx.notify();
     }
 
-    fn handle_save(
-        &mut self,
-        _action: &actions::Save,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// ツールバーの保存ボタンと Ctrl+S の共通処理  
+    /// `save_dialog_dir`: 無題のとき「名前を付けて保存」ダイアログの開始ディレクトリ（`None` はカレント）
+    pub fn perform_save(&mut self, cx: &mut Context<Self>, save_dialog_dir: Option<PathBuf>) {
         if self.buffer.file_path().is_some() {
             if let Err(e) = self.buffer.save() {
                 eprintln!("保存エラー: {}", e);
@@ -714,7 +712,8 @@ impl EditorView {
             cx.notify();
         } else {
             // 保存先未設定 → prompt_for_new_path
-            let receiver = cx.prompt_for_new_path(&std::path::PathBuf::from("."), None);
+            let start = save_dialog_dir.unwrap_or_else(|| PathBuf::from("."));
+            let receiver = cx.prompt_for_new_path(&start, None);
             cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
                 if let Ok(Ok(Some(path))) = receiver.await {
                     cx.update(|cx| {
@@ -729,6 +728,15 @@ impl EditorView {
             })
             .detach();
         }
+    }
+
+    fn handle_save(
+        &mut self,
+        _action: &actions::Save,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.perform_save(cx, None);
     }
 
     fn handle_open(

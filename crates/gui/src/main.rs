@@ -1133,7 +1133,7 @@ impl AppView {
     // Editor View — EditorView Entity を組み込む
     // ============================================================
 
-    fn render_editor(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_editor(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_title = self.editor_view.read(cx).tab_title();
 
         div()
@@ -1191,6 +1191,16 @@ impl AppView {
                                     .text_size(px(14.))
                                     .text_color(hex(TEXT_SECONDARY))
                                     .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            let wr = this.workspace_root.clone();
+                                            this.editor_view.update(cx, |ed, ecx| {
+                                                ed.perform_save(ecx, Some(wr));
+                                            });
+                                            cx.notify();
+                                        }),
+                                    )
                                     .child("💾"),
                             ),
                     ),
