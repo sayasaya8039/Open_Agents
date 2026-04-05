@@ -31,6 +31,8 @@ typedef struct {
 
 // Create inference engine
 oag_inference_t* oag_inference_create(const char* model_path);
+oag_inference_t* oag_inference_create_with_ctx(const char* model_path,
+                                               int32_t context_length);
 void             oag_inference_free(oag_inference_t* inf);
 
 // Chat completion (OpenAI-compatible)

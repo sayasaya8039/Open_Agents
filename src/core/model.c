@@ -89,6 +89,12 @@ static oag_tensor_t* load_tensor_f32(const gguf_ctx_t* gguf, const char* name) {
 // ============================================================
 
 oag_model_t* oag_model_load(const char* path, oag_backend_t* backend) {
+    return oag_model_load_with_ctx(path, backend, 0);
+}
+
+oag_model_t* oag_model_load_with_ctx(const char* path,
+                                     oag_backend_t* backend,
+                                     uint32_t requested_ctx_cap) {
     printf("[Model] Loading: %s\n", path);
     double t0 = get_time_ms();
 
@@ -169,12 +175,16 @@ oag_model_t* oag_model_load(const char* path, oag_backend_t* backend) {
     }
 
     /* KV は n_ctx フルではなくキャップ（メモリ・初期化時間が現実的な範囲に） */
-    uint32_t ctx_meta  = m->n_ctx;
-    uint32_t kv_slots  = ctx_meta;
-    if (kv_slots > OAG_KV_CTX_CAP) {
-        printf("[Model] KV cache context: %u -> %u slots (GGUF train max was %u)\n",
-               ctx_meta, OAG_KV_CTX_CAP, ctx_meta);
-        kv_slots = OAG_KV_CTX_CAP;
+    uint32_t ctx_meta = m->n_ctx;
+    uint32_t runtime_cap = OAG_KV_CTX_CAP;
+    if (requested_ctx_cap > 0 && requested_ctx_cap < runtime_cap) {
+        runtime_cap = requested_ctx_cap;
+    }
+    uint32_t kv_slots = ctx_meta;
+    if (kv_slots > runtime_cap) {
+        printf("[Model] KV cache context: %u -> %u slots (runtime cap, train max %u)\n",
+               ctx_meta, runtime_cap, ctx_meta);
+        kv_slots = runtime_cap;
     } else {
         printf("[Model] KV cache context: %u slots\n", kv_slots);
     }

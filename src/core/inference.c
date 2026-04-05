@@ -96,6 +96,11 @@ static void init_device_scheduler(oag_device_scheduler_t* ds) {
 // ============================================================
 
 oag_inference_t* oag_inference_create(const char* model_path) {
+    return oag_inference_create_with_ctx(model_path, 0);
+}
+
+oag_inference_t* oag_inference_create_with_ctx(const char* model_path,
+                                               int32_t context_length) {
     printf("[Inference] Initializing...\n");
     double t0 = inf_get_time_ms();
 
@@ -106,7 +111,11 @@ oag_inference_t* oag_inference_create(const char* model_path) {
 
     // Load model with best available backend
     oag_backend_t* primary = inf->devices.use_gpu ? inf->devices.gpu : inf->devices.cpu;
-    inf->model = oag_model_load(model_path, primary);
+    inf->model = oag_model_load_with_ctx(
+        model_path,
+        primary,
+        context_length > 0 ? (uint32_t)context_length : 0
+    );
     if (!inf->model) {
         fprintf(stderr, "[Inference] Failed to load model\n");
         oag_inference_free(inf);

@@ -499,7 +499,12 @@ impl AppView {
         });
         self.chat_messages.push(ChatMsg {
             role: "assistant".into(),
-            content: "応答を待っています…".into(),
+            content: match self.chat_prefs.source {
+                model_prefs::ChatInferenceSource::LocalWeights => {
+                    "GGUF モデルを準備中です… 初回ロードは時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
+                }
+                _ => "応答を待っています…".into(),
+            },
             thinking: None,
         });
         self.chat_pending = true;
@@ -510,6 +515,7 @@ impl AppView {
         let local_model_paths = self.settings_model_paths.clone();
         let temperature = self.model_params.temperature;
         let max_tokens = self.model_params.max_output_tokens;
+        let context_length = self.model_params.context_length;
 
         cx.spawn(async move |this, cx| {
             let result: Result<String, String> = smol::unblock(move || {
@@ -523,6 +529,7 @@ impl AppView {
                     &api_messages,
                     temperature,
                     max_tokens,
+                    context_length,
                 )
             })
             .await;

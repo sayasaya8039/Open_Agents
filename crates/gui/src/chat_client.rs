@@ -151,6 +151,7 @@ pub fn complete_chat_blocking(
     messages: &[(String, String)],
     temperature: f32,
     max_tokens: i32,
+    context_length: i32,
 ) -> Result<String, String> {
     match backend {
         ChatBackend::OpenAiCompatible {
@@ -222,7 +223,13 @@ pub fn complete_chat_blocking(
                 .ok_or_else(|| format!("想定外の Ollama 応答: {text}"))
         }
         ChatBackend::Native { path } => {
-            native_chat::complete_native_chat_blocking(path, messages, temperature, max_tokens)
+            native_chat::complete_native_chat_blocking(
+                path,
+                messages,
+                temperature,
+                max_tokens,
+                context_length,
+            )
         }
     }
 }

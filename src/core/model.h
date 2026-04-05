@@ -76,6 +76,9 @@ typedef struct {
 
 // Load model from GGUF file
 oag_model_t* oag_model_load(const char* path, oag_backend_t* backend);
+oag_model_t* oag_model_load_with_ctx(const char* path,
+                                     oag_backend_t* backend,
+                                     uint32_t requested_ctx_cap);
 void         oag_model_free(oag_model_t* model);
 
 // Forward pass: token IDs → logits
