@@ -222,6 +222,7 @@ impl EditorView {
 
         div()
             .h(px(20.))
+            .debug_selector(|| format!("editor-line-{line_idx}"))
             .flex()
             .when(is_current, |d| d.bg(hex_a(0xffffff, 0.04)))
             // 行番号
@@ -573,20 +574,29 @@ impl EditorView {
 
     // --- マウス操作 ---
 
+    /// 行テキストのカラム幅を測定（描画と同じフォント・サイズ）
+    fn editor_text_runs(&self, byte_len: usize) -> [TextRun; 1] {
+        [TextRun {
+            len: byte_len,
+            font: font("Cascadia Code"),
+            color: hex(TEXT_PRIMARY),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }]
+    }
+
     /// ピクセル座標からバッファ位置を計算
-    /// point はウィンドウ座標、editor_bounds を引いてローカル座標にする
-    fn position_from_point(&self, point: Point<Pixels>) -> Position {
+    /// point はウィンドウ座標。`editor_bounds` は editor-content のレイアウト境界（フルサイズ canvas で更新）
+    fn position_from_point(&self, point: Point<Pixels>, window: &Window) -> Position {
         let line_height = px(20.);
-        let char_width = px(8.);
+        // 行番号列の幅（`render_line` の gutter と一致）
         let gutter_width = px(48.);
 
-        // ウィンドウ座標 → エディタローカル座標
         let local_x = point.x - self.editor_bounds.origin.x;
         let local_y = point.y - self.editor_bounds.origin.y;
 
-        // スクロールオフセット考慮（scroll offset.y は負値）
-        let scroll_offset = self.scroll_handle.0.borrow()
-            .base_handle.offset();
+        let scroll_offset = self.scroll_handle.0.borrow().base_handle.offset();
         let scrolled_y = local_y - scroll_offset.y;
 
         let line = if scrolled_y < px(0.) {
@@ -596,10 +606,16 @@ impl EditorView {
                 .min(self.buffer.line_count().saturating_sub(1))
         };
 
-        let adjusted_x = (local_x - gutter_width).max(px(0.));
-        let mut col = ((adjusted_x / char_width) as usize)
+        let line_text: SharedString = self.buffer.line(line).to_string().into();
+        let rel_x = (local_x - gutter_width).max(px(0.));
+        let runs = self.editor_text_runs(line_text.len());
+        let shaped = window
+            .text_system()
+            .shape_line(line_text, px(13.), &runs, None);
+        let mut col = shaped
+            .closest_index_for_x(rel_x)
             .min(self.buffer.line_len(line));
-        // char boundary にスナップ
+
         let line_str = self.buffer.line(line);
         while col > 0 && !line_str.is_char_boundary(col) {
             col -= 1;
@@ -611,7 +627,7 @@ impl EditorView {
     fn handle_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
         if ev.button == MouseButton::Left {
             self.focus_handle.focus(window);
-            let pos = self.position_from_point(ev.position);
+            let pos = self.position_from_point(ev.position, window);
             self.cursor.anchor = None;
             self.cursor.position = pos;
             self.cursor.preferred_column = None;
@@ -621,9 +637,9 @@ impl EditorView {
     }
 
     /// マウスドラッグ — 選択範囲拡張
-    fn handle_mouse_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.dragging && ev.pressed_button == Some(MouseButton::Left) {
-            let pos = self.position_from_point(ev.position);
+            let pos = self.position_from_point(ev.position, window);
             if self.cursor.anchor.is_none() {
                 self.cursor.anchor = Some(self.cursor.position);
             }
@@ -774,8 +790,21 @@ impl Render for EditorView {
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
                     .on_mouse_move(cx.listener(Self::handle_mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
+                    // editor-content 全体の境界（1×1 canvas では誤った原寸になっていた）
+                    .child({
+                        let bounds_entity = entity.clone();
+                        canvas(
+                            |b, _, _| b,
+                            move |layout_bounds, _, _, cx| {
+                                bounds_entity.update(cx, |this, _| {
+                                    this.editor_bounds = layout_bounds;
+                                });
+                            },
+                        )
+                        .absolute()
+                        .size_full()
+                    })
                     .child(
-                        // uniform_list で仮想スクロール
                         uniform_list("editor-lines", line_count, {
                             let entity = entity.clone();
                             move |range: Range<usize>, _window: &mut Window, cx: &mut App| {
@@ -785,29 +814,11 @@ impl Render for EditorView {
                                     .collect()
                             }
                         })
-                        // Auto（デフォルト）だと flex 内でビューポート高さが 0 になり一行も描画されないことがある
                         .with_sizing_behavior(ListSizingBehavior::Infer)
                         .flex_1()
                         .min_h(px(0.))
                         .track_scroll(scroll_handle),
-                    ) // close editor-content div's .child(uniform_list)
-                    // editor_bounds を記録（uniform_list の後に配置、描画に影響なし）
-                    .child({
-                        let bounds_entity = entity.clone();
-                        canvas(
-                            |bounds, _window, _cx| bounds,
-                            move |_bounds, parent_bounds, _window, cx| {
-                                bounds_entity.update(cx, |this: &mut Self, _cx| {
-                                    this.editor_bounds = parent_bounds;
-                                });
-                            },
-                        )
-                        .absolute()
-                        .top(px(0.))
-                        .left(px(0.))
-                        .w(px(1.))
-                        .h(px(1.))
-                    }),
+                    ),
             )
     }
 }
@@ -933,38 +944,54 @@ impl EntityInputHandler for EditorView {
     fn bounds_for_range(
         &mut self,
         range_utf16: Range<usize>,
-        element_bounds: Bounds<Pixels>,
-        _window: &mut Window,
+        _element_bounds: Bounds<Pixels>,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let pos = self.buffer.offset_to_position(range_utf16.start);
-        let char_width = px(8.); // monospace 概算
         let line_height = px(20.);
-        let x = element_bounds.origin.x + px(48.) + char_width * pos.column as f32;
-        let y = element_bounds.origin.y + line_height * pos.line as f32;
+        let gutter = px(48.);
+        let line_text: SharedString = self.buffer.line(pos.line).to_string().into();
+        let runs = self.editor_text_runs(line_text.len());
+        let shaped = window
+            .text_system()
+            .shape_line(line_text, px(13.), &runs, None);
+        let scroll_y = self.scroll_handle.0.borrow().base_handle.offset().y;
+        let x = self.editor_bounds.origin.x + gutter + shaped.x_for_index(pos.column);
+        let y = self.editor_bounds.origin.y + scroll_y + line_height * pos.line as f32;
         Some(Bounds {
             origin: point(x, y),
-            size: size(char_width, line_height),
+            size: size(px(2.), line_height),
         })
     }
 
     fn character_index_for_point(
         &mut self,
         point: Point<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let line_height = px(20.);
-        let char_width = px(8.);
-        let gutter_width = px(48.);
-        let line = ((point.y / line_height) as usize)
-            .min(self.buffer.line_count().saturating_sub(1));
-        let adjusted_x = (point.x - gutter_width).max(px(0.));
-        let col = ((adjusted_x / char_width) as usize)
-            .min(self.buffer.line_len(line));
-        Some(
-            self.buffer
-                .position_to_offset(Position { line, column: col }),
-        )
+        let pos = self.position_from_point(point, window);
+        Some(self.buffer.position_to_offset(pos))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{AppContext, TestAppContext, point, px, size};
+
+    #[gpui::test]
+    fn renders_first_line_in_viewport(cx: &mut TestAppContext) {
+        let mut window = cx.add_empty_window();
+
+        window.draw(point(px(0.), px(0.)), size(px(800.), px(600.)), |_window, cx| {
+            cx.new(|cx| EditorView::new(cx))
+        });
+
+        assert!(
+            window.debug_bounds("editor-line-0").is_some(),
+            "最初の行が描画されていないため、エディタ本体が空表示になる"
+        );
     }
 }
