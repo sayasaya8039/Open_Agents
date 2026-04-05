@@ -75,6 +75,16 @@ void oag_simd_sgr_parse(
     uint16_t* flags_out
 );
 
+// JSON/Markdown highlight color packing per character
+// mode: 0 = auto-detect, 1 = force JSON, 2 = force Markdown
+// colors_out: RGB foreground color per character position
+void oag_simd_highlight_line(
+    const uint8_t* buf,
+    uint32_t len,
+    uint32_t mode,
+    uint32_t* colors_out
+);
+
 #ifdef __cplusplus
 }
 #endif

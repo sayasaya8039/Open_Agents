@@ -666,6 +666,186 @@ pub export fn oag_simd_sgr_parse(
 }
 
 // ============================================================
+//  9. JSON/Markdown → immediate highlight color packing
+// ============================================================
+
+/// Highlight color palette for AI output (One Dark theme)
+const HL_JSON_KEY: u32 = 0x61AFEF; // blue
+const HL_JSON_STRING: u32 = 0x98C379; // green
+const HL_JSON_NUMBER: u32 = 0xD19A66; // orange
+const HL_JSON_BOOL: u32 = 0xD19A66; // orange
+const HL_JSON_NULL: u32 = 0xC678DD; // purple
+const HL_JSON_STRUCTURAL: u32 = 0xABB2BF; // light gray
+const HL_MD_HEADING: u32 = 0x61AFEF; // blue
+const HL_MD_CODE: u32 = 0x98C379; // green
+const HL_MD_BOLD: u32 = 0xE5C07B; // yellow
+const HL_MD_LINK: u32 = 0x56B6C2; // cyan
+const HL_DEFAULT_FG: u32 = 0xCDD6F4; // text
+
+/// Scan a line of text and pack highlight colors per character.
+/// Uses SIMD structural detection for JSON, prefix checks for Markdown.
+/// Each output u32 = RGB foreground color for that character position.
+///
+/// mode: 0 = auto-detect, 1 = force JSON, 2 = force Markdown
+pub export fn oag_simd_highlight_line(
+    buf: [*]const u8,
+    len: u32,
+    mode: u32,
+    colors_out: [*]u32,
+) void {
+    const n: usize = @intCast(len);
+    if (n == 0) return;
+
+    // Auto-detect: check first non-space character
+    const effective_mode: u32 = if (mode != 0) mode else blk: {
+        var skip: usize = 0;
+        while (skip < n and buf[skip] == ' ') : (skip += 1) {}
+        if (skip >= n) break :blk 2; // empty → markdown (plain)
+        const first = buf[skip];
+        if (first == '{' or first == '[' or first == '"') break :blk 1; // JSON
+        break :blk 2; // Markdown
+    };
+
+    if (effective_mode == 1) {
+        highlightJson(buf, n, colors_out);
+    } else {
+        highlightMarkdown(buf, n, colors_out);
+    }
+}
+
+fn highlightJson(buf: [*]const u8, n: usize, colors_out: [*]u32) void {
+    // State machine: track if we're in a string, after a colon (value), etc.
+    var in_string = false;
+    var after_colon = false;
+    var i: usize = 0;
+
+    while (i < n) : (i += 1) {
+        const c = buf[i];
+
+        if (in_string) {
+            colors_out[i] = if (after_colon) HL_JSON_STRING else HL_JSON_KEY;
+            if (c == '"' and (i == 0 or buf[i - 1] != '\\')) {
+                in_string = false;
+                after_colon = false;
+            }
+        } else {
+            switch (c) {
+                '"' => {
+                    in_string = true;
+                    colors_out[i] = if (after_colon) HL_JSON_STRING else HL_JSON_KEY;
+                },
+                '{', '}', '[', ']', ',' => {
+                    colors_out[i] = HL_JSON_STRUCTURAL;
+                    after_colon = false;
+                },
+                ':' => {
+                    colors_out[i] = HL_JSON_STRUCTURAL;
+                    after_colon = true;
+                },
+                '0'...'9', '-', '.' => {
+                    colors_out[i] = HL_JSON_NUMBER;
+                },
+                't', 'r', 'u', 'e', 'f', 'a', 'l', 's' => {
+                    // true/false — check context
+                    colors_out[i] = if (after_colon) HL_JSON_BOOL else HL_DEFAULT_FG;
+                },
+                'n' => {
+                    colors_out[i] = if (after_colon) HL_JSON_NULL else HL_DEFAULT_FG;
+                },
+                else => {
+                    colors_out[i] = HL_DEFAULT_FG;
+                },
+            }
+        }
+    }
+}
+
+fn highlightMarkdown(buf: [*]const u8, n: usize, colors_out: [*]u32) void {
+    // Detect line type from prefix
+    var skip: usize = 0;
+    while (skip < n and buf[skip] == ' ') : (skip += 1) {}
+
+    // Default: fill with default fg
+    for (0..n) |i| {
+        colors_out[i] = HL_DEFAULT_FG;
+    }
+
+    if (skip >= n) return; // empty line
+
+    const first = buf[skip];
+
+    // Heading: # ## ### ####
+    if (first == '#') {
+        var level: usize = 0;
+        var pos = skip;
+        while (pos < n and buf[pos] == '#') : (pos += 1) {
+            level += 1;
+        }
+        if (level >= 1 and level <= 4) {
+            for (0..n) |i| {
+                colors_out[i] = HL_MD_HEADING;
+            }
+            return;
+        }
+    }
+
+    // Code fence: ```
+    if (skip + 2 < n and buf[skip] == '`' and buf[skip + 1] == '`' and buf[skip + 2] == '`') {
+        for (0..n) |i| {
+            colors_out[i] = HL_MD_CODE;
+        }
+        return;
+    }
+
+    // Bold: **text**
+    var i: usize = 0;
+    while (i + 1 < n) {
+        if (buf[i] == '*' and buf[i + 1] == '*') {
+            colors_out[i] = HL_MD_BOLD;
+            colors_out[i + 1] = HL_MD_BOLD;
+            i += 2;
+            // Color until closing **
+            while (i + 1 < n) {
+                if (buf[i] == '*' and buf[i + 1] == '*') {
+                    colors_out[i] = HL_MD_BOLD;
+                    colors_out[i + 1] = HL_MD_BOLD;
+                    i += 2;
+                    break;
+                }
+                colors_out[i] = HL_MD_BOLD;
+                i += 1;
+            }
+        } else if (buf[i] == '`') {
+            // Inline code
+            colors_out[i] = HL_MD_CODE;
+            i += 1;
+            while (i < n and buf[i] != '`') {
+                colors_out[i] = HL_MD_CODE;
+                i += 1;
+            }
+            if (i < n) {
+                colors_out[i] = HL_MD_CODE;
+                i += 1;
+            }
+        } else if (buf[i] == '[') {
+            // Link: [text](url)
+            colors_out[i] = HL_MD_LINK;
+            i += 1;
+            while (i < n and buf[i] != ']') {
+                colors_out[i] = HL_MD_LINK;
+                i += 1;
+            }
+            if (i < n) {
+                colors_out[i] = HL_MD_LINK;
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+}
+
+// ============================================================
 //  Tests
 // ============================================================
 

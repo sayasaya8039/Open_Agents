@@ -17,6 +17,8 @@ pub const RAW_BUF_SIZE: u32 = 1024 * 1024; // 1MB, must be power of 2
 
 const CSI_MAX_PARAMS: usize = 16;
 const READ_CHUNK_SIZE: usize = 65536; // 64KB per ReadFile call
+const BATCH_WINDOW_MS: u32 = 4; // Output coalescing window
+const BATCH_POLL_MS: u32 = 1; // Poll interval within batch window
 
 // ============================================================
 // Windows kernel32 imports
@@ -31,6 +33,20 @@ extern "kernel32" fn ReadFile(
 ) callconv(.c) i32;
 
 extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.c) void;
+extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.c) i32;
+extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.c) i32;
+
+var qpc_freq: i64 = 0;
+
+fn getTimestampMs() u64 {
+    if (qpc_freq == 0) {
+        _ = QueryPerformanceFrequency(&qpc_freq);
+        if (qpc_freq == 0) qpc_freq = 1;
+    }
+    var cnt: i64 = 0;
+    _ = QueryPerformanceCounter(&cnt);
+    return @intCast(@divTrunc(cnt * 1000, qpc_freq));
+}
 
 // ============================================================
 // CellData — per-cell terminal state (C-compatible)
@@ -109,6 +125,7 @@ pub const VtPipeline = struct {
     bytes_read: u64,
     frames_produced: u64,
     parse_time_us: u64,
+    batches_coalesced: u64,  // reads coalesced into single frame
 
     // ---- Scroll region ----
     scroll_top: u32,
@@ -176,6 +193,7 @@ pub const VtPipeline = struct {
         self.bytes_read = 0;
         self.frames_produced = 0;
         self.parse_time_us = 0;
+        self.batches_coalesced = 0;
 
         // Scroll region
         self.scroll_top = 0;
@@ -289,12 +307,17 @@ pub const VtPipeline = struct {
             const wp = self.raw_write.load(.acquire);
 
             if (rp == wp) {
-                Sleep(1);
+                Sleep(BATCH_POLL_MS);
                 continue;
             }
 
-            const avail: u32 = if (wp >= rp) wp - rp else RAW_BUF_SIZE - rp + wp;
-            const write_grid: u8 = 1 - self.active_grid.load(.acquire); // write to inactive
+            // ---- 4ms batch window: coalesce multiple PTY reads ----
+            // Start batch timer and keep consuming data until window expires
+            // or ring is empty for a full poll cycle.
+            const batch_start = getTimestampMs();
+            const write_grid: u8 = 1 - self.active_grid.load(.acquire);
+            var total_parsed: u64 = 0;
+            var reads_in_batch: u32 = 0;
 
             // Clear dirty tracking for write grid
             for (0..self.rows) |row| {
@@ -302,7 +325,7 @@ pub const VtPipeline = struct {
             }
             self.dirty_cell_count[write_grid].store(0, .release);
 
-            // Copy current grid state from active to write grid (so we build on latest)
+            // Copy current grid state from active to write grid
             const active = self.active_grid.load(.acquire);
             for (0..self.rows) |row| {
                 for (0..self.cols) |col| {
@@ -310,22 +333,54 @@ pub const VtPipeline = struct {
                 }
             }
 
-            var pos: u32 = 0;
-            while (pos < avail) {
-                const ring_pos = (rp +% pos) & (RAW_BUF_SIZE - 1);
-                const byte = self.raw_ring[ring_pos];
-                self.processByte(write_grid, byte);
-                pos += 1;
+            // Batch loop: keep parsing until 4ms window expires
+            var current_rp = rp;
+            while (true) {
+                const current_wp = self.raw_write.load(.acquire);
+                if (current_rp != current_wp) {
+                    // Data available — parse it
+                    const avail: u32 = if (current_wp >= current_rp)
+                        current_wp - current_rp
+                    else
+                        RAW_BUF_SIZE - current_rp + current_wp;
+
+                    var pos: u32 = 0;
+                    while (pos < avail) {
+                        const ring_pos = (current_rp +% pos) & (RAW_BUF_SIZE - 1);
+                        const byte = self.raw_ring[ring_pos];
+                        self.processByte(write_grid, byte);
+                        pos += 1;
+                    }
+                    current_rp = (current_rp +% avail) & (RAW_BUF_SIZE - 1);
+                    self.raw_read.store(current_rp, .release);
+                    total_parsed += avail;
+                    reads_in_batch += 1;
+                }
+
+                // Check batch window expiry
+                const elapsed = getTimestampMs() - batch_start;
+                if (elapsed >= BATCH_WINDOW_MS) break;
+
+                // No more data right now — brief sleep then check again
+                if (self.raw_write.load(.acquire) == current_rp) {
+                    Sleep(BATCH_POLL_MS);
+                    // Re-check: if still empty AND window expired, end batch
+                    if (self.raw_write.load(.acquire) == current_rp) {
+                        if (getTimestampMs() - batch_start >= BATCH_WINDOW_MS) break;
+                    }
+                }
+
+                if (!self.running.load(.acquire)) break;
             }
 
-            self.raw_read.store((rp +% avail) & (RAW_BUF_SIZE - 1), .release);
+            if (total_parsed == 0) continue;
 
-            // Swap grid (atomic)
+            // ---- End of batch: swap grid + notify ----
             self.active_grid.store(write_grid, .release);
             _ = self.grid_generation.fetchAdd(1, .release);
             self.frames_produced += 1;
+            if (reads_in_batch > 1) self.batches_coalesced += reads_in_batch - 1;
 
-            // Notify main thread
             if (self.on_frame_ready) |cb| {
                 cb(self.callback_data);
             }
