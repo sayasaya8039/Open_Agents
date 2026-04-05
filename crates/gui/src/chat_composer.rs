@@ -104,9 +104,10 @@ impl ChatComposer {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.focus_handle.focus(window);
         self.is_selecting = true;
 
         if event.modifiers.shift {
@@ -287,6 +288,11 @@ impl ChatComposer {
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.reset();
         cx.notify();
+    }
+
+    /// クリックやページ切替後に IME / 文字入力を受け取るにはフォーカスが必要（Editor と同様）
+    pub fn focus(&self, window: &mut Window) {
+        self.focus_handle.focus(window);
     }
 
     fn submit_chat(&mut self, _: &ChatSubmit, _: &mut Window, cx: &mut Context<Self>) {
@@ -606,6 +612,8 @@ impl Render for ChatComposer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
+            .w_full()
+            .min_w(px(0.))
             .key_context("ChatComposer")
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)

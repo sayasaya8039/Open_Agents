@@ -1244,8 +1244,11 @@ impl AppView {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
                     this.page = target;
+                    if target == Page::Chat {
+                        this.chat_composer.read(cx).focus(window);
+                    }
                     cx.notify();
                 }),
             )
@@ -1604,6 +1607,7 @@ impl AppView {
                                         div()
                                             .flex_1()
                                             .min_h(px(72.))
+                                            .min_w(px(0.))
                                             .bg(hex(BG))
                                             .border_1()
                                             .border_color(hex(BORDER))
@@ -1612,6 +1616,12 @@ impl AppView {
                                             .py(px(8.))
                                             .flex()
                                             .items_center()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.chat_composer.read(cx).focus(window);
+                                                }),
+                                            )
                                             .child(self.chat_composer.clone()),
                                     )
                                     .child(
