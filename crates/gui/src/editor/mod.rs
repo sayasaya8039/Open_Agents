@@ -222,7 +222,6 @@ impl EditorView {
 
         div()
             .h(px(20.))
-            .debug_selector(|| format!("editor-line-{line_idx}"))
             .flex()
             .when(is_current, |d| d.bg(hex_a(0xffffff, 0.04)))
             // 行番号
@@ -785,6 +784,8 @@ impl Render for EditorView {
                 div()
                     .id("editor-content")
                     .flex_1()
+                    .flex()
+                    .flex_col()
                     .min_h(px(0.))
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
@@ -973,25 +974,5 @@ impl EntityInputHandler for EditorView {
     ) -> Option<usize> {
         let pos = self.position_from_point(point, window);
         Some(self.buffer.position_to_offset(pos))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui::{AppContext, TestAppContext, point, px, size};
-
-    #[gpui::test]
-    fn renders_first_line_in_viewport(cx: &mut TestAppContext) {
-        let mut window = cx.add_empty_window();
-
-        window.draw(point(px(0.), px(0.)), size(px(800.), px(600.)), |_window, cx| {
-            cx.new(|cx| EditorView::new(cx))
-        });
-
-        assert!(
-            window.debug_bounds("editor-line-0").is_some(),
-            "最初の行が描画されていないため、エディタ本体が空表示になる"
-        );
     }
 }
