@@ -4,9 +4,14 @@ mod project_explorer;
 use editor::EditorView;
 use gpui::*;
 use std::collections::HashSet;
+use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
-use project_explorer::{TreeNode, default_expanded_set, default_sample_tree, flatten_visible};
+use project_explorer::{
+    TreeNode, absolute_path, default_expanded_set, default_sample_tree, expanded_first_level,
+    flatten_visible, path_to_segments, prune_expanded, read_tree_from_disk, unique_child_name,
+};
 
 // ============================================================
 // Figma Design Colors (VS Code Dark / macOS style)
@@ -78,6 +83,81 @@ struct AppView {
     /// フォーカス/選択行
     explorer_selection: Option<Vec<String>>,
     editor_view: Entity<EditorView>,
+}
+
+impl AppView {
+    /// エクスプローラ: 新規ファイル・フォルダの親ディレクトリ（相対セグメント）
+    fn explorer_target_parent_segments(&self) -> Vec<String> {
+        let Some(sel) = &self.explorer_selection else {
+            return Vec::new();
+        };
+        let abs = absolute_path(&self.workspace_root, sel);
+        if abs.is_dir() {
+            return sel.clone();
+        }
+        if sel.is_empty() {
+            return Vec::new();
+        }
+        sel[..sel.len().saturating_sub(1)].to_vec()
+    }
+
+    fn explorer_reload_from_disk(&mut self) {
+        match read_tree_from_disk(&self.workspace_root) {
+            Ok(tree) => {
+                self.file_tree = tree;
+                prune_expanded(&self.workspace_root, &mut self.explorer_expanded);
+            }
+            Err(e) => eprintln!("explorer: ツリー更新に失敗 {e}"),
+        }
+    }
+
+    fn explorer_new_file(&mut self, cx: &mut Context<Self>) {
+        let parent_rel = self.explorer_target_parent_segments();
+        let parent_abs = absolute_path(&self.workspace_root, &parent_rel);
+        if !parent_abs.is_dir() {
+            eprintln!("explorer: 親フォルダが無効です");
+            return;
+        }
+        let name = unique_child_name(&parent_abs, "New File");
+        let path = parent_abs.join(&name);
+        match fs::File::create(&path) {
+            Ok(mut f) => {
+                let _ = f.write_all(b"\n");
+                self.explorer_reload_from_disk();
+                self.explorer_expanded.insert(parent_rel.clone());
+                let segs = path_to_segments(&self.workspace_root, &path);
+                self.explorer_selection = Some(segs.clone());
+                let wr = self.workspace_root.clone();
+                self.editor_view.update(cx, |ed, ecx| {
+                    ed.open_project_path(&wr, &segs, ecx);
+                });
+                cx.notify();
+            }
+            Err(e) => eprintln!("explorer: 新規ファイル {e}"),
+        }
+    }
+
+    fn explorer_new_folder(&mut self, cx: &mut Context<Self>) {
+        let parent_rel = self.explorer_target_parent_segments();
+        let parent_abs = absolute_path(&self.workspace_root, &parent_rel);
+        if !parent_abs.is_dir() {
+            eprintln!("explorer: 親フォルダが無効です");
+            return;
+        }
+        let name = unique_child_name(&parent_abs, "New Folder");
+        let path = parent_abs.join(&name);
+        match fs::create_dir(&path) {
+            Ok(()) => {
+                self.explorer_reload_from_disk();
+                self.explorer_expanded.insert(parent_rel.clone());
+                let segs = path_to_segments(&self.workspace_root, &path);
+                self.explorer_expanded.insert(segs.clone());
+                self.explorer_selection = Some(segs);
+                cx.notify();
+            }
+            Err(e) => eprintln!("explorer: 新規フォルダ {e}"),
+        }
+    }
 }
 
 // ============================================================
@@ -281,8 +361,6 @@ impl AppView {
                                     .gap(px(2.))
                                     .mb(px(4.))
                                     .px(px(8.))
-                                    .child(self.explorer_action_btn("📄+"))
-                                    .child(self.explorer_action_btn("📁+"))
                                     .child(
                                         div()
                                             .p(px(4.))
@@ -293,13 +371,58 @@ impl AppView {
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                                    this.explorer_expanded = default_expanded_set();
+                                                    this.explorer_new_file(cx);
+                                                }),
+                                            )
+                                            .child("📄+"),
+                                    )
+                                    .child(
+                                        div()
+                                            .p(px(4.))
+                                            .rounded(px(4.))
+                                            .text_size(px(12.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                                    this.explorer_new_folder(cx);
+                                                }),
+                                            )
+                                            .child("📁+"),
+                                    )
+                                    .child(
+                                        div()
+                                            .p(px(4.))
+                                            .rounded(px(4.))
+                                            .text_size(px(12.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                                    this.explorer_reload_from_disk();
                                                     cx.notify();
                                                 }),
                                             )
                                             .child("🔄"),
                                     )
-                                    .child(self.explorer_action_btn("📂")),
+                                    .child(
+                                        div()
+                                            .p(px(4.))
+                                            .rounded(px(4.))
+                                            .text_size(px(12.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                                    this.explorer_expanded.clear();
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child("📂"),
+                                    ),
                             ),
                     )
                     .child(
@@ -397,16 +520,6 @@ impl AppView {
                     .p(px(12.))
                     .child(self.nav_item("Terminal", Page::Terminal, cx)),
             )
-    }
-
-    fn explorer_action_btn(&self, icon: &str) -> impl IntoElement {
-        div()
-            .p(px(4.))
-            .rounded(px(4.))
-            .text_size(px(12.))
-            .text_color(hex(TEXT_SECONDARY))
-            .cursor_pointer()
-            .child(icon.to_string())
     }
 
     fn nav_item(&mut self, label: &str, page: Page, cx: &mut Context<Self>) -> impl IntoElement {
@@ -974,17 +1087,34 @@ fn main() {
                 // EditorView Entity を作成
                 let editor_view = cx.new(|cx| EditorView::new(cx));
 
-                cx.new(|_cx| AppView {
-                    page: Page::Editor,
-                    chat_messages: vec![ChatMsg {
-                        role: "assistant".into(),
-                        content: "こんにちは！Open Agents AIコーディングアシスタントです。".into(),
-                    }],
-                    workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                    file_tree: default_sample_tree(),
-                    explorer_expanded: default_expanded_set(),
-                    explorer_selection: None,
-                    editor_view,
+                cx.new(|_cx| {
+                    let workspace_root =
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    let (file_tree, explorer_expanded) =
+                        match read_tree_from_disk(&workspace_root) {
+                            Ok(tree) => {
+                                let exp = expanded_first_level(&tree);
+                                (tree, exp)
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "explorer: 初期読込失敗 ({e}), デモツリーを使用します"
+                                );
+                                (default_sample_tree(), default_expanded_set())
+                            }
+                        };
+                    AppView {
+                        page: Page::Editor,
+                        chat_messages: vec![ChatMsg {
+                            role: "assistant".into(),
+                            content: "こんにちは！Open Agents AIコーディングアシスタントです。".into(),
+                        }],
+                        workspace_root,
+                        file_tree,
+                        explorer_expanded,
+                        explorer_selection: None,
+                        editor_view,
+                    }
                 })
             },
         )
