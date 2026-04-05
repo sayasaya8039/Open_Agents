@@ -134,6 +134,10 @@ impl TextBuffer {
         self.lines.len()
     }
 
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
     pub fn line_len(&self, idx: usize) -> usize {
         if idx < self.lines.len() {
             self.lines[idx].len()

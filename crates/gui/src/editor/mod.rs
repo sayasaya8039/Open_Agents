@@ -3,9 +3,11 @@
 pub mod actions;
 pub mod buffer;
 pub mod cursor;
+mod syntax_highlight;
 
 use buffer::{Position, TextBuffer};
 use cursor::CursorState;
+use syntax_highlight::{SyntaxColorRole, SyntaxSpan, highlight_buffer};
 
 use gpui::*;
 use gpui::prelude::*;
@@ -13,9 +15,21 @@ use std::ops::Range;
 
 use crate::{hex, hex_a, BG, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY};
 
+const SYNTAX_COMMENT: u32 = 0x5c6370;
+const SYNTAX_KEYWORD: u32 = 0xc678dd;
+const SYNTAX_STRING: u32 = 0x98c379;
+const SYNTAX_NUMBER: u32 = 0xd19a66;
+const SYNTAX_TYPE: u32 = 0xe5c07b;
+const SYNTAX_FUNCTION: u32 = 0x61afef;
+const SYNTAX_PROPERTY: u32 = 0x56b6c2;
+const SYNTAX_MACRO: u32 = 0xe06c75;
+const SYNTAX_HEADING: u32 = 0x61afef;
+const SYNTAX_ACCENT: u32 = 0xc678dd;
+
 /// エディタビュー本体
 pub struct EditorView {
     pub buffer: TextBuffer,
+    highlighted_lines: Vec<Vec<SyntaxSpan>>,
     pub cursor: CursorState,
     focus_handle: FocusHandle,
     scroll_handle: UniformListScrollHandle,
@@ -31,10 +45,13 @@ pub struct EditorView {
 impl EditorView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
+        let buffer = TextBuffer::from_string(
+            "// Open Agents エディタへようこそ！\n// ここにコードを書いてください。\n\nfn main() {\n    println!(\"Hello, world!\");\n}\n",
+        );
+        let highlighted_lines = highlight_buffer(buffer.file_path(), buffer.lines());
         Self {
-            buffer: TextBuffer::from_string(
-                "// Open Agents エディタへようこそ！\n// ここにコードを書いてください。\n\nfn main() {\n    println!(\"Hello, world!\");\n}\n",
-            ),
+            buffer,
+            highlighted_lines,
             cursor: CursorState::new(),
             focus_handle,
             scroll_handle: UniformListScrollHandle::new(),
@@ -51,6 +68,7 @@ impl EditorView {
         match TextBuffer::from_file(path) {
             Ok(buf) => {
                 self.buffer = buf;
+                self.refresh_highlights();
                 self.cursor = CursorState::new();
                 cx.notify();
             }
@@ -61,6 +79,7 @@ impl EditorView {
                         let text = String::from_utf8_lossy(&bytes);
                         self.buffer =
                             TextBuffer::from_string_with_path(text.as_ref(), Some(path.to_path_buf()));
+                        self.refresh_highlights();
                         self.cursor = CursorState::new();
                         cx.notify();
                     }
@@ -98,6 +117,7 @@ impl EditorView {
             path.display()
         );
         self.buffer = TextBuffer::from_string_with_path(&stub, Some(path));
+        self.refresh_highlights();
         self.cursor = CursorState::new();
         cx.notify();
     }
@@ -117,6 +137,86 @@ impl EditorView {
         st.deferred_scroll_to_item = None;
     }
 
+    fn refresh_highlights(&mut self) {
+        self.highlighted_lines = highlight_buffer(self.buffer.file_path(), self.buffer.lines());
+    }
+
+    fn line_spans(&self, line_idx: usize) -> Vec<SyntaxSpan> {
+        self.highlighted_lines
+            .get(line_idx)
+            .cloned()
+            .unwrap_or_else(|| {
+                vec![SyntaxSpan {
+                    text: self.buffer.line(line_idx).to_string(),
+                    role: SyntaxColorRole::Plain,
+                }]
+            })
+    }
+
+    fn role_color(role: SyntaxColorRole) -> Hsla {
+        match role {
+            SyntaxColorRole::Plain => hex(TEXT_PRIMARY),
+            SyntaxColorRole::Comment => hex(SYNTAX_COMMENT),
+            SyntaxColorRole::Keyword => hex(SYNTAX_KEYWORD),
+            SyntaxColorRole::String => hex(SYNTAX_STRING),
+            SyntaxColorRole::Number => hex(SYNTAX_NUMBER),
+            SyntaxColorRole::Type => hex(SYNTAX_TYPE),
+            SyntaxColorRole::Function => hex(SYNTAX_FUNCTION),
+            SyntaxColorRole::Property => hex(SYNTAX_PROPERTY),
+            SyntaxColorRole::Macro => hex(SYNTAX_MACRO),
+            SyntaxColorRole::Heading => hex(SYNTAX_HEADING),
+            SyntaxColorRole::Accent => hex(SYNTAX_ACCENT),
+        }
+    }
+
+    fn slice_spans(spans: &[SyntaxSpan], start: usize, end: usize) -> Vec<SyntaxSpan> {
+        if start >= end {
+            return Vec::new();
+        }
+
+        let mut result = Vec::new();
+        let mut offset = 0;
+        for span in spans {
+            let span_start = offset;
+            let span_end = span_start + span.text.len();
+            offset = span_end;
+
+            if span_end <= start {
+                continue;
+            }
+            if span_start >= end {
+                break;
+            }
+
+            let local_start = start.saturating_sub(span_start).min(span.text.len());
+            let local_end = end.min(span_end) - span_start;
+            if local_start >= local_end {
+                continue;
+            }
+
+            result.push(SyntaxSpan {
+                text: span.text[local_start..local_end].to_string(),
+                role: span.role,
+            });
+        }
+
+        result
+    }
+
+    fn render_spans(spans: &[SyntaxSpan], override_color: Option<Hsla>) -> AnyElement {
+        div()
+            .flex()
+            .children(spans.iter().filter(|span| !span.text.is_empty()).map(|span| {
+                div()
+                    .text_size(px(13.))
+                    .font_family("Cascadia Code")
+                    .text_color(override_color.unwrap_or_else(|| Self::role_color(span.role)))
+                    .child(span.text.clone())
+                    .into_any_element()
+            }))
+            .into_any_element()
+    }
+
     // --- 行描画 ---
 
     fn render_line(
@@ -126,6 +226,7 @@ impl EditorView {
         let is_current = editor.cursor.position.line == line_idx;
         let line_text = editor.buffer.line(line_idx).to_string();
         let line_num = format!("{:>4}", line_idx + 1);
+        let spans = editor.line_spans(line_idx);
 
         // カーソルが現在行にある場合、カーソル位置で行を分割して描画
         let text_element: AnyElement = if is_current && !editor.cursor.has_selection() {
@@ -139,10 +240,10 @@ impl EditorView {
             div()
                 .flex_1()
                 .flex()
-                .text_size(px(13.))
-                .font_family("Cascadia Code")
-                .text_color(hex(TEXT_PRIMARY))
-                .child(before)
+                .child(Self::render_spans(
+                    &Self::slice_spans(&spans, 0, before.len()),
+                    None,
+                ))
                 // カーソル（縦線）
                 .child(
                     div()
@@ -151,7 +252,10 @@ impl EditorView {
                         .bg(hex(0x569cd6))
                         .flex_shrink_0(),
                 )
-                .child(after)
+                .child(Self::render_spans(
+                    &Self::slice_spans(&spans, line_text.len() - after.len(), line_text.len()),
+                    None,
+                ))
                 .into_any_element()
         } else if editor.cursor.has_selection() {
             // 選択範囲ハイライト描画
@@ -183,40 +287,36 @@ impl EditorView {
                     .unwrap_or(0);
 
                 let before = line_text[..sc].to_string();
-                let selected = line_text[sc..ec].to_string();
-                let after = line_text[ec..].to_string();
-
                 div()
                     .flex_1()
                     .flex()
-                    .text_size(px(13.))
-                    .font_family("Cascadia Code")
-                    .text_color(hex(TEXT_PRIMARY))
-                    .child(before)
+                    .child(Self::render_spans(
+                        &Self::slice_spans(&spans, 0, before.len()),
+                        None,
+                    ))
                     .child(
                         div()
                             .bg(hex_a(0x264f78, 0.7)) // VS Code 選択色
-                            .text_color(hex(0xffffff))
-                            .child(selected),
+                            .child(Self::render_spans(
+                                &Self::slice_spans(&spans, sc, ec),
+                                Some(hex(0xffffff)),
+                            )),
                     )
-                    .child(after)
+                    .child(Self::render_spans(
+                        &Self::slice_spans(&spans, ec, line_text.len()),
+                        None,
+                    ))
                     .into_any_element()
             } else {
                 div()
                     .flex_1()
-                    .text_size(px(13.))
-                    .font_family("Cascadia Code")
-                    .text_color(hex(TEXT_PRIMARY))
-                    .child(line_text)
+                    .child(Self::render_spans(&spans, None))
                     .into_any_element()
             }
         } else {
             div()
                 .flex_1()
-                .text_size(px(13.))
-                .font_family("Cascadia Code")
-                .text_color(hex(TEXT_PRIMARY))
-                .child(line_text)
+                .child(Self::render_spans(&spans, None))
                 .into_any_element()
         };
 
@@ -431,6 +531,7 @@ impl EditorView {
     ) {
         // 選択範囲があれば削除
         if self.cursor.delete_selection(&mut self.buffer).is_some() {
+            self.refresh_highlights();
             self.ensure_cursor_visible();
             cx.notify();
             return;
@@ -453,6 +554,7 @@ impl EditorView {
             self.buffer.delete_range(start, pos);
             self.cursor.position = start;
         }
+        self.refresh_highlights();
         self.cursor.preferred_column = None;
         self.ensure_cursor_visible();
         cx.notify();
@@ -465,6 +567,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if self.cursor.delete_selection(&mut self.buffer).is_some() {
+            self.refresh_highlights();
             self.ensure_cursor_visible();
             cx.notify();
             return;
@@ -483,6 +586,7 @@ impl EditorView {
             let end = Position::new(pos.line + 1, 0);
             self.buffer.delete_range(pos, end);
         }
+        self.refresh_highlights();
         self.ensure_cursor_visible();
         cx.notify();
     }
@@ -496,6 +600,7 @@ impl EditorView {
         self.cursor.delete_selection(&mut self.buffer);
         let new_pos = self.buffer.insert_char(self.cursor.position, '\n');
         self.cursor.position = new_pos;
+        self.refresh_highlights();
         self.cursor.preferred_column = None;
         self.ensure_cursor_visible();
         cx.notify();
@@ -510,6 +615,7 @@ impl EditorView {
         self.cursor.delete_selection(&mut self.buffer);
         let new_pos = self.buffer.insert_text(self.cursor.position, "    ");
         self.cursor.position = new_pos;
+        self.refresh_highlights();
         self.cursor.preferred_column = None;
         cx.notify();
     }
@@ -675,6 +781,7 @@ impl EditorView {
             let text = self.buffer.text_in_range(start, end);
             cx.write_to_clipboard(ClipboardItem::new_string(text));
             self.cursor.delete_selection(&mut self.buffer);
+            self.refresh_highlights();
             self.ensure_cursor_visible();
             cx.notify();
         }
@@ -687,6 +794,7 @@ impl EditorView {
                     self.cursor.delete_selection(&mut self.buffer);
                     let new_pos = self.buffer.insert_text(self.cursor.position, &text);
                     self.cursor.position = new_pos;
+                    self.refresh_highlights();
                     self.cursor.preferred_column = None;
                     self.ensure_cursor_visible();
                     cx.notify();
@@ -871,6 +979,7 @@ impl EntityInputHandler for EditorView {
             if start != end {
                 let pos = self.buffer.delete_range(start, end);
                 self.cursor.position = pos;
+                self.refresh_highlights();
                 cx.notify();
             }
         }
@@ -897,6 +1006,7 @@ impl EntityInputHandler for EditorView {
         let new_pos = self.buffer.insert_text(start, text);
         self.cursor.position = new_pos;
         self.cursor.clear_selection();
+        self.refresh_highlights();
         self.ime_text = None;
         self.ime_range = None;
         self.ensure_cursor_visible();
@@ -923,6 +1033,7 @@ impl EntityInputHandler for EditorView {
         }
         let new_pos = self.buffer.insert_text(start, new_text);
         self.cursor.position = new_pos;
+        self.refresh_highlights();
 
         let mark_start = range.start;
         let mark_end = mark_start + new_text.encode_utf16().count();
