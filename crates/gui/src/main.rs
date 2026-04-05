@@ -235,12 +235,19 @@ impl AppView {
                     .p(px(12.))
                     .flex()
                     .flex_col()
+                    // EXPLORER header
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .mb(px(8.))
+                            .mb(px(4.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .child("📂"),
+                            )
                             .child(
                                 div()
                                     .text_size(px(10.))
@@ -249,6 +256,24 @@ impl AppView {
                                     .child("EXPLORER"),
                             ),
                     )
+                    // Action buttons row (Figma: FilePlus, FolderPlus, RefreshCw, FolderOpen)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.))
+                            .mb(px(8.))
+                            .px(px(8.))
+                            // 新規ファイル
+                            .child(self.explorer_action_btn("📄+", "新規ファイル"))
+                            // 新規フォルダ
+                            .child(self.explorer_action_btn("📁+", "新規フォルダ"))
+                            // 更新
+                            .child(self.explorer_action_btn("🔄", "更新"))
+                            // フォルダを開く
+                            .child(self.explorer_action_btn("📂", "フォルダを開く")),
+                    )
+                    // File list
                     .children(self.files.iter().map(|f| {
                         let icon = if f.is_folder { "📁" } else { "📄" };
                         div()
@@ -273,6 +298,16 @@ impl AppView {
                     .p(px(12.))
                     .child(self.nav_item("Terminal", Page::Terminal)),
             )
+    }
+
+    fn explorer_action_btn(&self, icon: &str, _title: &str) -> impl IntoElement {
+        div()
+            .p(px(4.))
+            .rounded(px(4.))
+            .text_size(px(12.))
+            .text_color(hex(TEXT_SECONDARY))
+            .cursor_pointer()
+            .child(icon.to_string())
     }
 
     fn nav_item(&self, label: &str, page: Page) -> impl IntoElement {
