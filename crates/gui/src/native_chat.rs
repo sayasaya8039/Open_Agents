@@ -40,6 +40,7 @@ extern "C" {
     fn oag_inference_create(path: *const c_char) -> *mut c_void;
     fn oag_inference_free(inf: *mut c_void);
     fn oag_inference_chat(inf: *mut c_void, params: oag_chat_params_t) -> *mut c_char;
+    fn gguf_get_last_error() -> *const c_char;
 }
 
 fn cstring_chat(s: &str) -> Result<CString, String> {
@@ -93,9 +94,20 @@ pub fn complete_native_chat_blocking(
 
     let inf = unsafe { oag_inference_create(path_c.as_ptr()) };
     if inf.is_null() {
+        let detail = unsafe {
+            let p = gguf_get_last_error();
+            if p.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(p).to_string_lossy().into_owned()
+            }
+        };
+        if !detail.is_empty() {
+            return Err(format!("ネイティブ推論の初期化に失敗: {detail}"));
+        }
         return Err(
-            "ネイティブ推論の初期化に失敗しました。有効な LLM 用 .gguf か確認してください（破損・別形式・メモリ不足）。ONNX はネイティブ Chat 未対応です。"
-                .to_string(),
+            "ネイティブ推論の初期化に失敗しました。GGUF のパス・破損・メモリを確認してください。"
+                .into(),
         );
     }
     let guard = InferenceGuard(inf);

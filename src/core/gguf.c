@@ -1,6 +1,7 @@
 // Open_Agents — GGUF Format Parser
 // Memory-maps GGUF files and parses metadata + tensor info
 #include "core/gguf.h"
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,20 @@
 #include <fcntl.h>
 #include <unistd.h>
 #endif
+
+// 直近のロード失敗（oag_inference / GUI が表示用に参照）
+static char g_gguf_last_err[512];
+
+static void gguf_set_last_error(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_gguf_last_err, sizeof g_gguf_last_err, fmt, ap);
+    va_end(ap);
+}
+
+const char* gguf_get_last_error(void) { return g_gguf_last_err[0] ? g_gguf_last_err : ""; }
+
+static void gguf_clear_last_error(void) { g_gguf_last_err[0] = '\0'; }
 
 // ============================================================
 // Type size tables
@@ -173,34 +188,58 @@ static wchar_t* gguf_utf8_to_wide(const char* utf8) {
     return w;
 }
 
-static void* mmap_file(const char* path, size_t* out_size) {
+/* 戻り: 成功時 true。Windows: *out_mapping は UnmapViewOfFile 後に CloseHandle すること */
+static bool mmap_file_win(
+    const char* path, size_t* out_size, void** out_base, void** out_mapping) {
+    *out_base = NULL;
+    *out_mapping = NULL;
+
     wchar_t* wpath = gguf_utf8_to_wide(path);
     if (!wpath) {
+        gguf_set_last_error("UTF-8 パス変換に失敗しました");
         fprintf(stderr, "[GGUF] Invalid UTF-8 path or out of memory\n");
-        return NULL;
+        return false;
     }
-    HANDLE file = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ,
-                              NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE file = CreateFileW(
+        wpath,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
     free(wpath);
     if (file == INVALID_HANDLE_VALUE) {
+        gguf_set_last_error("ファイルを開けませんでした（パス・権限・他プロセスのロックを確認）");
         fprintf(stderr, "[GGUF] Cannot open file (check path and permissions)\n");
-        return NULL;
+        return false;
     }
 
     LARGE_INTEGER file_size;
-    GetFileSizeEx(file, &file_size);
+    if (!GetFileSizeEx(file, &file_size) || file_size.QuadPart <= 0) {
+        gguf_set_last_error("ファイルサイズが無効です（空ファイル・クラウド未同期の可能性）");
+        CloseHandle(file);
+        return false;
+    }
     *out_size = (size_t)file_size.QuadPart;
 
-    HANDLE mapping = CreateFileMappingA(file, NULL, PAGE_READONLY, 0, 0, NULL);
+    HANDLE mapping = CreateFileMappingW(file, NULL, PAGE_READONLY, 0, 0, NULL);
+    CloseHandle(file);
     if (!mapping) {
-        CloseHandle(file);
-        return NULL;
+        gguf_set_last_error("CreateFileMapping に失敗しました");
+        return false;
     }
 
     void* base = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
-    CloseHandle(mapping);
-    CloseHandle(file);
-    return base;
+    if (!base) {
+        gguf_set_last_error("MapViewOfFile に失敗しました");
+        CloseHandle(mapping);
+        return false;
+    }
+
+    *out_base = base;
+    *out_mapping = (void*)mapping;
+    return true;
 }
 
 static void munmap_file(void* base, size_t size) {
@@ -208,19 +247,25 @@ static void munmap_file(void* base, size_t size) {
     UnmapViewOfFile(base);
 }
 #else
-static void* mmap_file(const char* path, size_t* out_size) {
+static bool mmap_file_unix(const char* path, size_t* out_size, void** out_base) {
+    *out_base = NULL;
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
+        gguf_set_last_error("ファイルを開けませんでした");
         fprintf(stderr, "[GGUF] Cannot open: %s\n", path);
-        return NULL;
+        return false;
     }
     struct stat st;
     fstat(fd, &st);
-    *out_size = st.st_size;
+    *out_size = (size_t)st.st_size;
     void* base = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
-    if (base == MAP_FAILED) return NULL;
-    return base;
+    if (base == MAP_FAILED) {
+        gguf_set_last_error("mmap に失敗しました");
+        return false;
+    }
+    *out_base = base;
+    return true;
 }
 
 static void munmap_file(void* base, size_t size) {
@@ -269,6 +314,8 @@ static bool read_kv_value(reader_t* r, gguf_kv_t* kv) {
                         break;
                     }
                     default:
+                        gguf_set_last_error("未知の配列要素型 %d",
+                                            (int)kv->value.array.elem_type);
                         fprintf(stderr, "[GGUF] Unknown array elem type: %d\n",
                                 kv->value.array.elem_type);
                         return false;
@@ -277,6 +324,7 @@ static bool read_kv_value(reader_t* r, gguf_kv_t* kv) {
             break;
         }
         default:
+            gguf_set_last_error("未知の GGUF メタデータ型 %d", (int)kv->type);
             fprintf(stderr, "[GGUF] Unknown KV type: %d\n", kv->type);
             return false;
     }
@@ -284,33 +332,71 @@ static bool read_kv_value(reader_t* r, gguf_kv_t* kv) {
 }
 
 gguf_ctx_t* gguf_load(const char* path) {
-    size_t file_size;
-    void* base = mmap_file(path, &file_size);
-    if (!base) return NULL;
+    gguf_clear_last_error();
+    size_t file_size = 0;
+    void* base = NULL;
+    void* mmap_mapping = NULL;
+
+#ifdef _WIN32
+    if (!mmap_file_win(path, &file_size, &base, &mmap_mapping)) {
+        return NULL;
+    }
+#else
+    if (!mmap_file_unix(path, &file_size, &base)) {
+        return NULL;
+    }
+#endif
 
     reader_t r = { .data = (const uint8_t*)base, .pos = 0, .size = file_size };
 
     // Verify magic
     uint32_t magic = read_u32(&r);
     if (magic != GGUF_MAGIC) {
+        gguf_set_last_error("GGUF ではありません（先頭 magic 不一致。別形式か破損）");
         fprintf(stderr, "[GGUF] Invalid magic: 0x%08X (expected 0x%08X)\n", magic, GGUF_MAGIC);
+#ifdef _WIN32
+        UnmapViewOfFile(base);
+        if (mmap_mapping) CloseHandle((HANDLE)mmap_mapping);
+#else
         munmap_file(base, file_size);
+#endif
         return NULL;
     }
 
     uint32_t version = read_u32(&r);
-    if (version < 2 || version > 3) {
+    /* v2〜v4 を許可（新しい llama.cpp が v4 を出す場合がある） */
+    if (version < 2) {
+        gguf_set_last_error("GGUF バージョンが古すぎます (version %u)", version);
         fprintf(stderr, "[GGUF] Unsupported version: %u\n", version);
+#ifdef _WIN32
+        UnmapViewOfFile(base);
+        if (mmap_mapping) CloseHandle((HANDLE)mmap_mapping);
+#else
         munmap_file(base, file_size);
+#endif
         return NULL;
+    }
+    if (version > 4) {
+        fprintf(stderr, "[GGUF] Warning: untested GGUF version %u (trying anyway)\n", version);
     }
 
     gguf_ctx_t* ctx = (gguf_ctx_t*)calloc(1, sizeof(gguf_ctx_t));
+    if (!ctx) {
+        gguf_set_last_error("gguf_ctx の確保に失敗しました");
+#ifdef _WIN32
+        UnmapViewOfFile(base);
+        if (mmap_mapping) CloseHandle((HANDLE)mmap_mapping);
+#else
+        munmap_file(base, file_size);
+#endif
+        return NULL;
+    }
     ctx->version    = version;
     ctx->n_tensors  = read_u64(&r);
     ctx->n_kv       = read_u64(&r);
     ctx->mmap_base  = base;
     ctx->mmap_size  = file_size;
+    ctx->mmap_mapping_handle = mmap_mapping;
 
     printf("[GGUF] Version: %u, Tensors: %llu, KV pairs: %llu\n",
            ctx->version, (unsigned long long)ctx->n_tensors,
@@ -318,9 +404,16 @@ gguf_ctx_t* gguf_load(const char* path) {
 
     // Read metadata KV pairs
     ctx->kv = (gguf_kv_t*)calloc(ctx->n_kv, sizeof(gguf_kv_t));
+    if (ctx->n_kv > 0 && !ctx->kv) {
+        gguf_set_last_error("メタデータバッファの確保に失敗しました");
+        gguf_free(ctx);
+        return NULL;
+    }
     for (uint64_t i = 0; i < ctx->n_kv; i++) {
         ctx->kv[i].key = read_string(&r);
         if (!read_kv_value(&r, &ctx->kv[i])) {
+            gguf_set_last_error("メタデータ KV #%llu の読み取りに失敗（未知の型の可能性）",
+                                (unsigned long long)i);
             fprintf(stderr, "[GGUF] Failed reading KV #%llu\n", (unsigned long long)i);
             gguf_free(ctx);
             return NULL;
@@ -329,6 +422,11 @@ gguf_ctx_t* gguf_load(const char* path) {
 
     // Read tensor infos
     ctx->tensors = (gguf_tensor_info_t*)calloc(ctx->n_tensors, sizeof(gguf_tensor_info_t));
+    if (ctx->n_tensors > 0 && !ctx->tensors) {
+        gguf_set_last_error("テンソル情報バッファの確保に失敗しました");
+        gguf_free(ctx);
+        return NULL;
+    }
     for (uint64_t i = 0; i < ctx->n_tensors; i++) {
         ctx->tensors[i].name   = read_string(&r);
         ctx->tensors[i].n_dims = read_u32(&r);
@@ -410,7 +508,16 @@ void gguf_free(gguf_ctx_t* ctx) {
     free(ctx->arch);
 
     if (ctx->mmap_base) {
+#ifdef _WIN32
+        UnmapViewOfFile(ctx->mmap_base);
+        if (ctx->mmap_mapping_handle) {
+            CloseHandle((HANDLE)ctx->mmap_mapping_handle);
+            ctx->mmap_mapping_handle = NULL;
+        }
+#else
         munmap_file(ctx->mmap_base, ctx->mmap_size);
+#endif
+        ctx->mmap_base = NULL;
     }
 
     free(ctx);

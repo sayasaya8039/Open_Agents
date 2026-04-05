@@ -105,6 +105,8 @@ typedef struct {
     // Memory-mapped file data
     void*    mmap_base;
     size_t   mmap_size;
+    /* Windows: CreateFileMapping の HANDLE。MapView 後に直ちに Close すると未定義動作になるため gguf_free まで保持 */
+    void*    mmap_mapping_handle;
     uint8_t* tensor_data_start;
 
     // Parsed metadata cache
@@ -123,6 +125,8 @@ typedef struct {
 // Load/free
 gguf_ctx_t* gguf_load(const char* path);
 void        gguf_free(gguf_ctx_t* ctx);
+/** 直近の gguf_load 失敗理由（スレッド非安全・GUI 表示用） */
+const char* gguf_get_last_error(void);
 
 // Metadata accessors
 const char*   gguf_get_str(const gguf_ctx_t* ctx, const char* key);
