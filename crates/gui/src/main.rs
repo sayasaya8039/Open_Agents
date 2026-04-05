@@ -1,4 +1,5 @@
 mod editor;
+mod model_prefs;
 mod project_explorer;
 mod workspace_prefs;
 
@@ -162,6 +163,14 @@ struct ChatMsg {
     thinking: Option<String>,
 }
 
+/// 設定画面のモデルパラメータ行（± で調整、`model_prefs` に保存）
+#[derive(Clone, Copy)]
+enum ModelParamAdjustKind {
+    Temperature,
+    MaxOutputTokens,
+    ContextLength,
+}
+
 struct AppView {
     page: Page,
     chat_messages: Vec<ChatMsg>,
@@ -169,6 +178,8 @@ struct AppView {
     chat_show_thinking: bool,
     /// 設定画面で選択したローカル LLM モデルファイル
     settings_model_path: Option<PathBuf>,
+    /// 永続化済みローカル LLM 推論パラメータ（Temperature / max tokens / context）
+    model_params: model_prefs::ModelParams,
     /// 開いているワークスペースのルート（Zed worktree root）
     workspace_root: PathBuf,
     /// 仮想ファイルツリー
@@ -1337,7 +1348,139 @@ impl AppView {
             )
     }
 
-    fn render_settings(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn adjust_model_param(&mut self, kind: ModelParamAdjustKind, steps: i32, cx: &mut Context<Self>) {
+        const TEMP_STEP: f32 = 0.1;
+        match kind {
+            ModelParamAdjustKind::Temperature => {
+                let d = steps as f32 * TEMP_STEP;
+                self.model_params.temperature = (self.model_params.temperature + d).clamp(0.0, 2.0);
+            }
+            ModelParamAdjustKind::MaxOutputTokens => {
+                let v = self.model_params.max_output_tokens + steps * 256;
+                self.model_params.max_output_tokens = v.clamp(256, 8192);
+            }
+            ModelParamAdjustKind::ContextLength => {
+                let v = self.model_params.context_length + steps * 512;
+                self.model_params.context_length = v.clamp(512, 32768);
+            }
+        }
+        self.model_params.clamp();
+        model_prefs::save_model_params(&self.model_params);
+        cx.notify();
+    }
+
+    /// Temperature / 最大トークン / コンテキスト長 — 値は `model_prefs` と同期
+    fn settings_model_param_row(
+        &mut self,
+        cx: &mut Context<Self>,
+        kind: ModelParamAdjustKind,
+        label: &'static str,
+        hint: Option<&'static str>,
+    ) -> impl IntoElement {
+        let value_str: SharedString = match kind {
+            ModelParamAdjustKind::Temperature => {
+                format!("{:.1}", self.model_params.temperature).into()
+            }
+            ModelParamAdjustKind::MaxOutputTokens => {
+                format!("{}", self.model_params.max_output_tokens).into()
+            }
+            ModelParamAdjustKind::ContextLength => {
+                format!("{}", self.model_params.context_length).into()
+            }
+        };
+
+        let k_minus = kind;
+        let k_plus = kind;
+
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(hex(CONTROL_BG))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                            this.adjust_model_param(k_minus, -1, cx);
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child("−"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .min_w(px(52.))
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_MUTED))
+                                    .text_center()
+                                    .child(value_str),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(hex(CONTROL_BG))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                            this.adjust_model_param(k_plus, 1, cx);
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child("+"),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(4.))
+                    .w_full()
+                    .rounded(px(2.))
+                    .bg(hex(CONTROL_BG)),
+            );
+        if let Some(h) = hint {
+            col = col.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_DIM))
+                    .child(h),
+            );
+        }
+        col
+    }
+
+    fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let ver = env!("CARGO_PKG_VERSION");
         div()
             .flex_1()
@@ -1568,13 +1711,24 @@ impl AppView {
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child("モデルパラメータ"),
                                                     )
-                                                    .child(self.settings_slider_row(
+                                                    .child(self.settings_model_param_row(
+                                                        cx,
+                                                        ModelParamAdjustKind::Temperature,
                                                         "Temperature",
-                                                        "0.7",
                                                         Some("低い値ほど決定論的、高い値ほど創造的"),
                                                     ))
-                                                    .child(self.settings_slider_row("最大トークン数", "2048", None))
-                                                    .child(self.settings_slider_row("コンテキスト長", "4096", None)),
+                                                    .child(self.settings_model_param_row(
+                                                        cx,
+                                                        ModelParamAdjustKind::MaxOutputTokens,
+                                                        "最大トークン数",
+                                                        None,
+                                                    ))
+                                                    .child(self.settings_model_param_row(
+                                                        cx,
+                                                        ModelParamAdjustKind::ContextLength,
+                                                        "コンテキスト長",
+                                                        None,
+                                                    )),
                                             )
                                             .child(
                                                 div()
@@ -1990,6 +2144,7 @@ fn main() {
                         }],
                         chat_show_thinking: true,
                         settings_model_path: None,
+                        model_params: model_prefs::load_model_params(),
                         workspace_root,
                         file_tree,
                         explorer_expanded,
