@@ -3629,7 +3629,7 @@ dependencies = [
 
 [[package]]
 name = "open-agents-gui"
-version = "0.2.42"
+version = "0.2.43"
 dependencies = [
  "cc",
  "dirs 6.0.0",

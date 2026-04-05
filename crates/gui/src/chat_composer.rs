@@ -4,10 +4,11 @@ use std::ops::Range;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    SharedString, Style, Subscription, TextAlign, TextRun, UTF16Selection, UnderlineStyle,
-    Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative, rgba, size,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
+    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, SharedString, Style, Subscription, TextAlign, TextRun, UTF16Selection,
+    UnderlineStyle, Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative,
+    rgba, size,
 };
 use unicode_segmentation::*;
 
@@ -370,6 +371,26 @@ impl ChatComposer {
     /// クリックやページ切替後に IME / 文字入力を受け取るにはフォーカスが必要（Editor と同様）
     pub fn focus(&self, window: &mut Window) {
         self.focus_handle.focus(window);
+    }
+
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        if key != "enter" && key != "return" {
+            return;
+        }
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+            return;
+        }
+
+        window.prevent_default();
+        cx.stop_propagation();
+
+        if modifiers.shift {
+            self.insert_newline(&InsertNewline, window, cx);
+        } else {
+            self.submit_chat(&ChatSubmit, window, cx);
+        }
     }
 
     fn submit_chat(&mut self, _: &ChatSubmit, _: &mut Window, cx: &mut Context<Self>) {
@@ -744,6 +765,7 @@ impl Render for ChatComposer {
             .key_context("ChatComposer")
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))

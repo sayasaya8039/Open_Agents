@@ -121,8 +121,8 @@ mod tests {
     mod chat_submit_tests {
         use super::super::{chat_composer, install_chat_submit_fallback};
         use gpui::{
-            AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
-            TestAppContext, Window, div,
+            AppContext, Context, Entity, IntoElement, KeyDownEvent, Keystroke, ParentElement,
+            Render, Styled, TestAppContext, Window, div,
         };
 
         struct ChatSubmitHarness {
@@ -175,6 +175,48 @@ mod tests {
 
             let submit_count = cx.update(|_, cx| view.read(cx).submit_count);
             assert_eq!(submit_count, 1);
+        }
+
+        #[gpui::test]
+        async fn enter_keydown_submits_without_global_fallback(cx: &mut TestAppContext) {
+            let (view, cx) = cx.add_window_view(ChatSubmitHarness::new);
+            cx.update(|window, cx| {
+                view.read(cx).composer.read(cx).focus(window);
+                window.activate_window();
+            });
+
+            cx.simulate_input("hello");
+            cx.simulate_event(KeyDownEvent {
+                keystroke: Keystroke::parse("enter").unwrap(),
+                is_held: false,
+            });
+
+            let submit_count = cx.update(|_, cx| view.read(cx).submit_count);
+            assert_eq!(submit_count, 1);
+        }
+
+        #[gpui::test]
+        async fn shift_enter_keydown_inserts_newline_without_submit(cx: &mut TestAppContext) {
+            let (view, cx) = cx.add_window_view(ChatSubmitHarness::new);
+            cx.update(|window, cx| {
+                view.read(cx).composer.read(cx).focus(window);
+                window.activate_window();
+            });
+
+            cx.simulate_input("hello");
+            cx.simulate_event(KeyDownEvent {
+                keystroke: Keystroke::parse("shift-enter").unwrap(),
+                is_held: false,
+            });
+
+            let (submit_count, text) = cx.update(|_, cx| {
+                (
+                    view.read(cx).submit_count,
+                    view.read(cx).composer.read(cx).text().to_string(),
+                )
+            });
+            assert_eq!(submit_count, 0);
+            assert_eq!(text, "hello\n");
         }
     }
 }
