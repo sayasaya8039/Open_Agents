@@ -692,31 +692,37 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::handle_cut))
             .on_action(cx.listener(Self::handle_paste))
             .on_action(cx.listener(Self::handle_select_all))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
-            .on_mouse_move(cx.listener(Self::handle_mouse_move))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
             .flex_1()
             .flex()
             .flex_col()
             .bg(hex(BG))
             .font_family("Cascadia Code")
-            // editor_bounds を記録する canvas
-            .child({
-                let bounds_entity = entity.clone();
-                canvas(
-                    |bounds, _window, _cx| bounds,
-                    move |_bounds, prepaint_bounds, _window, cx| {
-                        bounds_entity.update(cx, |this: &mut Self, _cx| {
-                            this.editor_bounds = prepaint_bounds;
-                        });
-                    },
-                )
-                .absolute()
-                .size_full()
-            })
             .child(
-                // uniform_list で仮想スクロール
-                uniform_list("editor-lines", line_count, {
+                // マウスイベント + bounds 記録は uniform_list を含む div に限定
+                div()
+                    .id("editor-content")
+                    .flex_1()
+                    .overflow_hidden()
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
+                    .on_mouse_move(cx.listener(Self::handle_mouse_move))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
+                    // editor_bounds を記録する canvas
+                    .child({
+                        let bounds_entity = entity.clone();
+                        canvas(
+                            |bounds, _window, _cx| bounds,
+                            move |_bounds, prepaint_bounds, _window, cx| {
+                                bounds_entity.update(cx, |this: &mut Self, _cx| {
+                                    this.editor_bounds = prepaint_bounds;
+                                });
+                            },
+                        )
+                        .absolute()
+                        .size_full()
+                    })
+                    .child(
+                        // uniform_list で仮想スクロール
+                        uniform_list("editor-lines", line_count, {
                     let entity = entity.clone();
                     move |range: Range<usize>, _window: &mut Window, cx: &mut App| {
                         let editor = entity.read(cx);
@@ -727,7 +733,8 @@ impl Render for EditorView {
                 })
                 .flex_1()
                 .track_scroll(scroll_handle),
-            )
+                    ) // close editor-content div's .child(uniform_list)
+            ) // close .child(editor-content div)
             // InputHandler 登録用の不可視 canvas
             .child(
                 canvas(
