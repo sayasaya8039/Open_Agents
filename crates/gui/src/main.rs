@@ -1,3 +1,4 @@
+mod api_key_prefs;
 mod editor;
 mod model_prefs;
 mod project_explorer;
@@ -185,6 +186,63 @@ enum AiToggleKind {
     StreamingResponses,
 }
 
+#[derive(Clone, Copy)]
+enum ApiKeySlot {
+    OpenAI,
+    Anthropic,
+    Google,
+    OpenRouter,
+}
+
+impl ApiKeySlot {
+    const ALL: [Self; 4] = [Self::OpenAI, Self::Anthropic, Self::Google, Self::OpenRouter];
+
+    fn idx(self) -> usize {
+        match self {
+            Self::OpenAI => 0,
+            Self::Anthropic => 1,
+            Self::Google => 2,
+            Self::OpenRouter => 3,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::OpenAI => "OpenAI API Key",
+            Self::Anthropic => "Anthropic API Key",
+            Self::Google => "Google AI (Gemini)",
+            Self::OpenRouter => "OpenRouter API Key",
+        }
+    }
+
+    fn provider_tag(self) -> &'static str {
+        match self {
+            Self::OpenAI => "OPENAI_API_KEY",
+            Self::Anthropic => "ANTHROPIC_API_KEY",
+            Self::Google => "GEMINI / GOOGLE_API_KEY",
+            Self::OpenRouter => "OPENROUTER_API_KEY",
+        }
+    }
+
+    fn get<'a>(self, p: &'a api_key_prefs::ApiKeyPrefs) -> &'a str {
+        match self {
+            Self::OpenAI => &p.openai,
+            Self::Anthropic => &p.anthropic,
+            Self::Google => &p.google,
+            Self::OpenRouter => &p.openrouter,
+        }
+    }
+
+    fn get_mut<'a>(self, p: &'a mut api_key_prefs::ApiKeyPrefs) -> &'a mut String {
+        match self {
+            Self::OpenAI => &mut p.openai,
+            Self::Anthropic => &mut p.anthropic,
+            Self::Google => &mut p.google,
+            Self::OpenRouter => &mut p.openrouter,
+        }
+    }
+}
+
 struct AppView {
     page: Page,
     chat_messages: Vec<ChatMsg>,
@@ -200,6 +258,10 @@ struct AppView {
     appearance_prefs: model_prefs::AppearancePrefs,
     /// AI 補助機能の ON/OFF（`ai` と同期）
     ai_prefs: model_prefs::AiPrefs,
+    /// 外部 API キー（`api_keys.json`）
+    api_keys: api_key_prefs::ApiKeyPrefs,
+    /// 設定画面での各スロットのプレーン表示（永続化しない）
+    api_key_reveal: [bool; 4],
     /// 開いているワークスペースのルート（Zed worktree root）
     workspace_root: PathBuf,
     /// 仮想ファイルツリー
@@ -531,6 +593,155 @@ impl AppView {
                         }),
                     )
                     .child("🗑"),
+            )
+    }
+
+    fn settings_api_key_paste_slot(&mut self, slot: ApiKeySlot, cx: &mut Context<Self>) {
+        if let Some(item) = cx.read_from_clipboard() {
+            if let Some(text) = item.text() {
+                let t = text.trim();
+                if !t.is_empty() {
+                    *slot.get_mut(&mut self.api_keys) = t.to_string();
+                    api_key_prefs::save_api_keys(&self.api_keys);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn settings_api_key_clear_slot(&mut self, slot: ApiKeySlot, cx: &mut Context<Self>) {
+        *slot.get_mut(&mut self.api_keys) = String::new();
+        self.api_key_reveal[slot.idx()] = false;
+        api_key_prefs::save_api_keys(&self.api_keys);
+        cx.notify();
+    }
+
+    fn settings_api_key_toggle_reveal(&mut self, slot: ApiKeySlot, cx: &mut Context<Self>) {
+        let i = slot.idx();
+        self.api_key_reveal[i] = !self.api_key_reveal[i];
+        cx.notify();
+    }
+
+    fn settings_api_key_row(&mut self, cx: &mut Context<Self>, slot: ApiKeySlot) -> impl IntoElement {
+        let key_ref = slot.get(&self.api_keys);
+        let has_key = !key_ref.is_empty();
+        let reveal = self.api_key_reveal[slot.idx()];
+        let masked: SharedString = api_key_prefs::masked_line(key_ref, reveal).into();
+        let title = slot.title();
+        let tag = slot.provider_tag();
+        let reveal_btn: &'static str = if reveal { "隠す" } else { "表示" };
+        let slot_paste = slot;
+        let slot_reveal = slot;
+        let slot_clear = slot;
+
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .p(px(12.))
+            .bg(hex(BG))
+            .border_1()
+            .border_color(hex(BORDER))
+            .rounded(px(8.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child(title),
+                            )
+                            .when(has_key, |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(hex(0x22c55e))
+                                        .child("✓"),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child(tag),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_family("Cascadia Code")
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child(masked),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(6.))
+                            .bg(hex(CONTROL_BG))
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.settings_api_key_paste_slot(slot_paste, cx);
+                                }),
+                            )
+                            .child("貼り付け"),
+                    )
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(6.))
+                            .bg(hex(CONTROL_BG))
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.settings_api_key_toggle_reveal(slot_reveal, cx);
+                                }),
+                            )
+                            .child(reveal_btn),
+                    )
+                    .when(has_key, |d| {
+                        d.child(
+                            div()
+                                .px(px(8.))
+                                .py(px(4.))
+                                .rounded(px(6.))
+                                .bg(hex_a(TRAFFIC_RED, 0.2))
+                                .text_size(px(11.))
+                                .text_color(hex(TRAFFIC_RED))
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                        this.settings_api_key_clear_slot(slot_clear, cx);
+                                    }),
+                                )
+                                .child("クリア"),
+                        )
+                    }),
             )
     }
 
@@ -2273,28 +2484,13 @@ impl AppView {
                                             .child(
                                                 div()
                                                     .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .gap(px(16.))
+                                                    .flex_col()
+                                                    .gap(px(6.))
                                                     .child(
                                                         div()
                                                             .text_size(px(12.))
                                                             .text_color(hex(TEXT_MUTED))
-                                                            .child("外部APIを使用する場合のキー管理"),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .px(px(12.))
-                                                            .py(px(6.))
-                                                            .rounded(px(6.))
-                                                            .bg(hex(ACCENT_BLUE))
-                                                            .text_size(px(12.))
-                                                            .text_color(hex(0xFFFFFF))
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap(px(4.))
-                                                            .child("+")
-                                                            .child("追加"),
+                                                            .child("外部 API 用キーをローカルに保存します（api_keys.json）。キーをコピーして「貼り付け」で取り込めます。"),
                                                     ),
                                             )
                                             .child(
@@ -2308,59 +2504,9 @@ impl AppView {
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child("登録済みAPIキー"),
                                                     )
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_between()
-                                                            .p(px(12.))
-                                                            .bg(hex(BG))
-                                                            .border_1()
-                                                            .border_color(hex(BORDER))
-                                                            .rounded(px(8.))
-                                                            .child(
-                                                                div()
-                                                                    .flex()
-                                                                    .flex_col()
-                                                                    .gap(px(6.))
-                                                                    .child(
-                                                                        div()
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .gap(px(8.))
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_size(px(12.))
-                                                                                    .text_color(hex(TEXT_PRIMARY))
-                                                                                    .child("OpenAI API Key"),
-                                                                            )
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_size(px(12.))
-                                                                                    .text_color(hex(0x22c55e))
-                                                                                    .child("✓"),
-                                                                            ),
-                                                                    )
-                                                                    .child(
-                                                                        div()
-                                                                            .text_size(px(11.))
-                                                                            .text_color(hex(TEXT_MUTED))
-                                                                            .child("OPENAI"),
-                                                                    )
-                                                                    .child(
-                                                                        div()
-                                                                            .text_size(px(11.))
-                                                                            .font_family("Cascadia Code")
-                                                                            .text_color(hex(TEXT_SECONDARY))
-                                                                            .child("••••••••••••••••"),
-                                                                    ),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(12.))
-                                                                    .text_color(hex(TEXT_MUTED))
-                                                                    .child("👁"),
-                                                            ),
+                                                    .children(
+                                                        ApiKeySlot::ALL
+                                                            .map(|slot| self.settings_api_key_row(cx, slot)),
                                                     ),
                                             ),
                                     ),
@@ -2542,6 +2688,7 @@ fn main() {
                             }
                         };
                     let local_llm = model_prefs::load_local_llm_prefs();
+                    let api_keys = api_key_prefs::load_api_keys();
                     let appearance = local_llm.appearance.clone();
                     let editor_view = cx.new(|ecx| EditorView::new(ecx, &appearance));
                     AppView {
@@ -2557,6 +2704,8 @@ fn main() {
                         hardware_params: local_llm.hardware,
                         appearance_prefs: local_llm.appearance,
                         ai_prefs: local_llm.ai,
+                        api_keys,
+                        api_key_reveal: [false; 4],
                         workspace_root,
                         file_tree,
                         explorer_expanded,
