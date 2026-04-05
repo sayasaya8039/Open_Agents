@@ -403,6 +403,7 @@ impl Render for AppView {
                         div()
                             .flex_1()
                             .min_h(px(0.))
+                            .min_w(px(0.))
                             .flex()
                             .flex_col()
                             .child(content),
@@ -2180,6 +2181,7 @@ impl AppView {
             .flex()
             .flex_col()
             .min_h(px(0.))
+            .min_w(px(0.))
             .bg(hex(BG))
             .child(
                 div()
@@ -2215,9 +2217,13 @@ impl AppView {
                     .id("settings-figma-scroll")
                     .flex_1()
                     .min_h(px(0.))
+                    .min_w(px(0.))
+                    .overflow_x_hidden()
                     .overflow_y_scroll()
                     .child(
                         div()
+                            .w_full()
+                            .min_w(px(0.))
                             .max_w(px(768.))
                             .mx_auto()
                             .p(px(24.))
@@ -2476,7 +2482,6 @@ impl AppView {
                                 div()
                                     .flex()
                                     .flex_col()
-                                    .w_full()
                                     .min_w(px(0.))
                                     .child(self.settings_figma_heading(
                                         "🔑",
@@ -2485,7 +2490,6 @@ impl AppView {
                                     ))
                                     .child(
                                         div()
-                                            .w_full()
                                             .min_w(px(0.))
                                             .bg(hex(PANEL_BG))
                                             .rounded(px(8.))
@@ -2495,14 +2499,12 @@ impl AppView {
                                             .gap(px(16.))
                                             .child(
                                                 div()
-                                                    .w_full()
                                                     .min_w(px(0.))
                                                     .flex()
                                                     .flex_col()
                                                     .gap(px(6.))
                                                     .child(
                                                         div()
-                                                            .w_full()
                                                             .min_w(px(0.))
                                                             .whitespace_normal()
                                                             .text_size(px(12.))
@@ -2512,7 +2514,6 @@ impl AppView {
                                                     .when(extra_keys > 0, |d| {
                                                         d.child(
                                                             div()
-                                                                .w_full()
                                                                 .min_w(px(0.))
                                                                 .whitespace_normal()
                                                                 .text_size(px(11.))
@@ -2525,7 +2526,6 @@ impl AppView {
                                             )
                                             .child(
                                                 div()
-                                                    .w_full()
                                                     .min_w(px(0.))
                                                     .flex()
                                                     .flex_col()
