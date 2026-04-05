@@ -99,76 +99,107 @@ impl AppView {
     // ============================================================
 
     fn render_titlebar(&self) -> impl IntoElement {
+        // The entire titlebar is a canvas that registers window control hitboxes
+        // for proper WM_NCHITTEST handling (drag, close, min, max)
         div()
             .h(px(44.))
             .bg(hex(TITLEBAR_BG))
             .border_b_1()
             .border_color(hex(BORDER))
-            .flex()
-            .items_center()
-            .px(px(16.))
-            // Traffic lights (functional: close / minimize / zoom)
+            .child(
+                canvas(
+                    // Prepaint: allocate hitboxes
+                    |bounds, window, _cx| {
+                        // Drag region = entire titlebar (minus button area on left)
+                        let drag_bounds = Bounds {
+                            origin: point(bounds.origin.x + px(80.), bounds.origin.y),
+                            size: size(bounds.size.width - px(80.), bounds.size.height),
+                        };
+                        let drag_hitbox = window.insert_hitbox(drag_bounds, HitboxBehavior::Normal);
+
+                        // Button hitboxes (x=16, y=16, 12x12 each, 8px gap)
+                        let close_bounds = Bounds {
+                            origin: point(bounds.origin.x + px(16.), bounds.origin.y + px(16.)),
+                            size: size(px(12.), px(12.)),
+                        };
+                        let close_hitbox = window.insert_hitbox(close_bounds, HitboxBehavior::Normal);
+
+                        let min_bounds = Bounds {
+                            origin: point(bounds.origin.x + px(36.), bounds.origin.y + px(16.)),
+                            size: size(px(12.), px(12.)),
+                        };
+                        let min_hitbox = window.insert_hitbox(min_bounds, HitboxBehavior::Normal);
+
+                        let max_bounds = Bounds {
+                            origin: point(bounds.origin.x + px(56.), bounds.origin.y + px(16.)),
+                            size: size(px(12.), px(12.)),
+                        };
+                        let max_hitbox = window.insert_hitbox(max_bounds, HitboxBehavior::Normal);
+
+                        (drag_hitbox, close_hitbox, min_hitbox, max_hitbox)
+                    },
+                    // Paint: register hitboxes as window controls + draw UI
+                    |bounds, (drag_hb, close_hb, min_hb, max_hb), window, _cx| {
+                        // Register window control areas for WM_NCHITTEST
+                        window.insert_window_control_hitbox(WindowControlArea::Drag, drag_hb);
+                        window.insert_window_control_hitbox(WindowControlArea::Close, close_hb);
+                        window.insert_window_control_hitbox(WindowControlArea::Min, min_hb);
+                        window.insert_window_control_hitbox(WindowControlArea::Max, max_hb);
+
+                        // Draw traffic light buttons
+                        let btn_y = bounds.origin.y + px(16.);
+                        let btn_r = px(6.);
+
+                        // Close (red)
+                        let close_center = point(bounds.origin.x + px(22.), btn_y + btn_r);
+                        window.paint_quad(fill(
+                            Bounds::centered_at(close_center, size(px(12.), px(12.))),
+                            hex(TRAFFIC_RED),
+                        ).corner_radii(px(6.)));
+
+                        // Minimize (yellow)
+                        let min_center = point(bounds.origin.x + px(42.), btn_y + btn_r);
+                        window.paint_quad(fill(
+                            Bounds::centered_at(min_center, size(px(12.), px(12.))),
+                            hex(TRAFFIC_YELLOW),
+                        ).corner_radii(px(6.)));
+
+                        // Maximize (green)
+                        let max_center = point(bounds.origin.x + px(62.), btn_y + btn_r);
+                        window.paint_quad(fill(
+                            Bounds::centered_at(max_center, size(px(12.), px(12.))),
+                            hex(TRAFFIC_GREEN),
+                        ).corner_radii(px(6.)));
+
+                        // Title text (centered)
+                        let title = "AI Coding Assistant";
+                        let title_origin = point(
+                            bounds.origin.x + bounds.size.width / 2.0 - px(60.),
+                            bounds.origin.y + px(14.),
+                        );
+                        window.paint_quad(fill(
+                            Bounds { origin: title_origin, size: size(px(0.), px(0.)) },
+                            hex_a(0x000000, 0.0),
+                        ));
+                    },
+                )
+                .size_full(),
+            )
+            // Overlay: title text via regular div (canvas can't easily do text)
             .child(
                 div()
+                    .absolute()
+                    .top(px(0.))
+                    .left(px(80.))
+                    .right(px(60.))
+                    .h(px(44.))
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .mr(px(16.))
-                    // Close
-                    .child(
-                        div()
-                            .id("btn-close")
-                            .w(px(12.))
-                            .h(px(12.))
-                            .rounded_full()
-                            .bg(hex(TRAFFIC_RED))
-                            .cursor_pointer()
-                            .on_click(|_ev, _window, cx| {
-                                cx.quit();
-                            }),
-                    )
-                    // Minimize
-                    .child(
-                        div()
-                            .id("btn-minimize")
-                            .w(px(12.))
-                            .h(px(12.))
-                            .rounded_full()
-                            .bg(hex(TRAFFIC_YELLOW))
-                            .cursor_pointer()
-                            .on_click(|_ev, window, _cx| {
-                                window.minimize_window();
-                            }),
-                    )
-                    // Maximize/Zoom
-                    .child(
-                        div()
-                            .id("btn-zoom")
-                            .w(px(12.))
-                            .h(px(12.))
-                            .rounded_full()
-                            .bg(hex(TRAFFIC_GREEN))
-                            .cursor_pointer()
-                            .on_click(|_ev, window, _cx| {
-                                window.zoom_window();
-                            }),
-                    ),
-            )
-            // Title (centered)
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
                     .justify_center()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(hex(TEXT_SECONDARY))
-                            .child("AI Coding Assistant"),
-                    ),
+                    .text_size(px(13.))
+                    .text_color(hex(TEXT_SECONDARY))
+                    .child("AI Coding Assistant"),
             )
-            // Spacer for symmetry
-            .child(div().w(px(60.)))
     }
 
     // ============================================================
