@@ -1301,33 +1301,6 @@ impl AppView {
             )
     }
 
-    fn settings_toggle_row(&self, title: &str, subtitle: &str, on: bool) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(16.))
-            .child(self.settings_labeled_block(title, subtitle))
-            .child(
-                div()
-                    .px(px(10.))
-                    .py(px(4.))
-                    .rounded(px(9999.))
-                    .bg(if on {
-                        hex_a(ACCENT_BLUE, 0.35)
-                    } else {
-                        hex(CONTROL_BG)
-                    })
-                    .text_size(px(11.))
-                    .text_color(if on {
-                        hex(TEXT_PRIMARY)
-                    } else {
-                        hex(TEXT_MUTED)
-                    })
-                    .child(if on { "オン" } else { "オフ" }),
-            )
-    }
-
     fn adjust_model_param(&mut self, kind: ModelParamAdjustKind, steps: i32, cx: &mut Context<Self>) {
         const TEMP_STEP: f32 = 0.1;
         match kind {
