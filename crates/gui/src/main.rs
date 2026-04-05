@@ -1,7 +1,12 @@
 mod editor;
+mod project_explorer;
 
 use editor::EditorView;
 use gpui::*;
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+use project_explorer::{TreeNode, default_expanded_set, default_sample_tree, flatten_visible};
 
 // ============================================================
 // Figma Design Colors (VS Code Dark / macOS style)
@@ -22,6 +27,8 @@ pub const ACCENT_ORANGE: u32 = 0xfb923c;
 #[allow(dead_code)]
 pub const ACCENT_PINK: u32 = 0xdb2777;
 pub const STATUSBAR_BG: u32 = 0x007acc;
+/// エクスプローラで選択中の行（Zed の list selection に近い色）
+pub const EXPLORER_SELECTION_BG: u32 = 0x2a2d2e;
 pub const TRAFFIC_RED: u32 = 0xff5f57;
 pub const TRAFFIC_YELLOW: u32 = 0xfebc2e;
 pub const TRAFFIC_GREEN: u32 = 0x28c840;
@@ -59,15 +66,17 @@ struct ChatMsg {
     content: String,
 }
 
-struct FileEntry {
-    name: &'static str,
-    is_folder: bool,
-}
-
 struct AppView {
     page: Page,
     chat_messages: Vec<ChatMsg>,
-    files: Vec<FileEntry>,
+    /// 開いているワークスペースのルート（Zed worktree root）
+    workspace_root: PathBuf,
+    /// 仮想ファイルツリー
+    file_tree: TreeNode,
+    /// 展開中ディレクトリ（パスごと）— Zed `expanded_dir_ids` 相当
+    explorer_expanded: HashSet<Vec<String>>,
+    /// フォーカス/選択行
+    explorer_selection: Option<Vec<String>>,
     editor_view: Entity<EditorView>,
 }
 
@@ -97,7 +106,7 @@ impl Render for AppView {
                     .flex_1()
                     .flex()
                     .overflow_hidden()
-                    .child(self.render_sidebar())
+                    .child(self.render_sidebar(cx))
                     .child(div().w(px(1.)).h_full().bg(hex(BORDER)))
                     .child(
                         div().flex_1().flex().flex_col().child(content),
@@ -209,7 +218,10 @@ impl AppView {
     // Sidebar
     // ============================================================
 
-    fn render_sidebar(&self) -> impl IntoElement {
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut visible = Vec::new();
+        flatten_visible(&self.file_tree, &self.explorer_expanded, &mut visible);
+
         div()
             .w(px(220.))
             .h_full()
@@ -224,72 +236,166 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(self.nav_item("Editor", Page::Editor))
-                    .child(self.nav_item("Chat", Page::Chat))
-                    .child(self.nav_item("Settings", Page::Settings)),
+                    .child(self.nav_item("Editor", Page::Editor, cx))
+                    .child(self.nav_item("Chat", Page::Chat, cx))
+                    .child(self.nav_item("Settings", Page::Settings, cx)),
             )
             .child(
                 div()
                     .flex_1()
                     .border_t_1()
                     .border_color(hex(BORDER))
-                    .p(px(12.))
                     .flex()
                     .flex_col()
+                    .min_h(px(0.))
                     .child(
                         div()
+                            .p(px(12.))
+                            .pb(px(4.))
                             .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .mb(px(4.))
+                            .flex_col()
                             .child(
                                 div()
-                                    .text_size(px(12.))
-                                    .text_color(hex(TEXT_SECONDARY))
-                                    .child("📂"),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .mb(px(4.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child("📂"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("EXPLORER"),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.))
-                                    .text_color(hex(TEXT_SECONDARY))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("EXPLORER"),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(2.))
+                                    .mb(px(4.))
+                                    .px(px(8.))
+                                    .child(self.explorer_action_btn("📄+"))
+                                    .child(self.explorer_action_btn("📁+"))
+                                    .child(
+                                        div()
+                                            .p(px(4.))
+                                            .rounded(px(4.))
+                                            .text_size(px(12.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                                    this.explorer_expanded = default_expanded_set();
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child("🔄"),
+                                    )
+                                    .child(self.explorer_action_btn("📂")),
                             ),
                     )
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.))
-                            .mb(px(8.))
-                            .px(px(8.))
-                            .child(self.explorer_action_btn("📄+"))
-                            .child(self.explorer_action_btn("📁+"))
-                            .child(self.explorer_action_btn("🔄"))
-                            .child(self.explorer_action_btn("📂")),
-                    )
-                    .children(self.files.iter().map(|f| {
-                        let icon = if f.is_folder { "📁" } else { "📄" };
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .px(px(8.))
-                            .py(px(6.))
-                            .rounded(px(4.))
-                            .cursor_pointer()
-                            .text_size(px(13.))
-                            .text_color(hex(TEXT_SECONDARY))
-                            .child(icon)
-                            .child(f.name.to_string())
-                    })),
+                            .flex_1()
+                            .overflow_hidden()
+                            .min_h(px(0.))
+                            .pb(px(8.))
+                            .children(visible.into_iter().map(|row| {
+                                let path = row.path.clone();
+                                let is_dir = row.is_dir;
+                                let is_expanded = row.is_expanded;
+                                let depth = row.depth;
+                                let label = path
+                                    .last()
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let is_selected =
+                                    self.explorer_selection.as_ref() == Some(&path);
+                                let chevron = if is_dir {
+                                    if is_expanded { "▼" } else { "▶" }
+                                } else {
+                                    " "
+                                };
+                                let icon = if is_dir { "📁" } else { "📄" };
+                                let bg = if is_selected {
+                                    hex(EXPLORER_SELECTION_BG)
+                                } else {
+                                    hex_a(0x000000, 0.0)
+                                };
+                                let indent = px(10. * depth as f32);
+
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .ml(indent)
+                                    .mr(px(8.))
+                                    .px(px(6.))
+                                    .py(px(3.))
+                                    .rounded(px(3.))
+                                    .bg(bg)
+                                    .cursor_pointer()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _ev: &MouseDownEvent, _window, cx| {
+                                            this.explorer_selection = Some(path.clone());
+                                            if is_dir {
+                                                if this.explorer_expanded.contains(&path) {
+                                                    this.explorer_expanded.remove(&path);
+                                                } else {
+                                                    this.explorer_expanded.insert(path.clone());
+                                                }
+                                            } else {
+                                                let wr = this.workspace_root.clone();
+                                                let segs = path.clone();
+                                                this.editor_view.update(cx, |ed, ecx| {
+                                                    ed.open_project_path(&wr, &segs, ecx);
+                                                });
+                                            }
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(14.))
+                                            .flex_shrink_0()
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .text_center()
+                                            .child(chevron),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_size(px(12.))
+                                            .child(icon),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .overflow_hidden()
+                                            .child(label),
+                                    )
+                            })),
+                    ),
             )
             .child(
                 div()
                     .border_t_1()
                     .border_color(hex(BORDER))
                     .p(px(12.))
-                    .child(self.nav_item("Terminal", Page::Terminal)),
+                    .child(self.nav_item("Terminal", Page::Terminal, cx)),
             )
     }
 
@@ -303,7 +409,7 @@ impl AppView {
             .child(icon.to_string())
     }
 
-    fn nav_item(&self, label: &str, page: Page) -> impl IntoElement {
+    fn nav_item(&mut self, label: &str, page: Page, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.page == page;
         let bg = if active {
             hex(HOVER_BG)
@@ -323,6 +429,7 @@ impl AppView {
             Page::Terminal => "▶",
         };
 
+        let target = page;
         div()
             .flex()
             .items_center()
@@ -334,6 +441,13 @@ impl AppView {
             .text_color(fg)
             .text_size(px(13.))
             .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    this.page = target;
+                    cx.notify();
+                }),
+            )
             .child(icon)
             .child(label.to_string())
     }
@@ -866,32 +980,10 @@ fn main() {
                         role: "assistant".into(),
                         content: "こんにちは！Open Agents AIコーディングアシスタントです。".into(),
                     }],
-                    files: vec![
-                        FileEntry {
-                            name: "src",
-                            is_folder: true,
-                        },
-                        FileEntry {
-                            name: "App.tsx",
-                            is_folder: false,
-                        },
-                        FileEntry {
-                            name: "index.tsx",
-                            is_folder: false,
-                        },
-                        FileEntry {
-                            name: "components",
-                            is_folder: true,
-                        },
-                        FileEntry {
-                            name: "utils.ts",
-                            is_folder: false,
-                        },
-                        FileEntry {
-                            name: "styles.css",
-                            is_folder: false,
-                        },
-                    ],
+                    workspace_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                    file_tree: default_sample_tree(),
+                    explorer_expanded: default_expanded_set(),
+                    explorer_selection: None,
                     editor_view,
                 })
             },

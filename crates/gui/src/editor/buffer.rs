@@ -93,6 +93,14 @@ impl TextBuffer {
         }
     }
 
+    /// 文字列と任意のパスからバッファ生成（ディスクに未存在のプレースホルダー用）
+    pub fn from_string_with_path(text: &str, path: Option<PathBuf>) -> Self {
+        let mut b = Self::from_string(text);
+        b.file_path = path;
+        b.dirty = false;
+        b
+    }
+
     /// ファイル保存
     pub fn save(&mut self) -> io::Result<()> {
         if let Some(path) = &self.file_path {

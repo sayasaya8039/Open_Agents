@@ -59,6 +59,27 @@ impl EditorView {
         }
     }
 
+    /// ワークスペース相対パスを開く。実ファイルがあれば読み込み、なければプレースホルダーを表示
+    pub fn open_project_path(
+        &mut self,
+        workspace_root: &std::path::Path,
+        segments: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        let path: std::path::PathBuf = segments.iter().fold(workspace_root.to_path_buf(), |a, s| a.join(s));
+        if path.is_file() {
+            self.load_file(&path, cx);
+            return;
+        }
+        let stub = format!(
+            "// {}\n// （プレースホルダー: ディスク上にファイルがないか読み込めませんでした）\n\n",
+            path.display()
+        );
+        self.buffer = TextBuffer::from_string_with_path(&stub, Some(path));
+        self.cursor = CursorState::new();
+        cx.notify();
+    }
+
     /// カーソル行が画面外に出た場合のみスクロール（非strict: 既に見えていれば何もしない）
     fn ensure_cursor_visible(&self) {
         self.scroll_handle.scroll_to_item(
