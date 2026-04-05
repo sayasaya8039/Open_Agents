@@ -3391,12 +3391,13 @@ fn main() {
                     let chat_composer = cx.new(|ecx| {
                         chat_composer::ChatComposer::new(ecx, "メッセージを入力…")
                     });
-                    let _ = cx.subscribe(
+                    cx.subscribe(
                         &chat_composer,
                         |this: &mut AppView, _, _: &chat_composer::SubmitChat, cx| {
                             this.on_chat_submitted(cx);
                         },
-                    );
+                    )
+                    .detach();
                     AppView {
                         page: Page::Editor,
                         chat_messages: vec![ChatMsg {
