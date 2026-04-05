@@ -33,6 +33,8 @@ actions!(
         SelectRight,
         SelectToLineStart,
         SelectToLineEnd,
+        SelectWordLeft,
+        SelectWordRight,
     ]
 );
 
@@ -55,6 +57,8 @@ pub fn register_keybindings(cx: &mut gpui::App) {
         KeyBinding::new("shift-right", SelectRight, Some("Editor")),
         KeyBinding::new("shift-home", SelectToLineStart, Some("Editor")),
         KeyBinding::new("shift-end", SelectToLineEnd, Some("Editor")),
+        KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some("Editor")),
+        KeyBinding::new("ctrl-shift-right", SelectWordRight, Some("Editor")),
         // 編集
         KeyBinding::new("backspace", Backspace, Some("Editor")),
         KeyBinding::new("delete", Delete, Some("Editor")),

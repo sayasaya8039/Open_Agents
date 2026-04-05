@@ -53,7 +53,7 @@ impl EditorView {
         }
     }
 
-    /// カーソル位置をスクロール範囲内に維持（非strict: 画面内なら何もしない）
+    /// カーソル行が画面外に出た場合のみスクロール（非strict: 既に見えていれば何もしない）
     fn ensure_cursor_visible(&self) {
         self.scroll_handle.scroll_to_item(
             self.cursor.position.line,
@@ -288,6 +288,28 @@ impl EditorView {
         cx.notify();
     }
 
+    fn handle_select_word_left(
+        &mut self,
+        _action: &actions::SelectWordLeft,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_word_left(&self.buffer, true);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn handle_select_word_right(
+        &mut self,
+        _action: &actions::SelectWordRight,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cursor.move_word_right(&self.buffer, true);
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
     fn handle_backspace(
         &mut self,
         _action: &actions::Backspace,
@@ -479,6 +501,8 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::handle_select_right))
             .on_action(cx.listener(Self::handle_select_to_line_start))
             .on_action(cx.listener(Self::handle_select_to_line_end))
+            .on_action(cx.listener(Self::handle_select_word_left))
+            .on_action(cx.listener(Self::handle_select_word_right))
             .on_action(cx.listener(Self::handle_backspace))
             .on_action(cx.listener(Self::handle_delete))
             .on_action(cx.listener(Self::handle_enter))
@@ -561,9 +585,18 @@ impl EntityInputHandler for EditorView {
         self.ime_range.clone()
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // IME キャンセル時: 変換中テキストをバッファから削除
+        if let Some(ime_range) = self.ime_range.take() {
+            let start = self.buffer.offset_to_position(ime_range.start);
+            let end = self.buffer.offset_to_position(ime_range.end);
+            if start != end {
+                let pos = self.buffer.delete_range(start, end);
+                self.cursor.position = pos;
+                cx.notify();
+            }
+        }
         self.ime_text = None;
-        self.ime_range = None;
     }
 
     fn replace_text_in_range(
