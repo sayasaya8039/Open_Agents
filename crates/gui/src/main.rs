@@ -374,6 +374,34 @@ impl AppView {
         cx.notify();
     }
 
+    /// Chat の作業ディレクトリ（エクスプローラ選択を最優先、なければエディタの開いているファイル、最後にワークスペースルート）
+    fn chat_working_directory(&self, cx: &mut Context<Self>) -> PathBuf {
+        let root = self
+            .workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace_root.clone());
+
+        if let Some(segs) = &self.explorer_selection {
+            let abs = absolute_path(&self.workspace_root, segs);
+            if abs.is_dir() {
+                return abs.canonicalize().unwrap_or(abs);
+            }
+            if abs.is_file() {
+                return abs
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| root.clone());
+            }
+            if let Some(parent) = abs.parent() {
+                if !parent.as_os_str().is_empty() {
+                    return parent.to_path_buf();
+                }
+            }
+        }
+
+        self.editor_view.read(cx).chat_working_directory(&self.workspace_root)
+    }
+
     /// Chat: Enter / 送信ボタンから呼ばれ、外部 API または Ollama で応答を取得する。
     fn on_chat_submitted(&mut self, cx: &mut Context<Self>) {
         if self.chat_pending {
@@ -384,10 +412,17 @@ impl AppView {
             return;
         }
 
-        let api_messages: Vec<(String, String)> = self
-            .chat_messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
+        let work_dir = self.chat_working_directory(cx);
+        let work_dir_msg = format!(
+            "作業ディレクトリ（Editor / エクスプローラで選んだ場所。相対パス・ターミナルコマンドの cwd はここを基準に解釈してください）: {}",
+            work_dir.display()
+        );
+        let api_messages: Vec<(String, String)> = std::iter::once(("system".into(), work_dir_msg))
+            .chain(
+                self.chat_messages
+                    .iter()
+                    .map(|m| (m.role.clone(), m.content.clone())),
+            )
             .chain(std::iter::once(("user".into(), text.clone())))
             .collect();
 

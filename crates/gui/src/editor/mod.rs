@@ -201,6 +201,29 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Chat 用のフォルダ（開いているファイルがあればその親、プレースホルダーは対象パスの親、なければワークスペースルート）
+    pub fn chat_working_directory(&self, workspace_root: &std::path::Path) -> PathBuf {
+        let root = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let Some(path) = self.buffer.file_path() else {
+            return root;
+        };
+        if path.is_file() {
+            return path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(root);
+        }
+        if path.is_dir() {
+            return path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        }
+        path.parent()
+            .map(|p| p.to_path_buf())
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(root)
+    }
+
     /// カーソル行が画面外に出た場合のみスクロール（非strict: 既に見えていれば何もしない）
     fn ensure_cursor_visible(&self) {
         self.scroll_handle.scroll_to_item(
