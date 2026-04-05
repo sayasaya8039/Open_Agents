@@ -2476,6 +2476,8 @@ impl AppView {
                                 div()
                                     .flex()
                                     .flex_col()
+                                    .w_full()
+                                    .min_w(px(0.))
                                     .child(self.settings_figma_heading(
                                         "🔑",
                                         FIGMA_ICON_GREEN,
@@ -2483,6 +2485,8 @@ impl AppView {
                                     ))
                                     .child(
                                         div()
+                                            .w_full()
+                                            .min_w(px(0.))
                                             .bg(hex(PANEL_BG))
                                             .rounded(px(8.))
                                             .p(px(16.))
@@ -2491,11 +2495,16 @@ impl AppView {
                                             .gap(px(16.))
                                             .child(
                                                 div()
+                                                    .w_full()
+                                                    .min_w(px(0.))
                                                     .flex()
                                                     .flex_col()
                                                     .gap(px(6.))
                                                     .child(
                                                         div()
+                                                            .w_full()
+                                                            .min_w(px(0.))
+                                                            .whitespace_normal()
                                                             .text_size(px(12.))
                                                             .text_color(hex(TEXT_MUTED))
                                                             .child("外部 API・ローカル推論（Ollama / llama.cpp 等）のキーと URL をローカルに保存します（api_keys.json の entries）。キーをコピーして「貼り付け」で取り込めます。カタログにないマイナー API は同ファイルの entries に手動で ID を追加してください。"),
@@ -2503,6 +2512,9 @@ impl AppView {
                                                     .when(extra_keys > 0, |d| {
                                                         d.child(
                                                             div()
+                                                                .w_full()
+                                                                .min_w(px(0.))
+                                                                .whitespace_normal()
                                                                 .text_size(px(11.))
                                                                 .text_color(hex(ACCENT_ORANGE))
                                                                 .child(format!(
@@ -2513,6 +2525,8 @@ impl AppView {
                                             )
                                             .child(
                                                 div()
+                                                    .w_full()
+                                                    .min_w(px(0.))
                                                     .flex()
                                                     .flex_col()
                                                     .gap(px(8.))

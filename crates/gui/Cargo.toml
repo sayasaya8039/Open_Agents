@@ -1,6 +1,6 @@
 [package]
 name = "open-agents-gui"
-version = "0.2.20"
+version = "0.2.21"
 edition = "2021"
 
 [[bin]]
