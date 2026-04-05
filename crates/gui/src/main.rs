@@ -393,7 +393,7 @@ impl AppView {
                                     .child("index.tsx"),
                             ),
                     )
-                    // Run button
+                    // Save button
                     .child(
                         div()
                             .flex()
@@ -401,15 +401,12 @@ impl AppView {
                             .gap(px(8.))
                             .child(
                                 div()
-                                    .px(px(12.))
-                                    .py(px(6.))
-                                    .bg(hex(ACCENT_BLUE))
-                                    .rounded(px(6.))
-                                    .text_size(px(12.))
-                                    .text_color(hex(0xFFFFFF))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .p(px(6.))
+                                    .rounded(px(4.))
+                                    .text_size(px(14.))
+                                    .text_color(hex(TEXT_SECONDARY))
                                     .cursor_pointer()
-                                    .child("▶ Run"),
+                                    .child("💾"),
                             ),
                     ),
             )
