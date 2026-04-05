@@ -520,12 +520,19 @@ impl EditorView {
 
     // --- マウス操作 ---
 
-    /// ピクセル座標からバッファ位置を計算
+    /// ピクセル座標からバッファ位置を計算（スクロールオフセット考慮）
     fn position_from_point(&self, point: Point<Pixels>) -> Position {
         let line_height = px(20.);
         let char_width = px(8.);
         let gutter_width = px(48.);
-        let line = ((point.y / line_height) as usize)
+
+        // uniform_list のスクロールオフセットを取得
+        let scroll_offset = self.scroll_handle.0.borrow()
+            .base_handle.offset();
+        // scroll_offset.y は負の値（上にスクロールした分）
+        let adjusted_y = point.y - scroll_offset.y;
+
+        let line = ((adjusted_y / line_height) as usize)
             .min(self.buffer.line_count().saturating_sub(1));
         let adjusted_x = (point.x - gutter_width).max(px(0.));
         let mut col = ((adjusted_x / char_width) as usize)
