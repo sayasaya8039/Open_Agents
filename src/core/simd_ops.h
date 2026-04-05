@@ -38,6 +38,43 @@ void oag_simd_pack_colors(
     uint64_t* packed_out
 );
 
+// VT escape byte classifier — categorize each byte (printable/control/ESC/CSI/high)
+void oag_simd_classify_vt(
+    const uint8_t* buf,
+    uint32_t len,
+    uint8_t* classes_out
+);
+
+// simdjson-like JSON structural character detection — bitmask per 32-byte chunk
+uint32_t oag_simd_detect_json(
+    const uint8_t* buf,
+    uint32_t len,
+    uint32_t* structural_bits
+);
+
+// Markdown line type detection — classify each line's structural type
+uint32_t oag_simd_detect_markdown(
+    const uint8_t* buf,
+    uint32_t len,
+    uint8_t* line_types
+);
+
+// Fast newline (0x0A) position detection — returns positions and count
+uint32_t oag_simd_find_newlines(
+    const uint8_t* buf,
+    uint32_t len,
+    uint32_t* positions_out
+);
+
+// SGR parameter fast parser — extract fg/bg colors and attribute flags
+void oag_simd_sgr_parse(
+    const uint8_t* params,
+    uint32_t len,
+    uint32_t* fg_out,
+    uint32_t* bg_out,
+    uint16_t* flags_out
+);
+
 #ifdef __cplusplus
 }
 #endif

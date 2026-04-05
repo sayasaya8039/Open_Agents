@@ -13,7 +13,7 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 /// A single cell in the terminal/editor grid.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridCell {
     /// Unicode codepoint to display
     pub ch: char,
@@ -317,6 +317,12 @@ impl GlyphAtlas {
 // GridRenderer
 // ---------------------------------------------------------------------------
 
+pub struct GridRendererStats {
+    pub frame_count: u64,
+    pub dirty_count: u32,
+    pub total_cells: u32,
+}
+
 pub struct GridRenderer {
     atlas: GlyphAtlas,
     /// BGRA pixel buffer (buf_width × buf_height × 4 bytes)
@@ -329,6 +335,14 @@ pub struct GridRenderer {
     rows: u32,
     dirty: bool,
     cached_image: Option<Arc<RenderImage>>,
+    /// セル単位 dirty ビットマップ (1 bit per cell, packed u64)
+    dirty_bitmap: Vec<u64>,
+    /// 前フレームのセル配列（差分検出用）
+    prev_cells: Vec<Vec<GridCell>>,
+    /// dirty セル数（0 なら render_image() をスキップ）
+    dirty_count: u32,
+    /// フレームカウンタ
+    frame_count: u64,
 }
 
 impl GridRenderer {
@@ -350,25 +364,58 @@ impl GridRenderer {
             rows,
             dirty: true,
             cached_image: None,
+            dirty_bitmap: vec![u64::MAX; ((cols * rows + 63) / 64) as usize],
+            prev_cells: Vec::new(),
+            dirty_count: cols * rows,
+            frame_count: 0,
         }
     }
 
-    /// Bulk-update the entire grid from a 2D cell array (rows × cols).
+    /// Bulk-update the grid from a 2D cell array with per-cell damage tracking.
+    /// Only changed cells are re-painted into the pixel buffer.
     pub fn update_cells(&mut self, cells: &[Vec<GridCell>]) {
-        for (r, row) in cells.iter().enumerate() {
-            let r = r as u32;
-            if r >= self.rows {
-                break;
-            }
-            for (c, cell) in row.iter().enumerate() {
-                let c = c as u32;
-                if c >= self.cols {
-                    break;
+        let rows = cells.len().min(self.rows as usize);
+
+        // Clear dirty bitmap
+        self.dirty_count = 0;
+        for word in &mut self.dirty_bitmap {
+            *word = 0;
+        }
+
+        // Collect dirty cells first (avoids borrow conflict with paint_cell)
+        let mut dirty_list: Vec<(u32, u32, GridCell)> = Vec::new();
+        for row in 0..rows {
+            let cols_n = cells[row].len().min(self.cols as usize);
+            let prev_row = self.prev_cells.get(row);
+
+            for col in 0..cols_n {
+                let cell = cells[row][col];
+                let changed = match prev_row {
+                    Some(prev) if col < prev.len() => cell != prev[col],
+                    _ => true,
+                };
+
+                if changed {
+                    let idx = row * self.cols as usize + col;
+                    self.dirty_bitmap[idx / 64] |= 1u64 << (idx % 64);
+                    self.dirty_count += 1;
+                    dirty_list.push((row as u32, col as u32, cell));
                 }
-                self.paint_cell(r, c, *cell);
             }
         }
-        self.dirty = true;
+
+        // Save current frame for next diff (prev_cells borrow released)
+        self.prev_cells = cells.to_vec();
+
+        // Now paint dirty cells
+        for (row, col, cell) in dirty_list {
+            self.paint_cell(row, col, cell);
+        }
+
+        if self.dirty_count > 0 {
+            self.dirty = true;
+        }
+        self.frame_count += 1;
     }
 
     /// Update a single cell and mark dirty.
@@ -419,6 +466,10 @@ impl GridRenderer {
         self.pixel_buf = vec![0u8; buf_size];
         self.dirty = true;
         self.cached_image = None;
+        self.dirty_bitmap = vec![u64::MAX; ((cols * rows + 63) / 64) as usize];
+        self.prev_cells.clear();
+        self.dirty_count = cols * rows;
+        self.frame_count = 0;
     }
 
     /// Returns `(cell_width, cell_height)` in pixels.
@@ -434,6 +485,15 @@ impl GridRenderer {
     /// Returns `(buf_width, buf_height)` in pixels.
     pub fn pixel_size(&self) -> (u32, u32) {
         (self.buf_width, self.buf_height)
+    }
+
+    /// Returns damage tracking statistics for the current frame.
+    pub fn stats(&self) -> GridRendererStats {
+        GridRendererStats {
+            frame_count: self.frame_count,
+            dirty_count: self.dirty_count,
+            total_cells: self.cols * self.rows,
+        }
     }
 
     // -- private helpers ---------------------------------------------------

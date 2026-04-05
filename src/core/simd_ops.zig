@@ -268,6 +268,404 @@ pub export fn oag_simd_pack_colors(
 }
 
 // ============================================================
+//  5. VT Escape Sequence Classifier
+// ============================================================
+
+/// Classify each byte in a VT byte stream into categories:
+///   0 = printable ASCII (0x20-0x7E)
+///   1 = control (0x00-0x1F, 0x7F) excluding ESC
+///   2 = ESC (0x1B)
+///   3 = CSI parameter (0x30-0x3F)
+///   4 = CSI final (0x40-0x7E)  — same range as printable but contextually different
+///   5 = high byte (0x80-0xFF)
+///
+/// Note: Without full state tracking, bytes in the printable range (0x40-0x7E)
+/// are classified as printable (0) and bytes in 0x30-0x3F as CSI parameter (3).
+/// The caller should use ESC markers to determine CSI context.
+pub export fn oag_simd_classify_vt(
+    buf: [*]const u8,
+    len: u32,
+    classes_out: [*]u8,
+) void {
+    const n: usize = @intCast(len);
+    var i: usize = 0;
+
+    // --- SIMD fast path (32 B / iteration) ---
+    while (i + 32 <= n) : (i += 32) {
+        const data: V32 = buf[i..][0..32].*;
+
+        // Start with all zeros (printable)
+        var result: V32 = @splat(0);
+
+        // High byte detection (>= 0x80): class 5
+        const hi_mask: @Vector(32, u1) = @bitCast(data >= @as(V32, @splat(0x80)));
+
+        // Control chars: < 0x20 or == 0x7F: class 1
+        const lo_ctrl: @Vector(32, u1) = @bitCast(data < @as(V32, @splat(0x20)));
+        const del_ctrl: @Vector(32, u1) = @bitCast(data == @as(V32, @splat(0x7F)));
+        const ctrl_mask = lo_ctrl | del_ctrl;
+
+        // ESC (0x1B): class 2
+        const esc_mask: @Vector(32, u1) = @bitCast(data == @as(V32, @splat(0x1B)));
+
+        // CSI parameter range (0x30-0x3F): class 3
+        const csi_lo: @Vector(32, u1) = @bitCast(data >= @as(V32, @splat(0x30)));
+        const csi_hi: @Vector(32, u1) = @bitCast(data <= @as(V32, @splat(0x3F)));
+        const csi_param_mask = csi_lo & csi_hi;
+
+        // Apply classes in priority order (higher priority overwrites)
+        // 5: high byte
+        const hi_select: V32 = @select(u8, @as(@Vector(32, bool), @bitCast(hi_mask)), @as(V32, @splat(5)), result);
+        result = hi_select;
+
+        // 3: CSI parameter (only for non-high bytes)
+        const not_hi = ~hi_mask;
+        const csi_final_mask = csi_param_mask & not_hi;
+        result = @select(u8, @as(@Vector(32, bool), @bitCast(csi_final_mask)), @as(V32, @splat(3)), result);
+
+        // 1: control (overwrites CSI param for control chars in 0x00-0x1F)
+        const ctrl_and_not_hi = ctrl_mask & not_hi;
+        result = @select(u8, @as(@Vector(32, bool), @bitCast(ctrl_and_not_hi)), @as(V32, @splat(1)), result);
+
+        // 2: ESC (highest priority single byte)
+        result = @select(u8, @as(@Vector(32, bool), @bitCast(esc_mask)), @as(V32, @splat(2)), result);
+
+        classes_out[i..][0..32].* = result;
+    }
+
+    // --- Scalar tail ---
+    while (i < n) : (i += 1) {
+        const b = buf[i];
+        if (b >= 0x80) {
+            classes_out[i] = 5;
+        } else if (b == 0x1B) {
+            classes_out[i] = 2;
+        } else if (b < 0x20 or b == 0x7F) {
+            classes_out[i] = 1;
+        } else if (b >= 0x30 and b <= 0x3F) {
+            classes_out[i] = 3;
+        } else {
+            classes_out[i] = 0; // printable
+        }
+    }
+}
+
+// ============================================================
+//  6. simdjson-like JSON Structural Character Detection
+// ============================================================
+
+/// Detect JSON structural characters ({, }, [, ], :, ,, ") in the buffer.
+/// Returns a bitmask per 32-byte chunk where bit i indicates buf[chunk*32+i]
+/// is a structural character. Returns the number of chunks processed.
+pub export fn oag_simd_detect_json(
+    buf: [*]const u8,
+    len: u32,
+    structural_bits: [*]u32,
+) u32 {
+    const n: usize = @intCast(len);
+    var chunk: u32 = 0;
+    var i: usize = 0;
+
+    // --- SIMD fast path (32 B / chunk) ---
+    while (i + 32 <= n) : (i += 32) {
+        const data: V32 = buf[i..][0..32].*;
+
+        const m1: @Vector(32, u1) = @bitCast(data == @as(V32, @splat('{')));
+        const m2: @Vector(32, u1) = @bitCast(data == @as(V32, @splat('}')));
+        const m3: @Vector(32, u1) = @bitCast(data == @as(V32, @splat('[')));
+        const m4: @Vector(32, u1) = @bitCast(data == @as(V32, @splat(']')));
+        const m5: @Vector(32, u1) = @bitCast(data == @as(V32, @splat(':')));
+        const m6: @Vector(32, u1) = @bitCast(data == @as(V32, @splat(',')));
+        const m7: @Vector(32, u1) = @bitCast(data == @as(V32, @splat('"')));
+
+        const combined = m1 | m2 | m3 | m4 | m5 | m6 | m7;
+        structural_bits[chunk] = @bitCast(combined);
+        chunk += 1;
+    }
+
+    // --- Scalar tail (partial last chunk) ---
+    if (i < n) {
+        var tail_bits: u32 = 0;
+        var j: u5 = 0;
+        while (i < n) : (i += 1) {
+            const b = buf[i];
+            if (b == '{' or b == '}' or b == '[' or b == ']' or
+                b == ':' or b == ',' or b == '"')
+            {
+                tail_bits |= @as(u32, 1) << j;
+            }
+            j +%= 1;
+        }
+        structural_bits[chunk] = tail_bits;
+        chunk += 1;
+    }
+
+    return chunk;
+}
+
+// ============================================================
+//  7. Markdown Line Type Detection
+// ============================================================
+
+pub const MarkdownLineType = enum(u8) {
+    plain = 0,
+    heading1 = 1,
+    heading2 = 2,
+    heading3 = 3,
+    heading4 = 4,
+    code_fence = 5,
+    list_item = 6,
+    blockquote = 7,
+    empty = 8,
+};
+
+/// Detect Markdown structural line types by examining each line's leading bytes.
+/// Returns the number of lines found.
+pub export fn oag_simd_detect_markdown(
+    buf: [*]const u8,
+    len: u32,
+    line_types: [*]u8,
+) u32 {
+    const n: usize = @intCast(len);
+    var line_count: u32 = 0;
+    var line_start: usize = 0;
+
+    // Process each line
+    while (line_start <= n) {
+        // Find the end of this line
+        var line_end: usize = line_start;
+        while (line_end < n and buf[line_end] != 0x0A) : (line_end += 1) {}
+
+        const line_len = line_end - line_start;
+
+        // Classify based on leading bytes
+        if (line_len == 0) {
+            line_types[line_count] = @intFromEnum(MarkdownLineType.empty);
+        } else {
+            const first = buf[line_start];
+            if (first == '#') {
+                // Count consecutive '#'
+                var level: usize = 0;
+                while (level < line_len and buf[line_start + level] == '#') : (level += 1) {}
+                if (level >= 4) {
+                    line_types[line_count] = @intFromEnum(MarkdownLineType.heading4);
+                } else if (level == 3) {
+                    line_types[line_count] = @intFromEnum(MarkdownLineType.heading3);
+                } else if (level == 2) {
+                    line_types[line_count] = @intFromEnum(MarkdownLineType.heading2);
+                } else {
+                    line_types[line_count] = @intFromEnum(MarkdownLineType.heading1);
+                }
+            } else if (line_len >= 3 and buf[line_start] == '`' and buf[line_start + 1] == '`' and buf[line_start + 2] == '`') {
+                line_types[line_count] = @intFromEnum(MarkdownLineType.code_fence);
+            } else if (line_len >= 2 and first == '-' and buf[line_start + 1] == ' ') {
+                line_types[line_count] = @intFromEnum(MarkdownLineType.list_item);
+            } else if (line_len >= 2 and first == '>' and buf[line_start + 1] == ' ') {
+                line_types[line_count] = @intFromEnum(MarkdownLineType.blockquote);
+            } else {
+                line_types[line_count] = @intFromEnum(MarkdownLineType.plain);
+            }
+        }
+
+        line_count += 1;
+        // Move past the newline
+        if (line_end >= n) break;
+        line_start = line_end + 1;
+    }
+
+    return line_count;
+}
+
+// ============================================================
+//  8. Fast Newline Position Detection
+// ============================================================
+
+/// Find all newline (0x0A) positions in the buffer. 32 bytes per cycle.
+/// Returns the number of newlines found.
+pub export fn oag_simd_find_newlines(
+    buf: [*]const u8,
+    len: u32,
+    positions_out: [*]u32,
+) u32 {
+    const n: usize = @intCast(len);
+    var count: u32 = 0;
+    var i: usize = 0;
+
+    // --- SIMD fast path (32 B / iteration) ---
+    while (i + 32 <= n) : (i += 32) {
+        const data: V32 = buf[i..][0..32].*;
+        const nl_mask: @Vector(32, u1) = @bitCast(data == @as(V32, @splat(0x0A)));
+        var mask_u32: u32 = @bitCast(nl_mask);
+
+        while (mask_u32 != 0) {
+            const bit_pos = @ctz(mask_u32);
+            positions_out[count] = @intCast(i + bit_pos);
+            count += 1;
+            // Clear the lowest set bit
+            mask_u32 &= mask_u32 - 1;
+        }
+    }
+
+    // --- Scalar tail ---
+    while (i < n) : (i += 1) {
+        if (buf[i] == 0x0A) {
+            positions_out[count] = @intCast(i);
+            count += 1;
+        }
+    }
+
+    return count;
+}
+
+// ============================================================
+//  9. SGR Parameter Fast Parser
+// ============================================================
+
+/// Parse SGR (Select Graphic Rendition) parameter bytes.
+/// Input: parameter bytes between CSI and 'm' (e.g., "38;2;255;128;0").
+/// Outputs: fg color (packed RGB), bg color (packed RGB), attribute flags.
+///
+/// Flags layout:
+///   bit 0: bold      bit 1: dim       bit 2: italic
+///   bit 3: underline bit 4: blink     bit 5: inverse
+///   bit 6: hidden    bit 7: strikethrough
+pub export fn oag_simd_sgr_parse(
+    params: [*]const u8,
+    len: u32,
+    fg_out: *u32,
+    bg_out: *u32,
+    flags_out: *u16,
+) void {
+    const n: usize = @intCast(len);
+    fg_out.* = 0;
+    bg_out.* = 0;
+    flags_out.* = 0;
+
+    // Extract parameter numbers by scanning for ';' separators
+    // We'll collect up to 16 parameters
+    var param_values: [16]u32 = [_]u32{0} ** 16;
+    var param_count: usize = 0;
+    var current_num: u32 = 0;
+    var has_digit = false;
+
+    // Use SIMD to find semicolons for longer strings
+    var i: usize = 0;
+    if (n >= 32) {
+        // SIMD semicolon scan: find positions, then scalar parse numbers between them
+        while (i + 32 <= n) : (i += 32) {
+            const data: V32 = params[i..][0..32].*;
+            const semi_mask: @Vector(32, u1) = @bitCast(data == @as(V32, @splat(';')));
+            const digit_lo: @Vector(32, u1) = @bitCast(data >= @as(V32, @splat('0')));
+            const digit_hi: @Vector(32, u1) = @bitCast(data <= @as(V32, @splat('9')));
+            const is_digit = digit_lo & digit_hi;
+            _ = is_digit;
+
+            // Process byte by byte within this chunk (SIMD detected structure)
+            var semi_u32: u32 = @bitCast(semi_mask);
+            // Still process digits sequentially for number accumulation
+            for (0..32) |k| {
+                const b = params[i + k];
+                if (b >= '0' and b <= '9') {
+                    current_num = current_num * 10 + (b - '0');
+                    has_digit = true;
+                } else if (b == ';') {
+                    if (param_count < 16) {
+                        param_values[param_count] = if (has_digit) current_num else 0;
+                        param_count += 1;
+                    }
+                    current_num = 0;
+                    has_digit = false;
+                    semi_u32 &= semi_u32 - 1;
+                }
+            }
+        }
+    }
+
+    // --- Scalar tail ---
+    while (i < n) : (i += 1) {
+        const b = params[i];
+        if (b >= '0' and b <= '9') {
+            current_num = current_num * 10 + (b - '0');
+            has_digit = true;
+        } else if (b == ';') {
+            if (param_count < 16) {
+                param_values[param_count] = if (has_digit) current_num else 0;
+                param_count += 1;
+            }
+            current_num = 0;
+            has_digit = false;
+        }
+    }
+    // Last parameter (no trailing ';')
+    if (has_digit and param_count < 16) {
+        param_values[param_count] = current_num;
+        param_count += 1;
+    }
+
+    // Interpret SGR codes
+    var pi: usize = 0;
+    while (pi < param_count) {
+        const code = param_values[pi];
+        switch (code) {
+            0 => {
+                // Reset
+                fg_out.* = 0;
+                bg_out.* = 0;
+                flags_out.* = 0;
+            },
+            1 => flags_out.* |= (1 << 0), // bold
+            2 => flags_out.* |= (1 << 1), // dim
+            3 => flags_out.* |= (1 << 2), // italic
+            4 => flags_out.* |= (1 << 3), // underline
+            5 => flags_out.* |= (1 << 4), // blink
+            7 => flags_out.* |= (1 << 5), // inverse
+            8 => flags_out.* |= (1 << 6), // hidden
+            9 => flags_out.* |= (1 << 7), // strikethrough
+            38 => {
+                // Foreground color
+                if (pi + 1 < param_count and param_values[pi + 1] == 2) {
+                    // 24-bit: 38;2;R;G;B
+                    if (pi + 4 < param_count) {
+                        const r = param_values[pi + 2] & 0xFF;
+                        const g = param_values[pi + 3] & 0xFF;
+                        const b_val = param_values[pi + 4] & 0xFF;
+                        fg_out.* = (r << 16) | (g << 8) | b_val;
+                        pi += 4;
+                    }
+                } else if (pi + 1 < param_count and param_values[pi + 1] == 5) {
+                    // 256-color: 38;5;N — store index directly
+                    if (pi + 2 < param_count) {
+                        fg_out.* = param_values[pi + 2] & 0xFF;
+                        pi += 2;
+                    }
+                }
+            },
+            48 => {
+                // Background color
+                if (pi + 1 < param_count and param_values[pi + 1] == 2) {
+                    // 24-bit: 48;2;R;G;B
+                    if (pi + 4 < param_count) {
+                        const r = param_values[pi + 2] & 0xFF;
+                        const g = param_values[pi + 3] & 0xFF;
+                        const b_val = param_values[pi + 4] & 0xFF;
+                        bg_out.* = (r << 16) | (g << 8) | b_val;
+                        pi += 4;
+                    }
+                } else if (pi + 1 < param_count and param_values[pi + 1] == 5) {
+                    // 256-color: 48;5;N
+                    if (pi + 2 < param_count) {
+                        bg_out.* = param_values[pi + 2] & 0xFF;
+                        pi += 2;
+                    }
+                }
+            },
+            else => {},
+        }
+        pi += 1;
+    }
+}
+
+// ============================================================
 //  Tests
 // ============================================================
 
@@ -398,4 +796,143 @@ test "pack_colors — ignores upper 8 bits of fg/bg" {
 
     const expected: u64 = (@as(u64, 0xADBEEF) << 40) | (@as(u64, 0x112233) << 16);
     try std.testing.expectEqual(expected, out[0]);
+}
+
+// ============================================================
+//  Tests — classify_vt
+// ============================================================
+
+test "classify_vt — mixed input" {
+    const data = "AB\x1B[31mCD\x00\xFF";
+    var classes: [data.len]u8 = undefined;
+    oag_simd_classify_vt(data.ptr, @intCast(data.len), &classes);
+
+    try std.testing.expectEqual(@as(u8, 0), classes[0]); // 'A' printable
+    try std.testing.expectEqual(@as(u8, 0), classes[1]); // 'B' printable
+    try std.testing.expectEqual(@as(u8, 2), classes[2]); // ESC
+    try std.testing.expectEqual(@as(u8, 0), classes[3]); // '[' printable (0x5B)
+    try std.testing.expectEqual(@as(u8, 3), classes[4]); // '3' CSI param
+    try std.testing.expectEqual(@as(u8, 3), classes[5]); // '1' CSI param
+    try std.testing.expectEqual(@as(u8, 0), classes[6]); // 'm' printable (0x6D)
+    try std.testing.expectEqual(@as(u8, 0), classes[7]); // 'C' printable
+    try std.testing.expectEqual(@as(u8, 0), classes[8]); // 'D' printable
+    try std.testing.expectEqual(@as(u8, 1), classes[9]); // NUL control
+    try std.testing.expectEqual(@as(u8, 5), classes[10]); // 0xFF high byte
+}
+
+test "classify_vt — ESC sequence with CSI" {
+    const data = "\x1B[0;38;2;255;0;0m";
+    var classes: [data.len]u8 = undefined;
+    oag_simd_classify_vt(data.ptr, @intCast(data.len), &classes);
+
+    try std.testing.expectEqual(@as(u8, 2), classes[0]); // ESC
+    try std.testing.expectEqual(@as(u8, 0), classes[1]); // '['
+    try std.testing.expectEqual(@as(u8, 3), classes[2]); // '0' CSI param
+    try std.testing.expectEqual(@as(u8, 3), classes[3]); // ';' CSI param
+}
+
+// ============================================================
+//  Tests — detect_json
+// ============================================================
+
+test "detect_json — simple object" {
+    const data = "{\"key\": \"value\"}";
+    var bits: [1]u32 = undefined;
+    const chunks = oag_simd_detect_json(data.ptr, @intCast(data.len), &bits);
+    try std.testing.expectEqual(@as(u32, 1), chunks);
+
+    // bit 0: '{', bit 1: '"', bit 5: '"', bit 6: ':', bit 8: '"',
+    // bit 13: '"', bit 14: '}'
+    try std.testing.expect(bits[0] & 1 != 0); // '{'
+    try std.testing.expect(bits[0] & (1 << 1) != 0); // first '"'
+    try std.testing.expect(bits[0] & (1 << (data.len - 1)) != 0); // '}'
+}
+
+test "detect_json — nested structure" {
+    const data = "{\"a\":[1,2],\"b\":{}}";
+    var bits: [1]u32 = undefined;
+    const chunks = oag_simd_detect_json(data.ptr, @intCast(data.len), &bits);
+    try std.testing.expectEqual(@as(u32, 1), chunks);
+
+    // Verify structural chars are detected
+    try std.testing.expect(bits[0] & 1 != 0); // '{'
+    try std.testing.expect(bits[0] & (1 << (data.len - 1)) != 0); // '}'
+}
+
+// ============================================================
+//  Tests — detect_markdown
+// ============================================================
+
+test "detect_markdown — heading levels" {
+    const data = "# H1\n## H2\n### H3\n#### H4\nplain text";
+    var types: [16]u8 = undefined;
+    const lines = oag_simd_detect_markdown(data.ptr, @intCast(data.len), &types);
+    try std.testing.expectEqual(@as(u32, 5), lines);
+    try std.testing.expectEqual(@as(u8, 1), types[0]); // heading1
+    try std.testing.expectEqual(@as(u8, 2), types[1]); // heading2
+    try std.testing.expectEqual(@as(u8, 3), types[2]); // heading3
+    try std.testing.expectEqual(@as(u8, 4), types[3]); // heading4
+    try std.testing.expectEqual(@as(u8, 0), types[4]); // plain
+}
+
+test "detect_markdown — code fence, list, blockquote, empty" {
+    const data = "```rust\n- item\n> quote\n\ntext";
+    var types: [16]u8 = undefined;
+    const lines = oag_simd_detect_markdown(data.ptr, @intCast(data.len), &types);
+    try std.testing.expectEqual(@as(u32, 5), lines);
+    try std.testing.expectEqual(@as(u8, 5), types[0]); // code_fence
+    try std.testing.expectEqual(@as(u8, 6), types[1]); // list_item
+    try std.testing.expectEqual(@as(u8, 7), types[2]); // blockquote
+    try std.testing.expectEqual(@as(u8, 8), types[3]); // empty
+    try std.testing.expectEqual(@as(u8, 0), types[4]); // plain
+}
+
+// ============================================================
+//  Tests — find_newlines
+// ============================================================
+
+test "find_newlines — multiple lines" {
+    const data = "line1\nline2\nline3\n";
+    var positions: [16]u32 = undefined;
+    const count = oag_simd_find_newlines(data.ptr, @intCast(data.len), &positions);
+    try std.testing.expectEqual(@as(u32, 3), count);
+    try std.testing.expectEqual(@as(u32, 5), positions[0]);
+    try std.testing.expectEqual(@as(u32, 11), positions[1]);
+    try std.testing.expectEqual(@as(u32, 17), positions[2]);
+}
+
+test "find_newlines — no newlines" {
+    const data = "no newlines here";
+    var positions: [16]u32 = undefined;
+    const count = oag_simd_find_newlines(data.ptr, @intCast(data.len), &positions);
+    try std.testing.expectEqual(@as(u32, 0), count);
+}
+
+// ============================================================
+//  Tests — sgr_parse
+// ============================================================
+
+test "sgr_parse — 24bit foreground color" {
+    const data = "38;2;255;128;0";
+    var fg: u32 = undefined;
+    var bg: u32 = undefined;
+    var flags: u16 = undefined;
+    oag_simd_sgr_parse(data.ptr, @intCast(data.len), &fg, &bg, &flags);
+
+    try std.testing.expectEqual(@as(u32, (255 << 16) | (128 << 8) | 0), fg);
+    try std.testing.expectEqual(@as(u32, 0), bg);
+    try std.testing.expectEqual(@as(u16, 0), flags);
+}
+
+test "sgr_parse — bold + italic + 24bit bg" {
+    const data = "1;3;48;2;10;20;30";
+    var fg: u32 = undefined;
+    var bg: u32 = undefined;
+    var flags: u16 = undefined;
+    oag_simd_sgr_parse(data.ptr, @intCast(data.len), &fg, &bg, &flags);
+
+    try std.testing.expectEqual(@as(u32, 0), fg);
+    try std.testing.expectEqual(@as(u32, (10 << 16) | (20 << 8) | 30), bg);
+    // bold (bit 0) + italic (bit 2) = 0b0101 = 5
+    try std.testing.expectEqual(@as(u16, 5), flags);
 }

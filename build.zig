@@ -95,6 +95,18 @@ pub fn build(b: *std.Build) void {
     });
     exe.addObject(evloop_obj);
 
+    // ========== VT Pipeline Zig Module ==========
+    const vt_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/vt_pipeline.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const vt_obj = b.addObject(.{
+        .name = "oag_vt_pipeline",
+        .root_module = vt_mod,
+    });
+    exe.addObject(vt_obj);
+
     b.installArtifact(exe);
 
     // ========== Run step ==========
