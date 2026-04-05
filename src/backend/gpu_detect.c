@@ -148,12 +148,13 @@ oag_gpu_detect_t oag_gpu_detect(void) {
 }
 
 void oag_gpu_detect_print(const oag_gpu_detect_t* det) {
-    printf("╔══════════════════════════════════════════════════════╗\n");
-    printf("║            GPU Auto-Detection (DXGI)                ║\n");
-    printf("╠══════════════════════════════════════════════════════╣\n");
+    /* CP932 等の既定コードページでも壊れないよう ASCII のみ */
+    printf("+------------------------------------------------------+\n");
+    printf("|            GPU Auto-Detection (DXGI)                 |\n");
+    printf("+------------------------------------------------------+\n");
 
     if (det->n_gpus == 0) {
-        printf("║  No GPUs detected                                   ║\n");
+        printf("|  No GPUs detected                                    |\n");
     }
 
     for (int i = 0; i < det->n_gpus; i++) {
@@ -178,28 +179,28 @@ void oag_gpu_detect_print(const oag_gpu_detect_t* det) {
             default:                    backend_str = "CPU"; break;
         }
 
-        printf("║  [%d] %s %-10s %5.1f GB  %-10s → %s",
+        printf("|  [%d] %s %-10s %5.1f GB  %s -> %s",
                i, vendor_str, type_str,
                g->vram_bytes / (1024.0 * 1024.0 * 1024.0),
                g->name, backend_str);
 
         if (i == det->best_gpu_idx) {
-            printf(" ★");
+            printf(" *");
         }
         printf("\n");
     }
 
-    printf("╠══════════════════════════════════════════════════════╣\n");
+    printf("+------------------------------------------------------+\n");
 
     if (det->best_gpu_idx >= 0) {
-        printf("║  Selected: %s → %s backend",
+        printf("|  Selected: %s -> %s backend",
                det->gpus[det->best_gpu_idx].name,
                oag_backend_type_name(det->recommended_backend));
     } else {
-        printf("║  Selected: CPU (no suitable GPU found)");
+        printf("|  Selected: CPU (no suitable GPU found)");
     }
     printf("\n");
-    printf("╚══════════════════════════════════════════════════════╝\n");
+    printf("+------------------------------------------------------+\n");
 }
 
 #else

@@ -61,14 +61,10 @@ void oag_kv_cache_reset(oag_kv_cache_t* cache) {
 // Load tensor from GGUF (dequantize if needed)
 // ============================================================
 
-static oag_tensor_t* load_tensor_f32(const gguf_ctx_t* gguf, const char* name) {
+static oag_tensor_t* try_load_tensor_f32(const gguf_ctx_t* gguf, const char* name) {
     const gguf_tensor_info_t* info = gguf_find_tensor(gguf, name);
-    if (!info) {
-        fprintf(stderr, "[Model] Tensor not found: %s\n", name);
-        return NULL;
-    }
+    if (!info) return NULL;
 
-    // Find tensor index for data access
     for (uint64_t i = 0; i < gguf->n_tensors; i++) {
         if (strcmp(gguf->tensors[i].name.data, name) == 0) {
             const void* raw = gguf_tensor_data(gguf, i);
@@ -80,6 +76,12 @@ static oag_tensor_t* load_tensor_f32(const gguf_ctx_t* gguf, const char* name) {
         }
     }
     return NULL;
+}
+
+static oag_tensor_t* load_tensor_f32(const gguf_ctx_t* gguf, const char* name) {
+    oag_tensor_t* t = try_load_tensor_f32(gguf, name);
+    if (!t) fprintf(stderr, "[Model] Tensor not found: %s\n", name);
+    return t;
 }
 
 // ============================================================
@@ -120,12 +122,13 @@ oag_model_t* oag_model_load(const char* path, oag_backend_t* backend) {
     // Load embedding + output weights
     m->tok_embd    = load_tensor_f32(gguf, "token_embd.weight");
     m->output_norm = load_tensor_f32(gguf, "output_norm.weight");
-    m->output      = load_tensor_f32(gguf, "output.weight");
+    /* llama.cpp 系 GGUF: output.weight。HF 由来では lm_head.weight のことも */
+    m->output = try_load_tensor_f32(gguf, "output.weight");
+    if (!m->output) m->output = try_load_tensor_f32(gguf, "lm_head.weight");
 
-    // If output shares weights with embedding
     if (!m->output && m->tok_embd) {
         m->output = oag_tensor_clone(m->tok_embd);
-        printf("[Model] Using tied embeddings for output\n");
+        printf("[Model] output.weight / lm_head.weight なし; 埋め込み行列を出力用に共有（tied）\n");
     }
 
     // Load layers
