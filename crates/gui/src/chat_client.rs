@@ -60,6 +60,16 @@ fn resolve_local_weights(paths: &[PathBuf], index: usize) -> Result<ChatBackend,
     }
     let idx = index.min(paths.len() - 1);
     let path = paths[idx].clone();
+    if !path.is_file() {
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("モデルファイル");
+        return Err(format!(
+            "選択中のローカルモデル `{file_name}` が見つかりません。設定の「ローカルLLM」でこの登録を削除して再追加してください。保存パス: {}",
+            path.display()
+        ));
+    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -254,7 +264,17 @@ fn extract_openai_message_content(v: &Value) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_model_path(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("open_agents_{name}_{nonce}.gguf"))
+    }
 
     #[test]
     fn resolve_prefers_openrouter() {
@@ -317,11 +337,26 @@ mod tests {
             source: ChatInferenceSource::LocalWeights,
             ..Default::default()
         };
-        let paths = vec![PathBuf::from(r"C:\models\test.gguf")];
+        let path = temp_model_path("existing");
+        fs::write(&path, b"gguf").unwrap();
+        let paths = vec![path.clone()];
         let b = resolve_chat_backend(&p, &chat, &paths).expect("backend");
         match b {
             ChatBackend::Native { path } => assert!(path.to_string_lossy().ends_with(".gguf")),
             _ => panic!("expected native"),
         }
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn local_weights_rejects_missing_registered_file() {
+        let p = ApiKeyPrefs::default();
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::LocalWeights,
+            ..Default::default()
+        };
+        let err = resolve_chat_backend(&p, &chat, &[temp_model_path("missing")]).unwrap_err();
+        assert!(err.contains("見つかりません"));
+        assert!(err.contains("ローカルLLM"));
     }
 }

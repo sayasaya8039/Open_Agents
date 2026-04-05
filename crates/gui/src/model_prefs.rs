@@ -304,8 +304,10 @@ fn sanitize_model_path(path: Option<PathBuf>) -> Option<PathBuf> {
     path.and_then(|path| {
         if path.as_os_str().is_empty() {
             None
-        } else {
+        } else if fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false) {
             Some(path.canonicalize().unwrap_or(path))
+        } else {
+            None
         }
     })
 }
@@ -448,6 +450,15 @@ pub fn save_local_llm_prefs(prefs: &LocalLlmPrefs) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_model_path(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("open_agents_{nonce}_{name}.gguf"))
+    }
 
     #[test]
     fn sanitize_clamps_temperature_and_tokens() {
@@ -528,12 +539,26 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_dedupes_model_paths() {
+    fn sanitize_drops_missing_model_paths_entries() {
+        let missing = temp_model_path("missing");
         let p = LocalLlmPrefs {
-            model_paths: vec![PathBuf::from("same"), PathBuf::from("same")],
+            model_paths: vec![missing],
             ..LocalLlmPrefs::default()
         }
         .sanitize();
+        assert!(p.model_paths.is_empty());
+    }
+
+    #[test]
+    fn sanitize_dedupes_model_paths() {
+        let path = temp_model_path("dedupe");
+        fs::write(&path, b"gguf").unwrap();
+        let p = LocalLlmPrefs {
+            model_paths: vec![path.clone(), path.clone()],
+            ..LocalLlmPrefs::default()
+        }
+        .sanitize();
+        let _ = fs::remove_file(&path);
         assert_eq!(p.model_paths.len(), 1);
     }
 }
