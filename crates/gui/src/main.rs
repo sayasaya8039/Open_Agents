@@ -8,7 +8,7 @@ use gpui::prelude::FluentBuilder;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use project_explorer::{
     TreeNode, absolute_path, default_expanded_set, default_sample_tree, expanded_first_level,
@@ -65,6 +65,54 @@ pub fn hex_a(c: u32, a: f32) -> Hsla {
     Rgba { r, g, b, a }.into()
 }
 
+fn human_readable_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+
+    let bytes_f = bytes as f64;
+    if bytes_f >= GB {
+        format!("{:.1} GB", bytes_f / GB)
+    } else if bytes_f >= MB {
+        format!("{:.1} MB", bytes_f / MB)
+    } else if bytes_f >= KB {
+        format!("{:.1} KB", bytes_f / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelFormat, human_readable_size};
+    use std::path::Path;
+
+    #[test]
+    fn detects_model_format_from_extension_case_insensitively() {
+        assert_eq!(ModelFormat::from_path(Path::new("model.gguf")), ModelFormat::Gguf);
+        assert_eq!(ModelFormat::from_path(Path::new("model.ONNX")), ModelFormat::Onnx);
+    }
+
+    #[test]
+    fn unknown_model_format_when_extension_is_not_supported() {
+        assert_eq!(
+            ModelFormat::from_path(Path::new("model.bin")),
+            ModelFormat::Unknown
+        );
+        assert_eq!(
+            ModelFormat::from_path(Path::new("model")),
+            ModelFormat::Unknown
+        );
+    }
+
+    #[test]
+    fn formats_human_readable_sizes() {
+        assert_eq!(human_readable_size(999), "999 B");
+        assert_eq!(human_readable_size(1024), "1.0 KB");
+        assert_eq!(human_readable_size(5 * 1024 * 1024), "5.0 MB");
+    }
+}
+
 // ============================================================
 // State
 // ============================================================
@@ -75,6 +123,37 @@ enum Page {
     Chat,
     Settings,
     Terminal,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ModelFormat {
+    Gguf,
+    Onnx,
+    Unknown,
+}
+
+impl ModelFormat {
+    fn from_path(path: &Path) -> Self {
+        match path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("gguf") => Self::Gguf,
+            Some("onnx") => Self::Onnx,
+            Some(_) => Self::Unknown,
+            None => Self::Unknown,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Gguf => "GGUF",
+            Self::Onnx => "ONNX",
+            Self::Unknown => "不明",
+        }
+    }
 }
 
 struct ChatMsg {
@@ -88,6 +167,8 @@ struct AppView {
     chat_messages: Vec<ChatMsg>,
     /// Figma Chat ヘッダー「思考を表示」トグル
     chat_show_thinking: bool,
+    /// 設定画面で選択したローカル LLM モデルファイル
+    settings_model_path: Option<PathBuf>,
     /// 開いているワークスペースのルート（Zed worktree root）
     workspace_root: PathBuf,
     /// 仮想ファイルツリー
@@ -219,6 +300,29 @@ impl AppView {
         })
         .detach();
     }
+
+    fn settings_open_model_file_dialog(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                if let Some(path) = paths.first() {
+                    let path = path.clone();
+                    let _ = cx.update(|ecx| {
+                        let _ = app.update(ecx, |this: &mut AppView, ecx| {
+                            this.settings_model_path = Some(path);
+                            ecx.notify();
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+    }
 }
 
 // ============================================================
@@ -230,7 +334,7 @@ impl Render for AppView {
         let content: AnyElement = match self.page {
             Page::Editor => self.render_editor(cx).into_any_element(),
             Page::Chat => self.render_chat_page(cx).into_any_element(),
-            Page::Settings => self.render_settings().into_any_element(),
+            Page::Settings => self.render_settings(cx).into_any_element(),
             Page::Terminal => self.render_terminal().into_any_element(),
         };
 
@@ -263,6 +367,56 @@ impl Render for AppView {
 }
 
 impl AppView {
+    fn settings_detected_model_format(&self) -> Option<ModelFormat> {
+        self.settings_model_path
+            .as_deref()
+            .map(ModelFormat::from_path)
+    }
+
+    fn settings_model_format_label(&self) -> SharedString {
+        self.settings_detected_model_format()
+            .map(|format| format.label().into())
+            .unwrap_or_else(|| "自動判定".into())
+    }
+
+    fn settings_model_format_hint(&self) -> SharedString {
+        match self.settings_detected_model_format() {
+            Some(ModelFormat::Gguf) => "GGUF を自動判定しました".into(),
+            Some(ModelFormat::Onnx) => "ONNX を自動判定しました".into(),
+            Some(ModelFormat::Unknown) => "GGUF / ONNX を判定できませんでした".into(),
+            None => "選択したモデルファイルから自動判定します".into(),
+        }
+    }
+
+    fn settings_model_filename(&self) -> SharedString {
+        self.settings_model_path
+            .as_ref()
+            .and_then(|path| path.file_name().and_then(|name| name.to_str()))
+            .map(|name| name.to_string().into())
+            .unwrap_or_else(|| "モデル未選択".into())
+    }
+
+    fn settings_model_path_label(&self) -> SharedString {
+        self.settings_model_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned().into())
+            .unwrap_or_else(|| "まだモデルファイルは選択されていません".into())
+    }
+
+    fn settings_model_meta_label(&self) -> SharedString {
+        let Some(path) = self.settings_model_path.as_ref() else {
+            return "GGUF または ONNX 形式".into();
+        };
+
+        let format = ModelFormat::from_path(path).label();
+        let size = fs::metadata(path)
+            .ok()
+            .map(|meta| human_readable_size(meta.len()))
+            .unwrap_or_else(|| "サイズ不明".to_string());
+
+        format!("{format} • {size}").into()
+    }
+
     // ============================================================
     // Title Bar
     // ============================================================
@@ -1183,7 +1337,7 @@ impl AppView {
             )
     }
 
-    fn render_settings(&self) -> impl IntoElement {
+    fn render_settings(&self, cx: &Context<Self>) -> impl IntoElement {
         let ver = env!("CARGO_PKG_VERSION");
         div()
             .flex_1()
@@ -1260,9 +1414,11 @@ impl AppView {
                                                     .gap(px(16.))
                                                     .child(self.settings_labeled_block(
                                                         "モデル形式",
-                                                        "使用するモデル形式を選択",
+                                                        "選択したモデルファイルから自動判定",
                                                     ))
-                                                    .child(self.settings_fake_dropdown("GGUF")),
+                                                    .child(self.settings_fake_dropdown(
+                                                        self.settings_model_format_label().as_ref(),
+                                                    )),
                                             )
                                             .child(
                                                 div()
@@ -1290,6 +1446,18 @@ impl AppView {
                                                             .rounded(px(8.))
                                                             .text_size(px(12.))
                                                             .text_color(hex(TEXT_SECONDARY))
+                                                            .cursor_pointer()
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(
+                                                                    |this: &mut AppView,
+                                                                     _: &MouseDownEvent,
+                                                                     _,
+                                                                     cx: &mut Context<AppView>| {
+                                                                        this.settings_open_model_file_dialog(cx);
+                                                                    },
+                                                                ),
+                                                            )
                                                             .child("⬆")
                                                             .child("モデルファイルを読み込む"),
                                                     )
@@ -1297,7 +1465,7 @@ impl AppView {
                                                         div()
                                                             .text_size(px(11.))
                                                             .text_color(hex(TEXT_DIM))
-                                                            .child("GGUF または ONNX 形式のモデルファイルを選択してください"),
+                                                            .child(self.settings_model_format_hint()),
                                                     ),
                                             )
                                             .child(
@@ -1337,26 +1505,28 @@ impl AppView {
                                                                                 div()
                                                                                     .text_size(px(12.))
                                                                                     .text_color(hex(TEXT_PRIMARY))
-                                                                                    .child("llama-3-8b-instruct-q4.gguf"),
+                                                                                    .child(self.settings_model_filename()),
                                                                             )
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_size(px(12.))
-                                                                                    .text_color(hex(0x22c55e))
-                                                                                    .child("✓"),
-                                                                            ),
+                                                                            .when(self.settings_model_path.is_some(), |d| {
+                                                                                d.child(
+                                                                                    div()
+                                                                                        .text_size(px(12.))
+                                                                                        .text_color(hex(0x22c55e))
+                                                                                        .child("✓"),
+                                                                                )
+                                                                            }),
                                                                     )
                                                                     .child(
                                                                         div()
                                                                             .text_size(px(11.))
                                                                             .text_color(hex(TEXT_MUTED))
-                                                                            .child("GGUF • 4.7 GB"),
+                                                                            .child(self.settings_model_meta_label()),
                                                                     )
                                                                     .child(
                                                                         div()
                                                                             .text_size(px(11.))
                                                                             .text_color(hex(TEXT_DIM))
-                                                                            .child("C:/Models/…"),
+                                                                            .child(self.settings_model_path_label()),
                                                                     ),
                                                             )
                                                             .child(
@@ -1367,6 +1537,19 @@ impl AppView {
                                                                     .bg(hex(0x2d2d2d))
                                                                     .text_size(px(11.))
                                                                     .text_color(hex(TEXT_MUTED))
+                                                                    .cursor_pointer()
+                                                                    .on_mouse_down(
+                                                                        MouseButton::Left,
+                                                                        cx.listener(
+                                                                            |this: &mut AppView,
+                                                                             _: &MouseDownEvent,
+                                                                             _,
+                                                                             cx: &mut Context<AppView>| {
+                                                                                this.settings_model_path = None;
+                                                                                cx.notify();
+                                                                            },
+                                                                        ),
+                                                                    )
                                                                     .child("🗑"),
                                                             ),
                                                     ),
@@ -1806,6 +1989,7 @@ fn main() {
                             thinking: None,
                         }],
                         chat_show_thinking: true,
+                        settings_model_path: None,
                         workspace_root,
                         file_tree,
                         explorer_expanded,
