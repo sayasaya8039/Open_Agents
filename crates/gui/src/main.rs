@@ -107,17 +107,52 @@ impl AppView {
             .flex()
             .items_center()
             .px(px(16.))
-            .rounded_t(px(20.))
-            // Traffic lights
+            // Traffic lights (functional: close / minimize / zoom)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(8.))
                     .mr(px(16.))
-                    .child(div().w(px(12.)).h(px(12.)).rounded_full().bg(hex(TRAFFIC_RED)))
-                    .child(div().w(px(12.)).h(px(12.)).rounded_full().bg(hex(TRAFFIC_YELLOW)))
-                    .child(div().w(px(12.)).h(px(12.)).rounded_full().bg(hex(TRAFFIC_GREEN))),
+                    // Close
+                    .child(
+                        div()
+                            .id("btn-close")
+                            .w(px(12.))
+                            .h(px(12.))
+                            .rounded_full()
+                            .bg(hex(TRAFFIC_RED))
+                            .cursor_pointer()
+                            .on_click(|_ev, _window, cx| {
+                                cx.quit();
+                            }),
+                    )
+                    // Minimize
+                    .child(
+                        div()
+                            .id("btn-minimize")
+                            .w(px(12.))
+                            .h(px(12.))
+                            .rounded_full()
+                            .bg(hex(TRAFFIC_YELLOW))
+                            .cursor_pointer()
+                            .on_click(|_ev, window, _cx| {
+                                window.minimize_window();
+                            }),
+                    )
+                    // Maximize/Zoom
+                    .child(
+                        div()
+                            .id("btn-zoom")
+                            .w(px(12.))
+                            .h(px(12.))
+                            .rounded_full()
+                            .bg(hex(TRAFFIC_GREEN))
+                            .cursor_pointer()
+                            .on_click(|_ev, window, _cx| {
+                                window.zoom_window();
+                            }),
+                    ),
             )
             // Title (centered)
             .child(
@@ -762,11 +797,15 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Open_Agents — AI Coding Assistant".into()),
-                    ..Default::default()
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(16.), px(16.)),),
                 }),
                 ..Default::default()
             },
-            |_window, cx| {
+            |window, cx| {
+                // Allow custom titlebar drag
+                window.set_client_inset(px(44.));
+
                 cx.new(|_cx| AppView {
                     page: Page::Editor,
                     chat_messages: vec![ChatMsg {
