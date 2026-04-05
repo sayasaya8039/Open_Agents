@@ -1,8 +1,12 @@
-//! Chat ページ用の HTTP クライアント（OpenAI 互換 / Ollama）
+//! Chat ページ用: クラウド API・Ollama HTTP・ネイティブ GGUF/ONNX
 //!
 //! API キーは `api_keys.json`（`ApiKeyPrefs`）から解決する。
 
+use std::path::PathBuf;
+
 use crate::api_key_prefs::ApiKeyPrefs;
+use crate::model_prefs::{ChatInferenceSource, ChatPrefs};
+use crate::native_chat;
 use serde_json::{json, Value};
 
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api";
@@ -19,6 +23,8 @@ pub enum ChatBackend {
         base_url: String,
         model: String,
     },
+    /// ネイティブ C コア（GGUF / ONNX ファイルパス）
+    Native { path: PathBuf },
 }
 
 fn trimmed_or(s: &str, default: &str) -> String {
@@ -30,20 +36,55 @@ fn trimmed_or(s: &str, default: &str) -> String {
     }
 }
 
-/// 利用可能なバックエンドを決定（優先: OpenRouter → OpenAI → 汎用 OpenAI 互換 → Ollama）
-pub fn resolve_backend(api: &ApiKeyPrefs, chat_model: &str) -> Result<ChatBackend, String> {
+/// 設定の Chat 推論先に従いバックエンドを決定する
+pub fn resolve_chat_backend(
+    api: &ApiKeyPrefs,
+    chat: &ChatPrefs,
+    local_model_paths: &[PathBuf],
+) -> Result<ChatBackend, String> {
+    match chat.source {
+        ChatInferenceSource::Local => resolve_ollama_backend(api, &chat.ollama_model),
+        ChatInferenceSource::Api => resolve_api_backend(api, &chat.api_model),
+        ChatInferenceSource::LocalWeights => {
+            resolve_local_weights(local_model_paths, chat.local_model_index)
+        }
+    }
+}
+
+fn resolve_local_weights(paths: &[PathBuf], index: usize) -> Result<ChatBackend, String> {
+    if paths.is_empty() {
+        return Err(
+            "Chat をローカル GGUF/ONNX に設定していますが、設定の「ローカルLLM」にモデルファイルが未追加です。"
+                .into(),
+        );
+    }
+    let idx = index.min(paths.len() - 1);
+    let path = paths[idx].clone();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("gguf") | Some("onnx") => Ok(ChatBackend::Native { path }),
+        Some(other) => Err(format!(
+            "Chat 用ローカルモデルは .gguf または .onnx です（現在: .{other}）"
+        )),
+        None => Err(
+            "モデルファイルに拡張子がありません。GGUF または ONNX を選択してください。".into(),
+        ),
+    }
+}
+
+/// クラウド API のみ（OpenRouter → OpenAI → 汎用 OpenAI 互換）
+fn resolve_api_backend(api: &ApiKeyPrefs, chat_model: &str) -> Result<ChatBackend, String> {
     let chat_model = chat_model.trim();
     let openrouter_key = api.get_str("openrouter");
     let openai_key = api.get_str("openai");
     let gen_base = api.get_str("generic_openai_base_url");
     let gen_key = api.get_str("generic_openai_api_key");
-    let ollama = api.get_str("ollama_base_url");
 
     if !openrouter_key.is_empty() {
-        let model = trimmed_or(
-            chat_model,
-            "openai/gpt-4o-mini",
-        );
+        let model = trimmed_or(chat_model, "openai/gpt-4o-mini");
         return Ok(ChatBackend::OpenAiCompatible {
             base_url: OPENROUTER_BASE.to_string(),
             api_key: openrouter_key.to_string(),
@@ -70,18 +111,26 @@ pub fn resolve_backend(api: &ApiKeyPrefs, chat_model: &str) -> Result<ChatBacken
             model,
         });
     }
-    if !ollama.is_empty() {
-        let model = trimmed_or(chat_model, "llama3.2");
-        return Ok(ChatBackend::Ollama {
-            base_url: ollama.trim_end_matches('/').to_string(),
-            model,
-        });
-    }
 
     Err(
-        "API キーまたは Ollama URL が未設定です。設定の API キー管理で OpenRouter / OpenAI / 汎用 OpenAI 互換、または Ollama ベース URL を登録してください。"
+        "Chat をクラウド API に設定していますが、OpenRouter / OpenAI / 汎用 OpenAI 互換のいずれも利用できません。API キー管理でキーを登録するか、設定で「Ollama」または「ローカル GGUF/ONNX」に切り替えてください。"
             .into(),
     )
+}
+
+fn resolve_ollama_backend(api: &ApiKeyPrefs, ollama_model: &str) -> Result<ChatBackend, String> {
+    let ollama = api.get_str("ollama_base_url");
+    if ollama.is_empty() {
+        return Err(
+            "Chat をローカル (Ollama) に設定していますが、Ollama ベース URL が未登録です。API キー管理で ollama_base_url を設定してください。"
+                .into(),
+        );
+    }
+    let model = trimmed_or(ollama_model, "llama3.2");
+    Ok(ChatBackend::Ollama {
+        base_url: ollama.trim_end_matches('/').to_string(),
+        model,
+    })
 }
 
 fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
@@ -172,6 +221,9 @@ pub fn complete_chat_blocking(
                 .map(|s| s.to_string())
                 .ok_or_else(|| format!("想定外の Ollama 応答: {text}"))
         }
+        ChatBackend::Native { path } => {
+            native_chat::complete_native_chat_blocking(path, messages, temperature, max_tokens)
+        }
     }
 }
 
@@ -195,6 +247,7 @@ fn extract_openai_message_content(v: &Value) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     #[test]
     fn resolve_prefers_openrouter() {
@@ -203,7 +256,8 @@ mod tests {
             ("openrouter".into(), "rk".into()),
             ("openai".into(), "sk".into()),
         ]);
-        let b = resolve_backend(&p, "").expect("backend");
+        let chat = ChatPrefs::default();
+        let b = resolve_chat_backend(&p, &chat, &[]).expect("backend");
         match b {
             ChatBackend::OpenAiCompatible { base_url, model, .. } => {
                 assert!(base_url.contains("openrouter"));
@@ -214,13 +268,53 @@ mod tests {
     }
 
     #[test]
-    fn ollama_when_only_base() {
+    fn ollama_when_local_source_and_base() {
         let mut p = ApiKeyPrefs::default();
         p.set_entry("ollama_base_url", "http://127.0.0.1:11434".into());
-        let b = resolve_backend(&p, "").expect("backend");
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::Local,
+            ..Default::default()
+        };
+        let b = resolve_chat_backend(&p, &chat, &[]).expect("backend");
         match b {
             ChatBackend::Ollama { model, .. } => assert_eq!(model, "llama3.2"),
-           _ => panic!("expected ollama"),
+            _ => panic!("expected ollama"),
+        }
+    }
+
+    #[test]
+    fn api_source_fails_without_cloud_keys() {
+        let mut p = ApiKeyPrefs::default();
+        p.set_entry("ollama_base_url", "http://127.0.0.1:11434".into());
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::Api,
+            ..Default::default()
+        };
+        assert!(resolve_chat_backend(&p, &chat, &[]).is_err());
+    }
+
+    #[test]
+    fn local_weights_requires_registered_file() {
+        let p = ApiKeyPrefs::default();
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::LocalWeights,
+            ..Default::default()
+        };
+        assert!(resolve_chat_backend(&p, &chat, &[]).is_err());
+    }
+
+    #[test]
+    fn local_weights_accepts_gguf_path() {
+        let p = ApiKeyPrefs::default();
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::LocalWeights,
+            ..Default::default()
+        };
+        let paths = vec![PathBuf::from(r"C:\models\test.gguf")];
+        let b = resolve_chat_backend(&p, &chat, &paths).expect("backend");
+        match b {
+            ChatBackend::Native { path } => assert!(path.to_string_lossy().ends_with(".gguf")),
+            _ => panic!("expected native"),
         }
     }
 }

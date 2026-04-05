@@ -1,4 +1,5 @@
 mod api_key_prefs;
+mod native_chat;
 mod chat_client;
 mod chat_composer;
 mod editor;
@@ -203,6 +204,8 @@ struct AppView {
     appearance_prefs: model_prefs::AppearancePrefs,
     /// AI 補助機能の ON/OFF（`ai` と同期）
     ai_prefs: model_prefs::AiPrefs,
+    /// Chat の推論先・モデル ID（`model_params.json` の `chat`）
+    chat_prefs: model_prefs::ChatPrefs,
     /// 外部 API キー（`api_keys.json`）
     api_keys: api_key_prefs::ApiKeyPrefs,
     /// 設定画面での各カタログ行のプレーン表示（永続化しない、`PROVIDER_CATALOG` と同順）
@@ -442,13 +445,18 @@ impl AppView {
         cx.notify();
 
         let api_keys = self.api_keys.clone();
+        let chat_prefs = self.chat_prefs.clone();
+        let local_model_paths = self.settings_model_paths.clone();
         let temperature = self.model_params.temperature;
         let max_tokens = self.model_params.max_output_tokens;
-        let chat_model = String::new();
 
         cx.spawn(async move |this, cx| {
             let result: Result<String, String> = smol::unblock(move || {
-                let backend = chat_client::resolve_backend(&api_keys, &chat_model)?;
+                let backend = chat_client::resolve_chat_backend(
+                    &api_keys,
+                    &chat_prefs,
+                    &local_model_paths,
+                )?;
                 chat_client::complete_chat_blocking(
                     &backend,
                     &api_messages,
@@ -638,6 +646,15 @@ impl AppView {
                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                             if idx < this.settings_model_paths.len() {
                                 this.settings_model_paths.remove(idx);
+                                if this.settings_model_paths.is_empty() {
+                                    this.chat_prefs.local_model_index = 0;
+                                } else {
+                                    this.chat_prefs.local_model_index = this
+                                        .chat_prefs
+                                        .local_model_index
+                                        .min(this.settings_model_paths.len() - 1);
+                                }
+                                this.chat_prefs = this.chat_prefs.clone().sanitize();
                                 this.persist_local_llm_prefs();
                                 cx.notify();
                             }
@@ -1359,56 +1376,69 @@ impl AppView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .h(px(48.))
                     .bg(hex(PANEL_BG))
                     .border_b_1()
                     .border_color(hex(BORDER))
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(16.))
+                    .flex_col()
                     .child(
                         div()
+                            .h(px(48.))
                             .flex()
                             .items_center()
-                            .gap(px(8.))
+                            .justify_between()
+                            .px(px(16.))
                             .child(
                                 div()
-                                    .w(px(24.))
-                                    .h(px(24.))
-                                    .rounded(px(6.))
-                                    .bg(hex(ACCENT_ORANGE))
                                     .flex()
                                     .items_center()
-                                    .justify_center()
-                                    .text_size(px(12.))
-                                    .text_color(hex(0xFFFFFF))
-                                    .child("✦"),
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .w(px(24.))
+                                            .h(px(24.))
+                                            .rounded(px(6.))
+                                            .bg(hex(ACCENT_ORANGE))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(hex(0xFFFFFF))
+                                            .child("✦"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .text_color(hex(TEXT_PRIMARY))
+                                            .child("Open Agents"),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .text_size(px(13.))
-                                    .text_color(hex(TEXT_PRIMARY))
-                                    .child("Open Agents"),
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            this.chat_show_thinking = !this.chat_show_thinking;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(if thinking_toggle {
+                                        "思考を非表示"
+                                    } else {
+                                        "思考を表示"
+                                    }),
                             ),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(hex(TEXT_SECONDARY))
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                    this.chat_show_thinking = !this.chat_show_thinking;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(if thinking_toggle {
-                                "思考を非表示"
-                            } else {
-                                "思考を表示"
-                            }),
+                            .px(px(16.))
+                            .pb(px(8.))
+                            .text_size(px(10.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child(self.chat_model_status_line()),
                     ),
             )
             .child(
@@ -1752,7 +1782,386 @@ impl AppView {
             appearance: self.appearance_prefs.clone(),
             ai: self.ai_prefs.clone(),
             model_paths: self.settings_model_paths.clone(),
+            chat: self.chat_prefs.clone(),
         });
+    }
+
+    fn cycle_chat_inference_source(&mut self, cx: &mut Context<Self>) {
+        self.chat_prefs.source = self.chat_prefs.source.cycle();
+        self.chat_prefs = self.chat_prefs.clone().sanitize();
+        self.persist_local_llm_prefs();
+        cx.notify();
+    }
+
+    fn adjust_chat_local_model_index(&mut self, delta: i32, cx: &mut Context<Self>) {
+        if self.settings_model_paths.is_empty() {
+            return;
+        }
+        let n = self.settings_model_paths.len() as i32;
+        let cur = self.chat_prefs.local_model_index as i32;
+        let next = (cur + delta).rem_euclid(n) as usize;
+        self.chat_prefs.local_model_index = next;
+        self.chat_prefs = self.chat_prefs.clone().sanitize();
+        self.persist_local_llm_prefs();
+        cx.notify();
+    }
+
+    fn settings_chat_paste_api_model(&mut self, cx: &mut Context<Self>) {
+        if let Some(item) = cx.read_from_clipboard() {
+            if let Some(text) = item.text() {
+                let t = text.trim();
+                if !t.is_empty() {
+                    self.chat_prefs.api_model = t.to_string();
+                    self.chat_prefs = self.chat_prefs.clone().sanitize();
+                    self.persist_local_llm_prefs();
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn settings_chat_clear_api_model(&mut self, cx: &mut Context<Self>) {
+        self.chat_prefs.api_model.clear();
+        self.chat_prefs = self.chat_prefs.clone().sanitize();
+        self.persist_local_llm_prefs();
+        cx.notify();
+    }
+
+    fn settings_chat_paste_ollama_model(&mut self, cx: &mut Context<Self>) {
+        if let Some(item) = cx.read_from_clipboard() {
+            if let Some(text) = item.text() {
+                let t = text.trim();
+                if !t.is_empty() {
+                    self.chat_prefs.ollama_model = t.to_string();
+                    self.chat_prefs = self.chat_prefs.clone().sanitize();
+                    self.persist_local_llm_prefs();
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn settings_chat_clear_ollama_model(&mut self, cx: &mut Context<Self>) {
+        self.chat_prefs.ollama_model = model_prefs::ChatPrefs::default().ollama_model;
+        self.chat_prefs = self.chat_prefs.clone().sanitize();
+        self.persist_local_llm_prefs();
+        cx.notify();
+    }
+
+    fn chat_local_weights_summary(&self) -> String {
+        if self.settings_model_paths.is_empty() {
+            return "モデルファイルを「ローカルLLM設定」で追加すると、ここで番号を選べます。".into();
+        }
+        let i = self
+            .chat_prefs
+            .local_model_index
+            .min(self.settings_model_paths.len() - 1);
+        let path = &self.settings_model_paths[i];
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("-");
+        format!("選択中 [{}/{}]: {}", i + 1, self.settings_model_paths.len(), name)
+    }
+
+    /// Chat ヘッダー用: 現在の推論先とモデル
+    fn chat_model_status_line(&self) -> String {
+        match self.chat_prefs.source {
+            model_prefs::ChatInferenceSource::Api => {
+                let m = self.chat_prefs.api_model.trim();
+                if m.is_empty() {
+                    "Chat: クラウド API（モデルはプロバイダ既定）".to_string()
+                } else {
+                    format!("Chat: クラウド API（{m}）")
+                }
+            }
+            model_prefs::ChatInferenceSource::Local => {
+                let m = self.chat_prefs.ollama_model.trim();
+                format!("Chat: Ollama（{m}）")
+            }
+            model_prefs::ChatInferenceSource::LocalWeights => {
+                if self.settings_model_paths.is_empty() {
+                    "Chat: ローカル GGUF/ONNX（モデル未登録）".to_string()
+                } else {
+                    let i = self
+                        .chat_prefs
+                        .local_model_index
+                        .min(self.settings_model_paths.len() - 1);
+                    let name = self.settings_model_paths[i]
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("-");
+                    format!(
+                        "Chat: GGUF/ONNX [{}/{}] {name}",
+                        i + 1,
+                        self.settings_model_paths.len()
+                    )
+                }
+            }
+        }
+    }
+
+    fn settings_chat_inference_block(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let source_label = self.chat_prefs.source.label();
+        let api_disp: SharedString = if self.chat_prefs.api_model.is_empty() {
+            "（空＝OpenRouter / OpenAI / 汎用それぞれの既定モデル）".into()
+        } else {
+            self.chat_prefs.api_model.clone().into()
+        };
+        let ollama_disp: SharedString = self.chat_prefs.ollama_model.clone().into();
+
+        div()
+            .pt(px(16.))
+            .border_t_1()
+            .border_color(hex(BORDER))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(hex(TEXT_PRIMARY))
+                    .child("Chat での推論"),
+            )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_DIM))
+                            .child(
+                                "チャット送信時の推論先。「Ollama」は HTTP サーバ、「GGUF/ONNX」は設定に追加したファイルをネイティブ実行します。",
+                            ),
+                    )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .child("推論先"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child(source_label),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .px(px(12.))
+                            .py(px(6.))
+                            .bg(hex(CONTROL_BG))
+                            .border_1()
+                            .border_color(hex(CONTROL_BORDER))
+                            .rounded(px(6.))
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.cycle_chat_inference_source(cx);
+                                }),
+                            )
+                            .child("推論先を切替（API → Ollama → GGUF/ONNX）"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child("ネイティブ GGUF / ONNX（読み込み済み一覧から選択）"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child(self.chat_local_weights_summary()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .bg(hex(CONTROL_BG))
+                                    .border_1()
+                                    .border_color(hex(CONTROL_BORDER))
+                                    .rounded(px(6.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.adjust_chat_local_model_index(-1, cx);
+                                        }),
+                                    )
+                                    .child("← 前のモデル"),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .bg(hex(CONTROL_BG))
+                                    .border_1()
+                                    .border_color(hex(CONTROL_BORDER))
+                                    .rounded(px(6.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.adjust_chat_local_model_index(1, cx);
+                                        }),
+                                    )
+                                    .child("次のモデル →"),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child("クラウド API モデル ID"),
+                    )
+                    .child(
+                        div()
+                            .p(px(10.))
+                            .bg(hex(BG))
+                            .border_1()
+                            .border_color(hex(BORDER))
+                            .rounded(px(6.))
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child(api_disp),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .bg(hex(ACCENT_BLUE))
+                                    .rounded(px(6.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(0xFFFFFF))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.settings_chat_paste_api_model(cx);
+                                        }),
+                                    )
+                                    .child("クリップボードから貼付"),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .bg(hex(BORDER))
+                                    .rounded(px(6.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.settings_chat_clear_api_model(cx);
+                                        }),
+                                    )
+                                    .child("空に戻す"),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(hex(TEXT_SECONDARY))
+                            .child("Ollama モデル名"),
+                    )
+                    .child(
+                        div()
+                            .p(px(10.))
+                            .bg(hex(BG))
+                            .border_1()
+                            .border_color(hex(BORDER))
+                            .rounded(px(6.))
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .child(ollama_disp),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .bg(hex(ACCENT_BLUE))
+                                    .rounded(px(6.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(0xFFFFFF))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.settings_chat_paste_ollama_model(cx);
+                                        }),
+                                    )
+                                    .child("クリップボードから貼付"),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(5.))
+                                    .bg(hex(BORDER))
+                                    .rounded(px(6.))
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.settings_chat_clear_ollama_model(cx);
+                                        }),
+                                    )
+                                    .child("既定に戻す"),
+                            ),
+                    ),
+            )
     }
 
     fn sync_editor_appearance(&self, cx: &mut Context<Self>) {
@@ -2592,7 +3001,8 @@ impl AppView {
                                                 AiToggleKind::StreamingResponses,
                                                 "ストリーミング応答",
                                                 "応答をリアルタイムで表示",
-                                            )),
+                                            ))
+                                            .child(self.settings_chat_inference_block(cx)),
                                     ),
                             )
                             // --- API キー ---
@@ -2865,6 +3275,7 @@ fn main() {
                         hardware_params: local_llm.hardware,
                         appearance_prefs: local_llm.appearance,
                         ai_prefs: local_llm.ai,
+                        chat_prefs: local_llm.chat,
                         api_keys,
                         api_key_reveal: vec![false; api_key_prefs::PROVIDER_CATALOG.len()],
                         workspace_root,

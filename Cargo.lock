@@ -3558,11 +3558,12 @@ dependencies = [
 
 [[package]]
 name = "open-agents-gui"
-version = "0.2.26"
+version = "0.2.28"
 dependencies = [
  "cc",
  "dirs 6.0.0",
  "gpui",
+ "libc",
  "serde",
  "serde_json",
  "smol",

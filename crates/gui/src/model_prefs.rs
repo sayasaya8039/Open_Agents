@@ -215,6 +215,91 @@ impl AiPrefs {
     }
 }
 
+/// Chat ページの推論先（設定で切替）
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ChatInferenceSource {
+    /// OpenRouter / OpenAI / 汎用 OpenAI 互換
+    #[default]
+    #[serde(rename = "api")]
+    Api,
+    /// HTTP Ollama（`ollama_base_url` 必須）。JSON では従来どおり `local`
+    #[serde(rename = "local")]
+    Local,
+    /// 設定に追加した GGUF / ONNX（ネイティブ `oag_inference_*`）
+    #[serde(rename = "local_weights")]
+    LocalWeights,
+}
+
+impl ChatInferenceSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Api => "クラウド API",
+            Self::Local => "Ollama (HTTP)",
+            Self::LocalWeights => "ローカル GGUF/ONNX",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Api => Self::Local,
+            Self::Local => Self::LocalWeights,
+            Self::LocalWeights => Self::Api,
+        }
+    }
+}
+
+fn default_ollama_chat_model() -> String {
+    "llama3.2".to_string()
+}
+
+const MAX_CHAT_MODEL_ID_LEN: usize = 512;
+
+/// Chat で使うモデル ID（`model_params.json` の `chat`）
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ChatPrefs {
+    pub source: ChatInferenceSource,
+    /// クラウド向けモデル ID（空なら OpenRouter/OpenAI/汎用それぞれの既定）
+    pub api_model: String,
+    /// Ollama のモデル名（`ollama list` に出る名前）
+    pub ollama_model: String,
+    /// `model_paths` リスト内のインデックス（LocalWeights 時）
+    #[serde(default)]
+    pub local_model_index: usize,
+}
+
+impl Default for ChatPrefs {
+    fn default() -> Self {
+        Self {
+            source: ChatInferenceSource::default(),
+            api_model: String::new(),
+            ollama_model: default_ollama_chat_model(),
+            local_model_index: 0,
+        }
+    }
+}
+
+impl ChatPrefs {
+    pub fn sanitize(mut self) -> Self {
+        self.api_model = Self::clamp_model_field(self.api_model);
+        self.ollama_model = Self::clamp_model_field(self.ollama_model);
+        if self.ollama_model.is_empty() {
+            self.ollama_model = default_ollama_chat_model();
+        }
+        self.local_model_index = self.local_model_index.min(10_000);
+        self
+    }
+
+    fn clamp_model_field(s: String) -> String {
+        let t = s.trim();
+        if t.len() > MAX_CHAT_MODEL_ID_LEN {
+            t[..MAX_CHAT_MODEL_ID_LEN].trim().to_string()
+        } else {
+            t.to_string()
+        }
+    }
+}
+
 fn sanitize_model_path(path: Option<PathBuf>) -> Option<PathBuf> {
     path.and_then(|path| {
         if path.as_os_str().is_empty() {
@@ -272,6 +357,9 @@ pub struct LocalLlmPrefs {
     /// 読み込み済みローカルモデル（順序保持・下に追加）
     #[serde(default)]
     pub model_paths: Vec<PathBuf>,
+    /// Chat ページの推論先・モデル ID
+    #[serde(default)]
+    pub chat: ChatPrefs,
 }
 
 impl Default for LocalLlmPrefs {
@@ -282,6 +370,7 @@ impl Default for LocalLlmPrefs {
             appearance: AppearancePrefs::default(),
             ai: AiPrefs::default(),
             model_paths: Vec::new(),
+            chat: ChatPrefs::default(),
         }
     }
 }
@@ -293,6 +382,7 @@ impl LocalLlmPrefs {
         self.appearance = self.appearance.sanitize();
         self.ai = self.ai.sanitize();
         self.model_paths = sanitize_model_paths(std::mem::take(&mut self.model_paths));
+        self.chat = self.chat.clone().sanitize();
         self
     }
 
@@ -301,6 +391,7 @@ impl LocalLlmPrefs {
         self.hardware.clamp();
         self.appearance.clamp();
         self.ai = self.ai.clone().sanitize();
+        self.chat = self.chat.clone().sanitize();
     }
 }
 
