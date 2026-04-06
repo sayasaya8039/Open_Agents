@@ -64,19 +64,35 @@ pub fn complete_llama_cpp_chat_blocking(
     extract_openai_message_content(&text)
 }
 
-fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, String), String> {
-    let normalized_ctx = if context_length > 0 {
-        context_length.max(MIN_CONTEXT_LENGTH)
-    } else {
-        DEFAULT_CONTEXT_LENGTH
+pub fn server_ready_for(model_path: &Path, context_length: i32) -> bool {
+    let normalized_ctx = normalize_context_length(context_length);
+    let normalized_path = normalize_model_path(model_path);
+    let Ok(mut cache) = server_cache().lock() else {
+        return false;
     };
+    let Some(server) = cache.as_mut() else {
+        return false;
+    };
+    if server.model_path != normalized_path || server.context_length != normalized_ctx {
+        return false;
+    }
+    server_is_alive(server).unwrap_or(false)
+}
+
+fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, String), String> {
+    let normalized_ctx = normalize_context_length(context_length);
+    let normalized_path = normalize_model_path(model_path);
     let mut cache = server_cache()
         .lock()
         .map_err(|_| "llama.cpp サーバキャッシュのロックに失敗しました".to_string())?;
 
     if let Some(server) = cache.as_mut() {
-        if server.model_path == model_path && server.context_length == normalized_ctx {
+        if server.model_path == normalized_path && server.context_length == normalized_ctx {
             if server_is_alive(server)? {
+                eprintln!(
+                    "llama.cpp: warm server reused for {}",
+                    normalized_path.display()
+                );
                 return Ok((server.base_url.clone(), server.model_id.clone()));
             }
             stop_server(server);
@@ -94,14 +110,19 @@ fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, Stri
     let logs = Arc::new(Mutex::new(String::new()));
     let mut child = spawn_llama_server(
         &binary,
-        model_path,
+        &normalized_path,
         port,
         normalized_ctx,
         Arc::clone(&logs),
     )?;
-    let model_id = wait_until_ready(&mut child, &base_url, model_path, Arc::clone(&logs))?;
+    let model_id = wait_until_ready(&mut child, &base_url, &normalized_path, Arc::clone(&logs))?;
+    eprintln!(
+        "llama.cpp: started bundled server for {} on {}",
+        normalized_path.display(),
+        base_url
+    );
     *cache = Some(CachedServer {
-        model_path: model_path.to_path_buf(),
+        model_path: normalized_path,
         context_length: normalized_ctx,
         base_url: base_url.clone(),
         model_id: model_id.clone(),
@@ -275,6 +296,20 @@ fn pick_free_port() -> Result<u16, String> {
         .map(|addr| addr.port())
 }
 
+fn normalize_context_length(context_length: i32) -> i32 {
+    if context_length > 0 {
+        context_length.max(MIN_CONTEXT_LENGTH)
+    } else {
+        DEFAULT_CONTEXT_LENGTH
+    }
+}
+
+fn normalize_model_path(model_path: &Path) -> PathBuf {
+    model_path
+        .canonicalize()
+        .unwrap_or_else(|_| model_path.to_path_buf())
+}
+
 fn available_thread_count() -> usize {
     thread::available_parallelism()
         .map(|n| n.get())
@@ -319,5 +354,12 @@ mod tests {
     fn bundled_runtime_search_dirs_are_available() {
         let dirs = llama_cpp_runtime::bundled_runtime_search_dirs();
         assert!(!dirs.is_empty());
+    }
+
+    #[test]
+    fn context_length_is_normalized_for_cache_key() {
+        assert_eq!(normalize_context_length(0), DEFAULT_CONTEXT_LENGTH);
+        assert_eq!(normalize_context_length(128), MIN_CONTEXT_LENGTH);
+        assert_eq!(normalize_context_length(8192), 8192);
     }
 }

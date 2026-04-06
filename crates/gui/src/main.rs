@@ -552,7 +552,25 @@ impl AppView {
             role: "assistant".into(),
             content: match self.chat_prefs.source {
                 model_prefs::ChatInferenceSource::LocalWeights => {
-                    "GGUF モデルを準備中です… 内蔵 llama.cpp サーバの初回起動には時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
+                    let warm = self
+                        .settings_model_paths
+                        .get(
+                            self.chat_prefs
+                                .local_model_index
+                                .min(self.settings_model_paths.len().saturating_sub(1)),
+                        )
+                        .map(|path| {
+                            llama_cpp_chat::server_ready_for(
+                                path,
+                                self.model_params.context_length,
+                            )
+                        })
+                        .unwrap_or(false);
+                    if warm {
+                        "GGUF 応答を生成中です… 既に起動済みの llama.cpp サーバを再利用しています。".into()
+                    } else {
+                        "GGUF モデルを準備中です… 内蔵 llama.cpp サーバの初回起動には時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
+                    }
                 }
                 _ => "応答を待っています…".into(),
             },
