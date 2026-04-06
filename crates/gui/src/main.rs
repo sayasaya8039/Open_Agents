@@ -624,6 +624,59 @@ impl AppView {
         cx.notify();
     }
 
+    /// Chat のシステムメッセージを構築（作業ディレクトリ + 選択中ファイル情報）
+    fn build_chat_system_message(&self, work_dir: &Path, cx: &mut Context<Self>) -> String {
+        let mut parts = Vec::new();
+
+        parts.push(format!(
+            "作業ディレクトリ: {}",
+            work_dir.display()
+        ));
+
+        // エクスプローラで選択中のファイル/フォルダ
+        if let Some(segs) = &self.explorer_selection {
+            let abs = absolute_path(&self.workspace_root, segs);
+            let rel = segs.join("/");
+            if abs.is_file() {
+                parts.push(format!("選択中のファイル: {rel} ({})", abs.display()));
+                // ファイル内容を読み込み（最大8KB）
+                const MAX_FILE_BYTES: usize = 8 * 1024;
+                if let Ok(content) = fs::read_to_string(&abs) {
+                    let truncated = if content.len() > MAX_FILE_BYTES {
+                        format!("{}…（以下省略、全{}バイト）", &content[..MAX_FILE_BYTES], content.len())
+                    } else {
+                        content
+                    };
+                    parts.push(format!("--- {rel} の内容 ---\n{truncated}\n--- ここまで ---"));
+                }
+            } else if abs.is_dir() {
+                parts.push(format!("選択中のフォルダ: {rel} ({})", abs.display()));
+                // フォルダ内のファイル一覧（最大30件）
+                if let Ok(entries) = fs::read_dir(&abs) {
+                    let listing: Vec<String> = entries
+                        .filter_map(|e| e.ok())
+                        .take(30)
+                        .map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            if e.path().is_dir() { format!("{name}/") } else { name }
+                        })
+                        .collect();
+                    if !listing.is_empty() {
+                        parts.push(format!("フォルダ内容:\n{}", listing.join("\n")));
+                    }
+                }
+            }
+        }
+
+        // エディタで開いているファイル
+        let editor_file = self.editor_view.read(cx).tab_title();
+        if !editor_file.is_empty() && editor_file != "無題" {
+            parts.push(format!("エディタで開いているファイル: {editor_file}"));
+        }
+
+        parts.join("\n\n")
+    }
+
     /// Chat: Enter / 送信ボタンから呼ばれ、外部 API または Ollama で応答を取得する。
     fn on_chat_submitted(&mut self, cx: &mut Context<Self>) {
         if self.chat_pending {
@@ -635,15 +688,12 @@ impl AppView {
         }
 
         let work_dir = self.chat_working_directory(cx);
-        let work_dir_msg = format!(
-            "作業ディレクトリ（Editor / エクスプローラで選んだ場所。相対パス・ターミナルコマンドの cwd はここを基準に解釈してください）: {}",
-            work_dir.display()
-        );
+        let system_msg = self.build_chat_system_message(&work_dir, cx);
 
         let session_messages = self.session_store.active()
             .map(|s| &s.messages[..])
             .unwrap_or(&[]);
-        let api_messages: Vec<(String, String)> = std::iter::once(("system".into(), work_dir_msg))
+        let api_messages: Vec<(String, String)> = std::iter::once(("system".into(), system_msg))
             .chain(chat_history_for_api(session_messages).into_iter())
             .chain(std::iter::once(("user".into(), text.clone())))
             .collect();
