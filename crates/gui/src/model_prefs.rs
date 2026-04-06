@@ -117,7 +117,7 @@ impl Default for HardwareParams {
             gpu_layers: 99,
             n_threads: 8,
             batch_size: 512,
-            kv_cache_type: KvCacheType::Turbo3,
+            kv_cache_type: KvCacheType::Q8,
         }
     }
 }
