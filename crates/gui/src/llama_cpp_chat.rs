@@ -31,6 +31,11 @@ struct CachedServer {
     child: Child,
 }
 
+pub struct LlamaCppChatResponse {
+    pub content: String,
+    pub thinking: Option<String>,
+}
+
 fn server_cache() -> &'static Mutex<Option<CachedServer>> {
     static CACHE: OnceLock<Mutex<Option<CachedServer>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -42,7 +47,7 @@ pub fn complete_llama_cpp_chat_blocking(
     temperature: f32,
     max_tokens: i32,
     context_length: i32,
-) -> Result<String, String> {
+) -> Result<LlamaCppChatResponse, String> {
     let (base_url, model_id) = ensure_server(model_path, context_length)?;
     let max_tokens = normalize_max_tokens(max_tokens);
     let url = chat_completions_url(&base_url);
@@ -65,19 +70,21 @@ pub fn complete_llama_cpp_chat_blocking(
     if status >= 400 {
         return Err(format!("llama.cpp HTTP {status}: {text}"));
     }
-    extract_openai_message_content(&text)
+    extract_openai_message(&text)
 }
 
-pub fn stream_llama_cpp_chat_blocking<F>(
+pub fn stream_llama_cpp_chat_blocking<F, G>(
     model_path: &Path,
     messages: &[(String, String)],
     temperature: f32,
     max_tokens: i32,
     context_length: i32,
-    mut on_delta: F,
-) -> Result<String, String>
+    mut on_content_delta: F,
+    mut on_thinking_delta: G,
+) -> Result<LlamaCppChatResponse, String>
 where
     F: FnMut(&str),
+    G: FnMut(&str),
 {
     let (base_url, model_id) = ensure_server(model_path, context_length)?;
     let max_tokens = normalize_max_tokens(max_tokens);
@@ -103,7 +110,7 @@ where
         return Err(format!("llama.cpp HTTP {status}: {text}"));
     }
     let reader = resp.into_reader();
-    read_streaming_response(reader, &mut on_delta)
+    read_streaming_response(reader, &mut on_content_delta, &mut on_thinking_delta)
 }
 
 pub fn server_ready_for(model_path: &Path, context_length: i32) -> bool {
@@ -184,10 +191,11 @@ fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
         .collect()
 }
 
-fn extract_openai_message_content(text: &str) -> Result<String, String> {
+fn extract_openai_message(text: &str) -> Result<LlamaCppChatResponse, String> {
     let v: Value = serde_json::from_str(text)
         .map_err(|e| format!("llama.cpp JSON 解析に失敗しました: {e} ({text})"))?;
-    v.pointer("/choices/0/message/content")
+    let content = v
+        .pointer("/choices/0/message/content")
         .and_then(|x| x.as_str())
         .map(|s| s.to_string())
         .or_else(|| {
@@ -195,15 +203,32 @@ fn extract_openai_message_content(text: &str) -> Result<String, String> {
                 .and_then(|x| x.as_str())
                 .map(|s| s.to_string())
         })
-        .ok_or_else(|| format!("choices[0].message.content がありません: {text}"))
+        .unwrap_or_default();
+    let thinking = v
+        .pointer("/choices/0/message/reasoning_content")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+    if content.is_empty() && thinking.is_none() {
+        return Err(format!(
+            "choices[0].message.content / reasoning_content がありません: {text}"
+        ));
+    }
+    Ok(LlamaCppChatResponse { content, thinking })
 }
 
-fn read_streaming_response<R, F>(reader: R, on_delta: &mut F) -> Result<String, String>
+fn read_streaming_response<R, F, G>(
+    reader: R,
+    on_content_delta: &mut F,
+    on_thinking_delta: &mut G,
+) -> Result<LlamaCppChatResponse, String>
 where
     R: Read,
     F: FnMut(&str),
+    G: FnMut(&str),
 {
     let mut out = String::new();
+    let mut thinking = String::new();
     let mut saw_done = false;
     let mut saw_any_chunk = false;
     let mut buf = BufReader::new(reader);
@@ -232,10 +257,16 @@ where
         let value: Value = serde_json::from_str(payload).map_err(|e| {
             format!("llama.cpp ストリーム JSON 解析に失敗しました: {e} ({payload})")
         })?;
-        if let Some(delta) = extract_stream_chunk_text(&value) {
+        let chunk = extract_stream_chunk(&value);
+        if let Some(delta) = chunk.content {
             saw_any_chunk = true;
             out.push_str(delta);
-            on_delta(delta);
+            on_content_delta(delta);
+        }
+        if let Some(delta) = chunk.thinking {
+            saw_any_chunk = true;
+            thinking.push_str(delta);
+            on_thinking_delta(delta);
         }
     }
 
@@ -243,18 +274,36 @@ where
         return Err("llama.cpp ストリームから本文を受け取れませんでした".to_string());
     }
 
-    Ok(out)
+    Ok(LlamaCppChatResponse {
+        content: out,
+        thinking: (!thinking.is_empty()).then_some(thinking),
+    })
 }
 
-fn extract_stream_chunk_text(value: &Value) -> Option<&str> {
-    value
-        .pointer("/choices/0/delta/content")
-        .and_then(|x| x.as_str())
-        .or_else(|| {
-            value
-                .pointer("/choices/0/message/content")
-                .and_then(|x| x.as_str())
-        })
+struct StreamChunk<'a> {
+    content: Option<&'a str>,
+    thinking: Option<&'a str>,
+}
+
+fn extract_stream_chunk(value: &Value) -> StreamChunk<'_> {
+    StreamChunk {
+        content: value
+            .pointer("/choices/0/delta/content")
+            .and_then(|x| x.as_str())
+            .or_else(|| {
+                value
+                    .pointer("/choices/0/message/content")
+                    .and_then(|x| x.as_str())
+            }),
+        thinking: value
+            .pointer("/choices/0/delta/reasoning_content")
+            .and_then(|x| x.as_str())
+            .or_else(|| {
+                value
+                    .pointer("/choices/0/message/reasoning_content")
+                    .and_then(|x| x.as_str())
+            }),
+    }
 }
 
 fn chat_completions_url(base_url: &str) -> String {
@@ -532,7 +581,19 @@ mod tests {
     fn extracts_stream_chunk_text_from_delta_shape() {
         let value: Value =
             serde_json::from_str(r#"{"choices":[{"delta":{"content":"こん"}}]}"#).unwrap();
-        assert_eq!(extract_stream_chunk_text(&value), Some("こん"));
+        let chunk = extract_stream_chunk(&value);
+        assert_eq!(chunk.content, Some("こん"));
+        assert_eq!(chunk.thinking, None);
+    }
+
+    #[test]
+    fn extracts_stream_reasoning_chunk_from_delta_shape() {
+        let value: Value =
+            serde_json::from_str(r#"{"choices":[{"delta":{"reasoning_content":"考"}}]}"#)
+                .unwrap();
+        let chunk = extract_stream_chunk(&value);
+        assert_eq!(chunk.content, None);
+        assert_eq!(chunk.thinking, Some("考"));
     }
 
     #[test]
@@ -543,11 +604,47 @@ mod tests {
             "data: [DONE]\n"
         );
         let mut chunks = Vec::new();
-        let text = read_streaming_response(body.as_bytes(), &mut |delta| {
-            chunks.push(delta.to_string());
-        })
+        let response = read_streaming_response(
+            body.as_bytes(),
+            &mut |delta| {
+                chunks.push(delta.to_string());
+            },
+            &mut |_| {},
+        )
         .unwrap();
         assert_eq!(chunks, vec!["こん".to_string(), "にちは".to_string()]);
-        assert_eq!(text, "こんにちは");
+        assert_eq!(response.content, "こんにちは");
+        assert_eq!(response.thinking, None);
+    }
+
+    #[test]
+    fn reads_streaming_reasoning_payloads() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"考\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"える\"}}]}\n\n",
+            "data: [DONE]\n"
+        );
+        let mut chunks = Vec::new();
+        let response = read_streaming_response(
+            body.as_bytes(),
+            &mut |_| {},
+            &mut |delta| {
+                chunks.push(delta.to_string());
+            },
+        )
+        .unwrap();
+        assert_eq!(chunks, vec!["考".to_string(), "える".to_string()]);
+        assert_eq!(response.content, "");
+        assert_eq!(response.thinking, Some("考える".to_string()));
+    }
+
+    #[test]
+    fn extracts_reasoning_content_from_openai_response() {
+        let response = extract_openai_message(
+            r#"{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"思考"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(response.content, "");
+        assert_eq!(response.thinking, Some("思考".to_string()));
     }
 }

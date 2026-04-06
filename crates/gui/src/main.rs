@@ -312,9 +312,25 @@ struct ChatMsg {
 }
 
 enum ChatStreamEvent {
-    Delta(String),
-    Complete(String),
+    ContentDelta(String),
+    ThinkingDelta(String),
+    Complete(llama_cpp_chat::LlamaCppChatResponse),
     Error(String),
+}
+
+fn apply_local_chat_response(msg: &mut ChatMsg, response: llama_cpp_chat::LlamaCppChatResponse) {
+    msg.thinking = response.thinking;
+    if response.content.is_empty() {
+        if msg.thinking.is_some() {
+            msg.content =
+                "（思考トークンのみ受信しました。最大トークン数を増やすと回答本文まで届く場合があります）"
+                    .into();
+        } else {
+            msg.content.clear();
+        }
+    } else {
+        msg.content = response.content;
+    }
 }
 
 /// 設定画面のモデルパラメータ行（± で調整、`model_prefs` に保存）
@@ -638,7 +654,12 @@ impl AppView {
                         max_tokens,
                         context_length,
                         |delta| {
-                            let _ = tx.send_blocking(ChatStreamEvent::Delta(delta.to_string()));
+                            let _ =
+                                tx.send_blocking(ChatStreamEvent::ContentDelta(delta.to_string()));
+                        },
+                        |delta| {
+                            let _ =
+                                tx.send_blocking(ChatStreamEvent::ThinkingDelta(delta.to_string()));
                         },
                     );
                     match result {
@@ -652,25 +673,35 @@ impl AppView {
                 });
 
                 cx.spawn(async move |this, cx| {
-                    let mut saw_delta = false;
+                    let mut saw_content_delta = false;
+                    let mut saw_thinking_delta = false;
                     while let Ok(event) = rx.recv().await {
-                        let done = matches!(event, ChatStreamEvent::Complete(_) | ChatStreamEvent::Error(_));
+                        let done = matches!(
+                            event,
+                            ChatStreamEvent::Complete(_) | ChatStreamEvent::Error(_)
+                        );
                         let _ = cx.update(|app| {
                             let _ = this.update(app, |this: &mut AppView, cx| {
                                 if let Some(last) = this.chat_messages.last_mut() {
                                     if last.role == "assistant" {
                                         match event {
-                                            ChatStreamEvent::Delta(delta) => {
-                                                if !saw_delta {
+                                            ChatStreamEvent::ContentDelta(delta) => {
+                                                if !saw_content_delta {
                                                     last.content.clear();
-                                                    saw_delta = true;
+                                                    saw_content_delta = true;
                                                 }
                                                 last.content.push_str(&delta);
                                             }
+                                            ChatStreamEvent::ThinkingDelta(delta) => {
+                                                let thinking =
+                                                    last.thinking.get_or_insert_with(String::new);
+                                                thinking.push_str(&delta);
+                                                saw_thinking_delta = true;
+                                            }
                                             ChatStreamEvent::Complete(reply) => {
                                                 this.chat_pending = false;
-                                                if !saw_delta {
-                                                    last.content = reply;
+                                                if !saw_content_delta || !saw_thinking_delta {
+                                                    apply_local_chat_response(last, reply);
                                                 }
                                             }
                                             ChatStreamEvent::Error(err) => {
@@ -687,6 +718,36 @@ impl AppView {
                             break;
                         }
                     }
+                })
+                .detach();
+            }
+            Ok(chat_client::ChatBackend::LlamaCppLocal { path }) => {
+                cx.spawn(async move |this, cx| {
+                    let result = smol::unblock(move || {
+                        llama_cpp_chat::complete_llama_cpp_chat_blocking(
+                            &path,
+                            &api_messages,
+                            temperature,
+                            max_tokens,
+                            context_length,
+                        )
+                    })
+                    .await;
+
+                    let _ = cx.update(|app| {
+                        let _ = this.update(app, |this: &mut AppView, cx| {
+                            this.chat_pending = false;
+                            if let Some(last) = this.chat_messages.last_mut() {
+                                if last.role == "assistant" {
+                                    match result {
+                                        Ok(reply) => apply_local_chat_response(last, reply),
+                                        Err(e) => last.content = format!("エラー: {e}"),
+                                    }
+                                }
+                            }
+                            cx.notify();
+                        });
+                    });
                 })
                 .detach();
             }

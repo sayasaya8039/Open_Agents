@@ -245,6 +245,7 @@ pub fn complete_chat_blocking(
                 max_tokens,
                 context_length,
             )
+            .map(|response| response.content)
         }
     }
 }
