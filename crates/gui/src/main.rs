@@ -2769,12 +2769,31 @@ impl AppView {
                     .border_color(hex(BORDER))
                     .flex()
                     .items_center()
+                    .justify_between()
                     .px(px(16.))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
+                            .child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(hex(HOVER_BG)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            this.page = Page::Chat;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child("← Chat"),
+                            )
                             .child(
                                 div()
                                     .text_size(px(16.))
