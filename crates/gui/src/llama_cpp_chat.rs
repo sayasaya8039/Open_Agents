@@ -2,6 +2,7 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::net::TcpListener;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -262,11 +263,27 @@ fn chat_completions_url(base_url: &str) -> String {
 
 fn log_chat_template_mode(model_path: &Path, streaming: bool, max_tokens: i32) {
     eprintln!(
-        "llama.cpp: local GGUF request uses {CHAT_COMPLETIONS_PATH} only (GUI never uses raw /completion); GGUF chat_template metadata is expected to format messages. model={} stream={} max_tokens={}",
+        "llama.cpp: local GGUF request uses {CHAT_COMPLETIONS_PATH} only (GUI never uses raw /completion); GGUF chat_template metadata is expected to format messages and llama-server is launched with --jinja. model={} stream={} max_tokens={}",
         model_path.display(),
         streaming,
         max_tokens
     );
+}
+
+fn llama_server_args(model_path: &Path, port: u16, context_length: i32) -> Vec<OsString> {
+    vec![
+        OsString::from("--model"),
+        model_path.as_os_str().to_os_string(),
+        OsString::from("--host"),
+        OsString::from("127.0.0.1"),
+        OsString::from("--port"),
+        OsString::from(port.to_string()),
+        OsString::from("--ctx-size"),
+        OsString::from(context_length.to_string()),
+        OsString::from("--threads"),
+        OsString::from(available_thread_count().to_string()),
+        OsString::from("--jinja"),
+    ]
 }
 
 fn spawn_llama_server(
@@ -278,16 +295,7 @@ fn spawn_llama_server(
 ) -> Result<Child, String> {
     let mut command = Command::new(binary);
     command
-        .arg("--model")
-        .arg(model_path)
-        .arg("--host")
-        .arg("127.0.0.1")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--ctx-size")
-        .arg(context_length.to_string())
-        .arg("--threads")
-        .arg(available_thread_count().to_string())
+        .args(llama_server_args(model_path, port, context_length))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -512,6 +520,12 @@ mod tests {
             chat_completions_url("http://127.0.0.1:8080/"),
             "http://127.0.0.1:8080/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn llama_server_args_enable_jinja_templates() {
+        let args = llama_server_args(Path::new("C:/models/gemma-4.gguf"), 8080, 8192);
+        assert!(args.iter().any(|arg| arg == "--jinja"));
     }
 
     #[test]
