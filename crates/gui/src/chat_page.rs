@@ -27,6 +27,7 @@ pub fn render_chat_page(
     chat_pending: bool,
     chat_show_thinking: bool,
     model_status: &str,
+    is_local_weights: bool,
     composer: Entity<crate::chat_composer::ChatComposer>,
     scroll_handle: &ScrollHandle,
     cx: &mut Context<crate::AppView>,
@@ -47,6 +48,7 @@ pub fn render_chat_page(
             chat_pending,
             chat_show_thinking,
             model_status,
+            is_local_weights,
             composer,
             scroll_handle,
             cx,
@@ -170,6 +172,7 @@ fn render_chat_main(
     chat_pending: bool,
     chat_show_thinking: bool,
     model_status: &str,
+    is_local_weights: bool,
     composer: Entity<crate::chat_composer::ChatComposer>,
     scroll_handle: &ScrollHandle,
     cx: &mut Context<crate::AppView>,
@@ -354,7 +357,7 @@ fn render_chat_main(
                 ),
         )
         // ── 入力バー ──
-        .child(render_input_bar(chat_pending, model_status, composer, cx))
+        .child(render_input_bar(chat_pending, model_status, is_local_weights, composer, cx))
 }
 
 // ── メッセージバブル ──
@@ -459,6 +462,7 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
 fn render_input_bar(
     send_disabled: bool,
     model_status: &str,
+    is_local_weights: bool,
     composer: Entity<crate::chat_composer::ChatComposer>,
     cx: &mut Context<crate::AppView>,
 ) -> impl IntoElement {
@@ -540,7 +544,7 @@ fn render_input_bar(
                                 .child("➤"),
                         ),
                 )
-                // モデルバッジ + キーヒント
+                // モデル選択 + キーヒント
                 .child(
                     div()
                         .flex()
@@ -548,13 +552,51 @@ fn render_input_bar(
                         .justify_between()
                         .child(
                             div()
-                                .px(px(8.))
-                                .py(px(2.))
-                                .bg(hex_a(ACCENT_BLUE, 0.15))
-                                .rounded(px(4.))
-                                .text_size(px(10.))
-                                .text_color(hex(ACCENT_BLUE))
-                                .child(short_model),
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                // 推論先切替ボタン（クリックでサイクル: API → Ollama → ローカルGGUF）
+                                .child(
+                                    div()
+                                        .px(px(8.))
+                                        .py(px(3.))
+                                        .bg(hex_a(ACCENT_BLUE, 0.15))
+                                        .rounded(px(4.))
+                                        .text_size(px(10.))
+                                        .text_color(hex(ACCENT_BLUE))
+                                        .cursor_pointer()
+                                        .hover(|d| d.bg(hex_a(ACCENT_BLUE, 0.3)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                                this.chat_prefs.source = this.chat_prefs.source.cycle();
+                                                this.save_chat_prefs();
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(short_model),
+                                )
+                                // ローカルモデル切替（LocalWeights時のみ、◀ ▶ でインデックス切替）
+                                .when(is_local_weights, |d| {
+                                    d.child(
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .rounded(px(4.))
+                                            .bg(hex(BORDER))
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .cursor_pointer()
+                                            .hover(|d| d.bg(hex(HOVER_BG)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                                    this.cycle_local_model(cx);
+                                                }),
+                                            )
+                                            .child("▶ 次のモデル"),
+                                    )
+                                }),
                         )
                         .child(
                             div()

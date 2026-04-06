@@ -611,6 +611,27 @@ impl AppView {
 
     // ── Chat セッション操作 ──
 
+    /// Chat推論先の設定を永続化
+    fn save_chat_prefs(&self) {
+        let prefs = model_prefs::load_local_llm_prefs();
+        let mut updated = prefs;
+        updated.chat = self.chat_prefs.clone();
+        model_prefs::save_local_llm_prefs(&updated);
+    }
+
+    /// ローカルモデルを次のインデックスに切替
+    fn cycle_local_model(&mut self, cx: &mut Context<Self>) {
+        if self.settings_model_paths.is_empty() {
+            return;
+        }
+        self.chat_prefs.local_model_index =
+            (self.chat_prefs.local_model_index + 1) % self.settings_model_paths.len();
+        self.save_chat_prefs();
+        // サーバキャッシュをクリア（次回送信時に新しいモデルで起動）
+        llama_cpp_chat::cleanup_orphan_servers();
+        cx.notify();
+    }
+
     fn chat_new_session(&mut self, cx: &mut Context<Self>) {
         self.session_store.new_session();
         self.chat_pending = false;
@@ -979,11 +1000,13 @@ impl Render for AppView {
             Page::Editor => self.render_editor(cx).into_any_element(),
             Page::Chat => {
                 let model_status = self.chat_model_status_line();
+                let is_local_weights = self.chat_prefs.source == model_prefs::ChatInferenceSource::LocalWeights;
                 chat_page::render_chat_page(
                     &self.session_store,
                     self.chat_pending,
                     self.chat_show_thinking,
                     &model_status,
+                    is_local_weights,
                     self.chat_composer.clone(),
                     &self.chat_scroll,
                     cx,
