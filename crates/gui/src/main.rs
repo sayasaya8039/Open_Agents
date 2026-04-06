@@ -373,8 +373,8 @@ struct AppView {
     api_keys: api_key_prefs::ApiKeyPrefs,
     /// 設定画面での各カタログ行のプレーン表示（永続化しない、`PROVIDER_CATALOG` と同順）
     api_key_reveal: Vec<bool>,
-    /// プロバイダから取得したモデルID一覧（キャッシュ）
-    fetched_models: Vec<(String, Vec<String>)>,
+    /// プロバイダから取得したモデルID一覧（キャッシュ）: (provider_id, label, models)
+    fetched_models: Vec<(String, String, Vec<String>)>,
     /// モデル取得中フラグ
     fetching_models: bool,
     /// 開いているワークスペースのルート（Zed worktree root）
@@ -1631,13 +1631,8 @@ impl AppView {
         let current = self.chat_prefs.api_model.clone();
         let fetching = self.fetching_models;
 
-        // 取得済みモデルがあればそれを使う
-        let sections: Vec<(String, Vec<String>)> = if !self.fetched_models.is_empty() {
-            self.fetched_models.clone()
-        } else {
-            // フォールバック: 空（取得ボタンを表示）
-            Vec::new()
-        };
+        // 取得済みモデル: (provider_id, label, models)
+        let sections = self.fetched_models.clone();
 
         let has_any_key = chat_client::PROVIDER_ENDPOINTS.iter()
             .any(|(id, _, _)| !self.api_keys.get_str(id).is_empty());
@@ -1678,7 +1673,7 @@ impl AppView {
                                 .text_color(hex(TEXT_MUTED))
                                 .child(format!("{}プロバイダ / {}モデル",
                                     sections.len(),
-                                    sections.iter().map(|(_, m)| m.len()).sum::<usize>()
+                                    sections.iter().map(|(_, _, m)| m.len()).sum::<usize>()
                                 )),
                         )
                     }),
@@ -1692,7 +1687,7 @@ impl AppView {
                 )
             })
             // モデルリスト
-            .children(sections.into_iter().map(|(provider, models)| {
+            .children(sections.into_iter().map(|(provider_id, label, models)| {
                 let current = current.clone();
                 div()
                     .flex()
@@ -1703,7 +1698,7 @@ impl AppView {
                             .text_size(px(10.))
                             .text_color(hex(TEXT_DIM))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(provider),
+                            .child(label),
                     )
                     .child(
                         div()
@@ -1713,6 +1708,7 @@ impl AppView {
                             .children(models.into_iter().map(|model_id| {
                                 let is_current = current == model_id;
                                 let id_string = model_id.clone();
+                                let pid = provider_id.clone();
                                 div()
                                     .px(px(8.))
                                     .py(px(3.))
@@ -1734,6 +1730,7 @@ impl AppView {
                                         MouseButton::Left,
                                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                                             this.chat_prefs.api_model = id_string.clone();
+                                            this.chat_prefs.api_provider = pid.clone();
                                             this.save_chat_prefs();
                                             cx.notify();
                                         }),

@@ -316,8 +316,11 @@ const MAX_CHAT_MODEL_ID_LEN: usize = 512;
 #[serde(default)]
 pub struct ChatPrefs {
     pub source: ChatInferenceSource,
-    /// クラウド向けモデル ID（空なら OpenRouter/OpenAI/汎用それぞれの既定）
+    /// クラウド向けモデル ID（空なら既定）
     pub api_model: String,
+    /// クラウド向けプロバイダ ID（例: "openai", "groq", "deepseek"）空なら自動検出
+    #[serde(default)]
+    pub api_provider: String,
     /// Ollama のモデル名（`ollama list` に出る名前）
     pub ollama_model: String,
     /// `model_paths` リスト内のインデックス（LocalWeights 時）
@@ -330,6 +333,7 @@ impl Default for ChatPrefs {
         Self {
             source: ChatInferenceSource::default(),
             api_model: String::new(),
+            api_provider: String::new(),
             ollama_model: default_ollama_chat_model(),
             local_model_index: 0,
         }

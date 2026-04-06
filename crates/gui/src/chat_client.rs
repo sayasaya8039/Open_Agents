@@ -13,7 +13,8 @@ const OPENROUTER_BASE: &str = "https://openrouter.ai/api";
 const OPENAI_BASE: &str = "https://api.openai.com/v1";
 
 /// プロバイダの /v1/models エンドポイントからモデル一覧を取得（同期・重い処理）
-pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, Vec<String>)> {
+/// (プロバイダID, 表示ラベル, モデルID一覧)
+pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, String, Vec<String>)> {
     let mut results = Vec::new();
 
     for &(id, base_url, _default) in PROVIDER_ENDPOINTS {
@@ -27,12 +28,6 @@ pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, Vec<String>)> {
         } else {
             format!("{base}/v1/models")
         };
-
-        let title = PROVIDER_ENDPOINTS
-            .iter()
-            .find(|(k, _, _)| *k == id)
-            .map(|(_, _, d)| id)
-            .unwrap_or(id);
 
         match fetch_models_from_url(&url, key) {
             Ok(models) if !models.is_empty() => {
@@ -55,7 +50,7 @@ pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, Vec<String>)> {
                     "nebius" => "Nebius",
                     other => other,
                 };
-                results.push((label.to_string(), models));
+                results.push((id.to_string(), label.to_string(), models));
             }
             Ok(_) => eprintln!("models: {id} — 空のレスポンス"),
             Err(e) => eprintln!("models: {id} — 取得失敗: {e}"),
@@ -126,7 +121,7 @@ pub fn resolve_chat_backend(
 ) -> Result<ChatBackend, String> {
     match chat.source {
         ChatInferenceSource::Local => resolve_ollama_backend(api, &chat.ollama_model),
-        ChatInferenceSource::Api => resolve_api_backend(api, &chat.api_model),
+        ChatInferenceSource::Api => resolve_api_backend(api, chat),
         ChatInferenceSource::LocalWeights => {
             resolve_local_weights(local_model_paths, chat.local_model_index)
         }
@@ -192,10 +187,26 @@ pub const PROVIDER_ENDPOINTS: &[(&str, &str, &str)] = &[
     ("nebius",      "https://api.studio.nebius.ai/v1",   "deepseek-r1"),
 ];
 
-fn resolve_api_backend(api: &ApiKeyPrefs, chat_model: &str) -> Result<ChatBackend, String> {
-    let chat_model = chat_model.trim();
+fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBackend, String> {
+    let chat_model = chat.api_model.trim();
+    let provider_id = chat.api_provider.trim();
 
-    // 登録済みプロバイダを優先順に検索
+    // 1. 明示的にプロバイダが指定されている場合、そのプロバイダを使う
+    if !provider_id.is_empty() {
+        if let Some(&(_, base_url, default_model)) = PROVIDER_ENDPOINTS.iter().find(|(id, _, _)| *id == provider_id) {
+            let key = api.get_str(provider_id);
+            if !key.is_empty() {
+                let model = trimmed_or(chat_model, default_model);
+                return Ok(ChatBackend::OpenAiCompatible {
+                    base_url: base_url.to_string(),
+                    api_key: key.to_string(),
+                    model,
+                });
+            }
+        }
+    }
+
+    // 2. フォールバック: 登録済みプロバイダを優先順に検索
     for &(id, base_url, default_model) in PROVIDER_ENDPOINTS {
         let key = api.get_str(id);
         if !key.is_empty() {
@@ -208,7 +219,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat_model: &str) -> Result<ChatBacken
         }
     }
 
-    // 汎用 OpenAI 互換
+    // 3. 汎用 OpenAI 互換
     let gen_base = api.get_str("generic_openai_base_url");
     let gen_key = api.get_str("generic_openai_api_key");
     if !gen_base.is_empty() && !gen_key.is_empty() {
