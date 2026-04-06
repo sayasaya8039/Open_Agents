@@ -12,6 +12,87 @@ use serde_json::{json, Value};
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api";
 const OPENAI_BASE: &str = "https://api.openai.com/v1";
 
+/// プロバイダの /v1/models エンドポイントからモデル一覧を取得（同期・重い処理）
+pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, Vec<String>)> {
+    let mut results = Vec::new();
+
+    for &(id, base_url, _default) in PROVIDER_ENDPOINTS {
+        let key = api.get_str(id);
+        if key.is_empty() {
+            continue;
+        }
+        let base = base_url.trim_end_matches('/');
+        let url = if base.ends_with("/v1") || base.ends_with("/v1beta/openai") || base.ends_with("/v2") {
+            format!("{base}/models")
+        } else {
+            format!("{base}/v1/models")
+        };
+
+        let title = PROVIDER_ENDPOINTS
+            .iter()
+            .find(|(k, _, _)| *k == id)
+            .map(|(_, _, d)| id)
+            .unwrap_or(id);
+
+        match fetch_models_from_url(&url, key) {
+            Ok(models) if !models.is_empty() => {
+                let label = match id {
+                    "openrouter" => "OpenRouter",
+                    "openai" => "OpenAI",
+                    "anthropic" => "Anthropic",
+                    "google_gemini" => "Google Gemini",
+                    "groq" => "Groq",
+                    "mistral" => "Mistral AI",
+                    "deepseek" => "DeepSeek",
+                    "xai" => "xAI (Grok)",
+                    "cohere" => "Cohere",
+                    "perplexity" => "Perplexity",
+                    "fireworks" => "Fireworks AI",
+                    "together" => "Together AI",
+                    "moonshot" => "Moonshot",
+                    "siliconflow" => "SiliconFlow",
+                    "novita" => "Novita AI",
+                    "nebius" => "Nebius",
+                    other => other,
+                };
+                results.push((label.to_string(), models));
+            }
+            Ok(_) => eprintln!("models: {id} — 空のレスポンス"),
+            Err(e) => eprintln!("models: {id} — 取得失敗: {e}"),
+        }
+    }
+    results
+}
+
+fn fetch_models_from_url(url: &str, api_key: &str) -> Result<Vec<String>, String> {
+    let resp = ureq::get(url)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(10))
+        .call()
+        .map_err(|e| format!("リクエスト失敗: {e}"))?;
+    let status = resp.status();
+    let text = resp.into_string().map_err(|e| format!("読み取り失敗: {e}"))?;
+    if status >= 400 {
+        return Err(format!("HTTP {status}"));
+    }
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("JSON解析失敗: {e}"))?;
+
+    let mut models: Vec<String> = v
+        .pointer("/data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort();
+    // 最大50件に制限（OpenRouter等は数千モデルあるため）
+    models.truncate(50);
+    Ok(models)
+}
+
 #[derive(Clone, Debug)]
 pub enum ChatBackend {
     OpenAiCompatible {
@@ -92,7 +173,7 @@ fn resolve_local_weights(paths: &[PathBuf], index: usize) -> Result<ChatBackend,
 
 /// クラウド API のみ（OpenRouter → OpenAI → 汎用 OpenAI 互換）
 /// プロバイダ ID → (ベース URL, デフォルトモデル)
-const PROVIDER_ENDPOINTS: &[(&str, &str, &str)] = &[
+pub const PROVIDER_ENDPOINTS: &[(&str, &str, &str)] = &[
     ("openrouter",  "https://openrouter.ai/api",        "openai/gpt-4o-mini"),
     ("openai",      "https://api.openai.com/v1",         "gpt-4o-mini"),
     ("anthropic",   "https://api.anthropic.com/v1",      "claude-sonnet-4-20250514"),

@@ -373,6 +373,10 @@ struct AppView {
     api_keys: api_key_prefs::ApiKeyPrefs,
     /// 設定画面での各カタログ行のプレーン表示（永続化しない、`PROVIDER_CATALOG` と同順）
     api_key_reveal: Vec<bool>,
+    /// プロバイダから取得したモデルID一覧（キャッシュ）
+    fetched_models: Vec<(String, Vec<String>)>,
+    /// モデル取得中フラグ
+    fetching_models: bool,
     /// 開いているワークスペースのルート（Zed worktree root）
     workspace_root: PathBuf,
     /// 仮想ファイルツリー
@@ -1600,103 +1604,96 @@ impl AppView {
         cx.notify();
     }
 
-    /// プロバイダ別モデルIDピッカー
+    /// モデル一覧をAPIから取得
+    fn fetch_models(&mut self, cx: &mut Context<Self>) {
+        if self.fetching_models {
+            return;
+        }
+        self.fetching_models = true;
+        cx.notify();
+        let api_keys = self.api_keys.clone();
+        cx.spawn(async move |this, cx| {
+            let results = smol::unblock(move || {
+                chat_client::fetch_provider_models(&api_keys)
+            }).await;
+            let _ = cx.update(|app| {
+                let _ = this.update(app, |this: &mut AppView, cx| {
+                    this.fetched_models = results;
+                    this.fetching_models = false;
+                    cx.notify();
+                });
+            });
+        }).detach();
+    }
+
+    /// プロバイダ別モデルIDピッカー（API取得 + フォールバック）
     fn render_model_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.chat_prefs.api_model.clone();
+        let fetching = self.fetching_models;
 
-        // 登録済みプロバイダに応じてモデルリストを構築
-        let mut sections: Vec<(&str, Vec<&str>)> = Vec::new();
+        // 取得済みモデルがあればそれを使う
+        let sections: Vec<(String, Vec<String>)> = if !self.fetched_models.is_empty() {
+            self.fetched_models.clone()
+        } else {
+            // フォールバック: 空（取得ボタンを表示）
+            Vec::new()
+        };
 
-        let provider_models: &[(&str, &str, &[&str])] = &[
-            ("openrouter", "OpenRouter (全プロバイダ統合)", &[
-                "anthropic/claude-sonnet-4", "anthropic/claude-haiku-4", "anthropic/claude-opus-4",
-                "google/gemini-2.5-flash", "google/gemini-2.5-pro",
-                "openai/gpt-4.1", "openai/gpt-4.1-mini", "openai/o3", "openai/o4-mini",
-                "meta-llama/llama-4-maverick", "meta-llama/llama-4-scout",
-                "qwen/qwen3-235b-a22b", "qwen/qwen3-30b-a3b",
-                "deepseek/deepseek-r1", "deepseek/deepseek-chat",
-                "mistralai/mistral-large", "mistralai/codestral",
-                "x-ai/grok-3", "x-ai/grok-3-mini",
-                "cohere/command-a", "cohere/command-r-plus",
-            ]),
-            ("openai", "OpenAI", &[
-                "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-                "o3", "o4-mini",
-                "gpt-4o", "gpt-4o-mini",
-            ]),
-            ("anthropic", "Anthropic (Claude)", &[
-                "claude-sonnet-4-20250514", "claude-haiku-4-20250414",
-                "claude-opus-4-20250514",
-            ]),
-            ("google_gemini", "Google Gemini", &[
-                "gemini-2.5-flash", "gemini-2.5-pro",
-                "gemini-2.0-flash",
-            ]),
-            ("groq", "Groq (超低レイテンシ)", &[
-                "llama-4-scout-17b-16e-instruct",
-                "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-                "gemma2-9b-it", "mixtral-8x7b-32768",
-                "qwen-qwq-32b",
-            ]),
-            ("mistral", "Mistral AI", &[
-                "mistral-large-latest", "mistral-small-latest",
-                "codestral-latest", "open-mistral-nemo",
-            ]),
-            ("deepseek", "DeepSeek", &[
-                "deepseek-chat", "deepseek-reasoner",
-            ]),
-            ("xai", "xAI (Grok)", &[
-                "grok-3", "grok-3-mini", "grok-2",
-            ]),
-            ("cohere", "Cohere", &[
-                "command-a-03-2025", "command-r-plus-08-2024",
-                "command-r-08-2024",
-            ]),
-            ("perplexity", "Perplexity (検索付きAI)", &[
-                "sonar-pro", "sonar", "sonar-reasoning-pro",
-            ]),
-            ("fireworks", "Fireworks AI", &[
-                "accounts/fireworks/models/llama4-scout-instruct-basic",
-                "accounts/fireworks/models/qwen3-235b-a22b",
-            ]),
-            ("together", "Together AI", &[
-                "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-                "Qwen/Qwen3-235B-A22B",
-                "deepseek-ai/DeepSeek-R1",
-            ]),
-            ("moonshot", "Moonshot (Kimi)", &[
-                "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k",
-            ]),
-            ("siliconflow", "SiliconFlow", &[
-                "deepseek-ai/DeepSeek-R1",
-                "Qwen/Qwen3-235B-A22B",
-            ]),
-        ];
-
-        for (key, label, models) in provider_models {
-            if !self.api_keys.get_str(key).is_empty() {
-                sections.push((label, models.to_vec()));
-            }
-        }
-
-        // 汎用 OpenAI 互換
-        if !self.api_keys.get_str("generic_openai_api_key").is_empty() {
-            sections.push(("汎用 OpenAI 互換", vec![
-                "(プロバイダのモデルIDを貼り付けてください)",
-            ]));
-        }
-
-        if sections.is_empty() {
-            sections.push(("API キー未登録", vec![
-                "上の「API キー管理」でプロバイダのキーを登録すると、モデル一覧が表示されます",
-            ]));
-        }
+        let has_any_key = chat_client::PROVIDER_ENDPOINTS.iter()
+            .any(|(id, _, _)| !self.api_keys.get_str(id).is_empty());
 
         div()
             .flex()
             .flex_col()
             .gap(px(6.))
+            // 取得ボタン
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .px(px(10.))
+                            .py(px(5.))
+                            .bg(if fetching { hex(BORDER) } else { hex(ACCENT_BLUE) })
+                            .rounded(px(6.))
+                            .text_size(px(11.))
+                            .text_color(hex(0xFFFFFF))
+                            .cursor(if fetching { CursorStyle::OperationNotAllowed } else { CursorStyle::PointingHand })
+                            .when(!fetching, |d| {
+                                d.on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                        this.fetch_models(cx);
+                                    }),
+                                )
+                            })
+                            .child(if fetching { "取得中…" } else { "🔄 最新モデル一覧を取得" }),
+                    )
+                    .when(!sections.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(hex(TEXT_MUTED))
+                                .child(format!("{}プロバイダ / {}モデル",
+                                    sections.len(),
+                                    sections.iter().map(|(_, m)| m.len()).sum::<usize>()
+                                )),
+                        )
+                    }),
+            )
+            .when(!has_any_key && sections.is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(hex(TEXT_MUTED))
+                        .child("上の「API キー管理」でプロバイダのキーを登録してください"),
+                )
+            })
+            // モデルリスト
             .children(sections.into_iter().map(|(provider, models)| {
+                let current = current.clone();
                 div()
                     .flex()
                     .flex_col()
@@ -1706,7 +1703,7 @@ impl AppView {
                             .text_size(px(10.))
                             .text_color(hex(TEXT_DIM))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(provider.to_string()),
+                            .child(provider),
                     )
                     .child(
                         div()
@@ -1715,7 +1712,7 @@ impl AppView {
                             .gap(px(4.))
                             .children(models.into_iter().map(|model_id| {
                                 let is_current = current == model_id;
-                                let id_string = model_id.to_string();
+                                let id_string = model_id.clone();
                                 div()
                                     .px(px(8.))
                                     .py(px(3.))
@@ -1733,17 +1730,15 @@ impl AppView {
                                     })
                                     .cursor_pointer()
                                     .hover(|d| d.bg(hex(HOVER_BG)))
-                                    .when(!model_id.starts_with('('), |d| {
-                                        d.on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                                this.chat_prefs.api_model = id_string.clone();
-                                                this.save_chat_prefs();
-                                                cx.notify();
-                                            }),
-                                        )
-                                    })
-                                    .child(model_id.to_string())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                            this.chat_prefs.api_model = id_string.clone();
+                                            this.save_chat_prefs();
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(model_id)
                                     .into_any_element()
                             })),
                     )
@@ -3339,6 +3334,8 @@ fn main() {
                         chat_prefs: local_llm.chat,
                         api_keys,
                         api_key_reveal: vec![false; api_key_prefs::PROVIDER_CATALOG.len()],
+                        fetched_models: Vec::new(),
+                        fetching_models: false,
                         workspace_root,
                         file_tree,
                         explorer_expanded,
