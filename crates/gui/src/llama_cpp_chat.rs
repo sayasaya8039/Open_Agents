@@ -375,7 +375,7 @@ fn llama_server_args(
         0
     };
 
-    let args = vec![
+    let mut args = vec![
         OsString::from("--model"),
         model_path.as_os_str().to_os_string(),
         OsString::from("--host"),
@@ -392,6 +392,17 @@ fn llama_server_args(
         OsString::from(n_gpu_layers.to_string()),
         OsString::from("--jinja"),
     ];
+
+    // TurboQuant KVキャッシュ圧縮: turbo3 で 4.9x 圧縮 (K は q8_0 で品質維持、V は turbo3 で圧縮)
+    // サーバが turbo3 未対応の場合は無視されるため安全
+    let kv_type = hw.kv_cache_type_str();
+    if !kv_type.is_empty() {
+        args.push(OsString::from("--cache-type-k"));
+        args.push(OsString::from("q8_0"));
+        args.push(OsString::from("--cache-type-v"));
+        args.push(OsString::from(kv_type));
+    }
+
     args
 }
 

@@ -62,6 +62,38 @@ impl ModelParams {
     }
 }
 
+/// KV キャッシュ量子化モード（TurboQuant 対応 llama-server 用）
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum KvCacheType {
+    /// 圧縮なし（FP16、従来動作）
+    #[default]
+    None,
+    /// q8_0: 2x 圧縮、品質劣化ほぼゼロ
+    Q8,
+    /// q4_0: 4x 圧縮、軽微な品質劣化
+    Q4,
+    /// TurboQuant turbo3: 4.9x 圧縮、+1% perplexity（推奨）
+    Turbo3,
+    /// TurboQuant turbo4: 3.8x 圧縮、+0.2% perplexity（高品質）
+    Turbo4,
+    /// TurboQuant turbo2: 6.4x 圧縮、+6.5% perplexity（最大圧縮）
+    Turbo2,
+}
+
+impl KvCacheType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "FP16（標準）",
+            Self::Q8 => "Q8（2x圧縮）",
+            Self::Q4 => "Q4（4x圧縮）",
+            Self::Turbo3 => "Turbo3（4.9x圧縮・推奨）",
+            Self::Turbo4 => "Turbo4（3.8x圧縮・高品質）",
+            Self::Turbo2 => "Turbo2（6.4x圧縮・最大）",
+        }
+    }
+}
+
 /// ローカル推論のハードウェア関連（内蔵 llama-server 起動時の CLI にそのまま反映）
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -74,6 +106,8 @@ pub struct HardwareParams {
     pub n_threads: i32,
     /// 推論バッチサイズ（バックエンドが参照する場合の目安）
     pub batch_size: i32,
+    /// KV キャッシュ量子化（TurboQuant 対応版で有効）
+    pub kv_cache_type: KvCacheType,
 }
 
 impl Default for HardwareParams {
@@ -83,6 +117,7 @@ impl Default for HardwareParams {
             gpu_layers: 32,
             n_threads: 8,
             batch_size: 512,
+            kv_cache_type: KvCacheType::Turbo3,
         }
     }
 }
@@ -98,6 +133,18 @@ impl HardwareParams {
         let mut s = self;
         s.clamp();
         s
+    }
+
+    /// `--cache-type-v` に渡す文字列（空文字列 = 圧縮なし）
+    pub fn kv_cache_type_str(&self) -> &'static str {
+        match self.kv_cache_type {
+            KvCacheType::None => "",
+            KvCacheType::Q8 => "q8_0",
+            KvCacheType::Q4 => "q4_0",
+            KvCacheType::Turbo3 => "turbo3",
+            KvCacheType::Turbo4 => "turbo4",
+            KvCacheType::Turbo2 => "turbo2",
+        }
     }
 }
 
