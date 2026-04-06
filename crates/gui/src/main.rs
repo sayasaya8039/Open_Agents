@@ -385,6 +385,8 @@ struct AppView {
     explorer_selection: Option<Vec<String>>,
     editor_view: Entity<EditorView>,
     chat_composer: Entity<chat_composer::ChatComposer>,
+    /// Chat メッセージスクロールハンドル
+    chat_scroll: ScrollHandle,
     /// Chat API リクエスト送信中（再送信ガード）
     chat_pending: bool,
     /// 同梱 llama.cpp runtime manifest
@@ -691,6 +693,7 @@ impl AppView {
             session.touch();
         }
         self.chat_pending = true;
+        self.chat_scroll.scroll_to_bottom();
         cx.notify();
 
         let api_keys = self.api_keys.clone();
@@ -773,6 +776,7 @@ impl AppView {
                                         }
                                     }
                                 }
+                                this.chat_scroll.scroll_to_bottom();
                                 cx.notify();
                             });
                         });
@@ -810,6 +814,7 @@ impl AppView {
                                 }
                             }
                             chat_session::save_sessions(&this.session_store);
+                            this.chat_scroll.scroll_to_bottom();
                             cx.notify();
                         });
                     });
@@ -843,6 +848,7 @@ impl AppView {
                                 }
                             }
                             chat_session::save_sessions(&this.session_store);
+                            this.chat_scroll.scroll_to_bottom();
                             cx.notify();
                         });
                     });
@@ -879,6 +885,7 @@ impl Render for AppView {
                     self.chat_show_thinking,
                     &model_status,
                     self.chat_composer.clone(),
+                    &self.chat_scroll,
                     cx,
                 ).into_any_element()
             }
@@ -3468,6 +3475,7 @@ fn main() {
                         explorer_selection: None,
                         editor_view,
                         chat_composer,
+                        chat_scroll: ScrollHandle::new(),
                         chat_pending: false,
                         llama_cpp_manifest,
                         llama_cpp_bundle_error,

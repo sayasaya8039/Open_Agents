@@ -28,6 +28,7 @@ pub fn render_chat_page(
     chat_show_thinking: bool,
     model_status: &str,
     composer: Entity<crate::chat_composer::ChatComposer>,
+    scroll_handle: &ScrollHandle,
     cx: &mut Context<crate::AppView>,
 ) -> impl IntoElement {
     div()
@@ -47,6 +48,7 @@ pub fn render_chat_page(
             chat_show_thinking,
             model_status,
             composer,
+            scroll_handle,
             cx,
         ))
 }
@@ -169,6 +171,7 @@ fn render_chat_main(
     chat_show_thinking: bool,
     model_status: &str,
     composer: Entity<crate::chat_composer::ChatComposer>,
+    scroll_handle: &ScrollHandle,
     cx: &mut Context<crate::AppView>,
 ) -> impl IntoElement {
     let messages: &[ChatMsg] = store
@@ -269,6 +272,7 @@ fn render_chat_main(
                 .min_h(px(0.))
                 .min_w(px(0.))
                 .overflow_y_scroll()
+                .track_scroll(scroll_handle)
                 .child(
                     div()
                         .max_w(px(720.))
