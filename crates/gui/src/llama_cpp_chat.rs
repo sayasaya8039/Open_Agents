@@ -1,8 +1,9 @@
 //! ローカル GGUF を `llama-server` 経由で叩く最小ランタイム。
 
+use std::ffi::OsString;
+use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::net::TcpListener;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -18,7 +19,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_LOG_BYTES: usize = 32 * 1024;
 const DEFAULT_CONTEXT_LENGTH: i32 = 4096;
 const MIN_CONTEXT_LENGTH: i32 = 512;
+const GEMMA4_MIN_CONTEXT_LENGTH: i32 = 8192;
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
+const GGUF_MAGIC: [u8; 4] = *b"GGUF";
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -114,7 +117,7 @@ where
 }
 
 pub fn server_ready_for(model_path: &Path, context_length: i32) -> bool {
-    let normalized_ctx = normalize_context_length(context_length);
+    let normalized_ctx = effective_context_length(model_path, context_length);
     let normalized_path = normalize_model_path(model_path);
     let Ok(mut cache) = server_cache().lock() else {
         return false;
@@ -129,7 +132,7 @@ pub fn server_ready_for(model_path: &Path, context_length: i32) -> bool {
 }
 
 fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, String), String> {
-    let normalized_ctx = normalize_context_length(context_length);
+    let normalized_ctx = effective_context_length(model_path, context_length);
     let normalized_path = normalize_model_path(model_path);
     let mut cache = server_cache()
         .lock()
@@ -307,7 +310,11 @@ fn extract_stream_chunk(value: &Value) -> StreamChunk<'_> {
 }
 
 fn chat_completions_url(base_url: &str) -> String {
-    format!("{}{}", base_url.trim_end_matches('/'), CHAT_COMPLETIONS_PATH)
+    format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        CHAT_COMPLETIONS_PATH
+    )
 }
 
 fn log_chat_template_mode(model_path: &Path, streaming: bool, max_tokens: i32) {
@@ -477,11 +484,29 @@ fn pick_free_port() -> Result<u16, String> {
         .map(|addr| addr.port())
 }
 
-fn normalize_context_length(context_length: i32) -> i32 {
-    if context_length > 0 {
+fn effective_context_length(model_path: &Path, context_length: i32) -> i32 {
+    let normalized = if context_length > 0 {
         context_length.max(MIN_CONTEXT_LENGTH)
     } else {
         DEFAULT_CONTEXT_LENGTH
+    };
+
+    if matches!(
+        read_gguf_architecture(model_path),
+        Ok(Some(ref arch)) if arch == "gemma4"
+    ) {
+        let adjusted = normalized.max(GEMMA4_MIN_CONTEXT_LENGTH);
+        if adjusted != normalized {
+            eprintln!(
+                "llama.cpp: gemma4 detected, raising ctx-size from {} to {} for {}",
+                normalized,
+                adjusted,
+                model_path.display()
+            );
+        }
+        adjusted
+    } else {
+        normalized
     }
 }
 
@@ -493,6 +518,101 @@ fn normalize_model_path(model_path: &Path) -> PathBuf {
     model_path
         .canonicalize()
         .unwrap_or_else(|_| model_path.to_path_buf())
+}
+
+fn read_gguf_architecture(path: &Path) -> Result<Option<String>, String> {
+    let file = fs::File::open(path)
+        .map_err(|e| format!("GGUF を開けませんでした ({}): {e}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut magic = [0_u8; 4];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|e| format!("GGUF magic の読み取りに失敗しました: {e}"))?;
+    if magic != GGUF_MAGIC {
+        return Ok(None);
+    }
+
+    let version = read_gguf_u32(&mut reader)?;
+    if !(2..=3).contains(&version) {
+        return Ok(None);
+    }
+
+    let _n_tensors = read_gguf_u64(&mut reader)?;
+    let n_kv = read_gguf_u64(&mut reader)?;
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut reader)?;
+        let value_type = read_gguf_u32(&mut reader)?;
+        if key == "general.architecture" {
+            if value_type != 8 {
+                return Ok(None);
+            }
+            return read_gguf_string(&mut reader).map(Some);
+        }
+        skip_gguf_value(&mut reader, value_type)?;
+    }
+
+    Ok(None)
+}
+
+fn read_gguf_u32<R: Read>(reader: &mut R) -> Result<u32, String> {
+    let mut buf = [0_u8; 4];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| format!("GGUF u32 の読み取りに失敗しました: {e}"))?;
+    Ok(u32::from_le_bytes(buf))
+}
+
+fn read_gguf_u64<R: Read>(reader: &mut R) -> Result<u64, String> {
+    let mut buf = [0_u8; 8];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| format!("GGUF u64 の読み取りに失敗しました: {e}"))?;
+    Ok(u64::from_le_bytes(buf))
+}
+
+fn read_gguf_string<R: Read>(reader: &mut R) -> Result<String, String> {
+    let len = read_gguf_u64(reader)?;
+    let len = usize::try_from(len).map_err(|_| "GGUF 文字列長が大きすぎます".to_string())?;
+    let mut buf = vec![0_u8; len];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| format!("GGUF 文字列の読み取りに失敗しました: {e}"))?;
+    String::from_utf8(buf).map_err(|e| format!("GGUF 文字列が UTF-8 ではありません: {e}"))
+}
+
+fn skip_gguf_value<R: Read>(reader: &mut R, value_type: u32) -> Result<(), String> {
+    match value_type {
+        0 | 1 | 7 => skip_gguf_bytes(reader, 1),
+        2 | 3 => skip_gguf_bytes(reader, 2),
+        4 | 5 | 6 => skip_gguf_bytes(reader, 4),
+        10 | 11 | 12 => skip_gguf_bytes(reader, 8),
+        8 => {
+            let len = read_gguf_u64(reader)?;
+            skip_gguf_bytes(reader, len)
+        }
+        9 => {
+            let elem_type = read_gguf_u32(reader)?;
+            let count = read_gguf_u64(reader)?;
+            for _ in 0..count {
+                skip_gguf_value(reader, elem_type)?;
+            }
+            Ok(())
+        }
+        _ => Err(format!("未対応の GGUF 値型です: {value_type}")),
+    }
+}
+
+fn skip_gguf_bytes<R: Read>(reader: &mut R, mut len: u64) -> Result<(), String> {
+    let mut scratch = [0_u8; 4096];
+    while len > 0 {
+        let chunk = usize::try_from(len.min(scratch.len() as u64))
+            .map_err(|_| "GGUF スキップ長の変換に失敗しました".to_string())?;
+        reader
+            .read_exact(&mut scratch[..chunk])
+            .map_err(|e| format!("GGUF のスキップに失敗しました: {e}"))?;
+        len -= chunk as u64;
+    }
+    Ok(())
 }
 
 fn available_thread_count() -> usize {
@@ -546,9 +666,55 @@ mod tests {
 
     #[test]
     fn context_length_is_normalized_for_cache_key() {
-        assert_eq!(normalize_context_length(0), DEFAULT_CONTEXT_LENGTH);
-        assert_eq!(normalize_context_length(128), MIN_CONTEXT_LENGTH);
-        assert_eq!(normalize_context_length(8192), 8192);
+        let path = Path::new("C:/models/qwen.gguf");
+        assert_eq!(effective_context_length(path, 0), DEFAULT_CONTEXT_LENGTH);
+        assert_eq!(effective_context_length(path, 128), MIN_CONTEXT_LENGTH);
+        assert_eq!(effective_context_length(path, 8192), 8192);
+    }
+
+    fn temp_gguf_path(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("open_agents_llama_cpp_{name}_{stamp}.gguf"))
+    }
+
+    fn write_minimal_gguf(path: &Path, architecture: &str) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(architecture.as_bytes());
+
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn gemma4_context_length_has_higher_floor() {
+        let path = temp_gguf_path("gemma4_ctx");
+        write_minimal_gguf(&path, "gemma4");
+        assert_eq!(
+            effective_context_length(&path, 4096),
+            GEMMA4_MIN_CONTEXT_LENGTH
+        );
+        assert_eq!(effective_context_length(&path, 16384), 16384);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn non_gemma4_context_length_keeps_existing_value() {
+        let path = temp_gguf_path("llama_ctx");
+        write_minimal_gguf(&path, "llama");
+        assert_eq!(effective_context_length(&path, 4096), 4096);
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -589,8 +755,7 @@ mod tests {
     #[test]
     fn extracts_stream_reasoning_chunk_from_delta_shape() {
         let value: Value =
-            serde_json::from_str(r#"{"choices":[{"delta":{"reasoning_content":"考"}}]}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"choices":[{"delta":{"reasoning_content":"考"}}]}"#).unwrap();
         let chunk = extract_stream_chunk(&value);
         assert_eq!(chunk.content, None);
         assert_eq!(chunk.thinking, Some("考"));
@@ -625,13 +790,9 @@ mod tests {
             "data: [DONE]\n"
         );
         let mut chunks = Vec::new();
-        let response = read_streaming_response(
-            body.as_bytes(),
-            &mut |_| {},
-            &mut |delta| {
-                chunks.push(delta.to_string());
-            },
-        )
+        let response = read_streaming_response(body.as_bytes(), &mut |_| {}, &mut |delta| {
+            chunks.push(delta.to_string());
+        })
         .unwrap();
         assert_eq!(chunks, vec!["考".to_string(), "える".to_string()]);
         assert_eq!(response.content, "");
