@@ -23,7 +23,8 @@ pub enum ChatBackend {
         base_url: String,
         model: String,
     },
-    /// llama.cpp サーバ経由でローカル GGUF を実行
+    /// llama.cpp サーバ経由でローカル GGUF を実行。
+    /// GUI では raw `/completion` を使わず、常に OpenAI 互換 `/v1/chat/completions` を使う。
     LlamaCppLocal { path: PathBuf },
 }
 

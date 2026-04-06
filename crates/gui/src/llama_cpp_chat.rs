@@ -17,6 +17,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_LOG_BYTES: usize = 32 * 1024;
 const DEFAULT_CONTEXT_LENGTH: i32 = 4096;
 const MIN_CONTEXT_LENGTH: i32 = 512;
+const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -43,7 +44,8 @@ pub fn complete_llama_cpp_chat_blocking(
 ) -> Result<String, String> {
     let (base_url, model_id) = ensure_server(model_path, context_length)?;
     let max_tokens = normalize_max_tokens(max_tokens);
-    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let url = chat_completions_url(&base_url);
+    log_chat_template_mode(model_path, false, max_tokens);
     let body = json!({
         "model": model_id,
         "messages": messages_to_openai_json(messages),
@@ -78,7 +80,8 @@ where
 {
     let (base_url, model_id) = ensure_server(model_path, context_length)?;
     let max_tokens = normalize_max_tokens(max_tokens);
-    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let url = chat_completions_url(&base_url);
+    log_chat_template_mode(model_path, true, max_tokens);
     let body = json!({
         "model": model_id,
         "messages": messages_to_openai_json(messages),
@@ -251,6 +254,19 @@ fn extract_stream_chunk_text(value: &Value) -> Option<&str> {
                 .pointer("/choices/0/message/content")
                 .and_then(|x| x.as_str())
         })
+}
+
+fn chat_completions_url(base_url: &str) -> String {
+    format!("{}{}", base_url.trim_end_matches('/'), CHAT_COMPLETIONS_PATH)
+}
+
+fn log_chat_template_mode(model_path: &Path, streaming: bool, max_tokens: i32) {
+    eprintln!(
+        "llama.cpp: local GGUF request uses {CHAT_COMPLETIONS_PATH} only (GUI never uses raw /completion); GGUF chat_template metadata is expected to format messages. model={} stream={} max_tokens={}",
+        model_path.display(),
+        streaming,
+        max_tokens
+    );
 }
 
 fn spawn_llama_server(
@@ -487,6 +503,14 @@ mod tests {
         assert_eq!(
             normalize_max_tokens(2048),
             model_prefs::LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP
+        );
+    }
+
+    #[test]
+    fn local_runtime_targets_chat_completions_endpoint() {
+        assert_eq!(
+            chat_completions_url("http://127.0.0.1:8080/"),
+            "http://127.0.0.1:8080/v1/chat/completions"
         );
     }
 
