@@ -264,13 +264,12 @@ fn render_chat_main(
                         .child(model_status_text),
                 ),
         )
-        // ── メッセージエリア ─���
+        // ── メッセージエリア ──
         .child(
             div()
                 .id("chat-messages-scroll")
                 .flex_1()
                 .min_h(px(0.))
-                .min_w(px(0.))
                 .overflow_y_scroll()
                 .track_scroll(scroll_handle)
                 .child(
@@ -279,7 +278,7 @@ fn render_chat_main(
                         .mx_auto()
                         .px(px(24.))
                         .pt(px(24.))
-                        .pb(px(96.))
+                        .pb(px(200.))
                         .flex()
                         .flex_col()
                         // 提案チップ
