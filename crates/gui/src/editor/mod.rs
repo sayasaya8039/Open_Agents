@@ -1000,6 +1000,11 @@ impl EditorView {
             name
         }
     }
+
+    /// エディタバッファのテキスト内容を返す
+    pub fn text_content(&self) -> String {
+        self.buffer.lines().join("\n")
+    }
 }
 
 // ============================================================

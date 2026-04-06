@@ -245,6 +245,7 @@ fn render_chat_main(
                                     MouseButton::Left,
                                     cx.listener(|this, _: &MouseDownEvent, _, cx| {
                                         this.chat_show_thinking = !this.chat_show_thinking;
+                                        this.chat_scroll.scroll_to_bottom();
                                         cx.notify();
                                     }),
                                 )

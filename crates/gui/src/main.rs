@@ -624,57 +624,107 @@ impl AppView {
         cx.notify();
     }
 
-    /// Chat のシステムメッセージを構築（作業ディレクトリ + 選択中ファイル情報）
+    /// Chat のシステムメッセージを構築（作業ディレクトリ + ファイルツリー + 選択中ファイル内容）
     fn build_chat_system_message(&self, work_dir: &Path, cx: &mut Context<Self>) -> String {
+        const MAX_FILE_BYTES: usize = 8 * 1024;
         let mut parts = Vec::new();
 
         parts.push(format!(
-            "作業ディレクトリ: {}",
+            "あなたはAIコーディングアシスタントです。ユーザーのプロジェクトファイルにアクセスできます。\n\
+             ワークスペース: {}\n\
+             作業ディレクトリ: {}",
+            self.workspace_root.display(),
             work_dir.display()
         ));
+
+        // ワークスペースのファイルツリー（深さ2、最大50件）
+        let tree_str = self.build_file_tree_summary();
+        if !tree_str.is_empty() {
+            parts.push(format!("プロジェクト構造:\n{tree_str}"));
+        }
 
         // エクスプローラで選択中のファイル/フォルダ
         if let Some(segs) = &self.explorer_selection {
             let abs = absolute_path(&self.workspace_root, segs);
             let rel = segs.join("/");
             if abs.is_file() {
-                parts.push(format!("選択中のファイル: {rel} ({})", abs.display()));
-                // ファイル内容を読み込み（最大8KB）
-                const MAX_FILE_BYTES: usize = 8 * 1024;
+                parts.push(format!("選択中のファイル: {rel}"));
                 if let Ok(content) = fs::read_to_string(&abs) {
                     let truncated = if content.len() > MAX_FILE_BYTES {
                         format!("{}…（以下省略、全{}バイト）", &content[..MAX_FILE_BYTES], content.len())
                     } else {
                         content
                     };
-                    parts.push(format!("--- {rel} の内容 ---\n{truncated}\n--- ここまで ---"));
+                    parts.push(format!("--- {rel} ---\n{truncated}\n--- ここまで ---"));
                 }
             } else if abs.is_dir() {
-                parts.push(format!("選択中のフォルダ: {rel} ({})", abs.display()));
-                // フォルダ内のファイル一覧（最大30件）
+                parts.push(format!("選択中のフォルダ: {rel}"));
                 if let Ok(entries) = fs::read_dir(&abs) {
                     let listing: Vec<String> = entries
                         .filter_map(|e| e.ok())
                         .take(30)
                         .map(|e| {
                             let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() { format!("{name}/") } else { name }
+                            if e.path().is_dir() { format!("  {name}/") } else { format!("  {name}") }
                         })
                         .collect();
                     if !listing.is_empty() {
-                        parts.push(format!("フォルダ内容:\n{}", listing.join("\n")));
+                        parts.push(format!("{rel}/ の内容:\n{}", listing.join("\n")));
                     }
                 }
             }
         }
 
-        // エディタで開いているファイル
-        let editor_file = self.editor_view.read(cx).tab_title();
+        // エディタで開いているファイルの内容
+        let editor = self.editor_view.read(cx);
+        let editor_file = editor.tab_title();
         if !editor_file.is_empty() && editor_file != "無題" {
             parts.push(format!("エディタで開いているファイル: {editor_file}"));
+            let editor_content = editor.text_content();
+            if !editor_content.is_empty() {
+                let truncated = if editor_content.len() > MAX_FILE_BYTES {
+                    format!("{}…（以下省略）", &editor_content[..MAX_FILE_BYTES])
+                } else {
+                    editor_content
+                };
+                parts.push(format!("--- {editor_file} ---\n{truncated}\n--- ここまで ---"));
+            }
         }
 
         parts.join("\n\n")
+    }
+
+    /// ファイルツリーの概要（深さ2、最大50エントリ）
+    fn build_file_tree_summary(&self) -> String {
+        fn walk(dir: &Path, prefix: &str, depth: usize, lines: &mut Vec<String>, max: usize) {
+            if depth > 2 || lines.len() >= max {
+                return;
+            }
+            let Ok(entries) = fs::read_dir(dir) else { return };
+            let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries {
+                if lines.len() >= max {
+                    lines.push(format!("{prefix}…"));
+                    return;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                // .git, target, node_modules 等をスキップ
+                if matches!(name.as_str(), ".git" | "target" | "node_modules" | ".zig-cache" | "__pycache__") {
+                    continue;
+                }
+                let path = entry.path();
+                if path.is_dir() {
+                    lines.push(format!("{prefix}{name}/"));
+                    walk(&path, &format!("{prefix}  "), depth + 1, lines, max);
+                } else {
+                    lines.push(format!("{prefix}{name}"));
+                }
+            }
+        }
+        let mut lines = Vec::new();
+        walk(&self.workspace_root, "", 0, &mut lines, 50);
+        lines.join("\n")
     }
 
     /// Chat: Enter / 送信ボタンから呼ばれ、外部 API または Ollama で応答を取得する。
