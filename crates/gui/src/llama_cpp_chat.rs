@@ -368,7 +368,14 @@ fn llama_server_args(
 ) -> Vec<OsString> {
     let hw = launch_hardware_params(hardware);
     let threads = effective_cpu_threads(&hw);
-    let mut args = vec![
+    // GUI の GPU ON/OFF・レイヤー数を常に CLI で固定し、LLAMA_ARG_N_GPU_LAYERS 等の環境変数に負けないようにする。
+    let n_gpu_layers = if hw.gpu_acceleration {
+        hw.gpu_layers.max(0)
+    } else {
+        0
+    };
+
+    let args = vec![
         OsString::from("--model"),
         model_path.as_os_str().to_os_string(),
         OsString::from("--host"),
@@ -381,12 +388,10 @@ fn llama_server_args(
         OsString::from(threads.to_string()),
         OsString::from("--batch-size"),
         OsString::from(hw.batch_size.to_string()),
+        OsString::from("--n-gpu-layers"),
+        OsString::from(n_gpu_layers.to_string()),
         OsString::from("--jinja"),
     ];
-    if hw.gpu_acceleration && hw.gpu_layers > 0 {
-        args.push(OsString::from("--n-gpu-layers"));
-        args.push(OsString::from(hw.gpu_layers.to_string()));
-    }
     args
 }
 
@@ -797,6 +802,23 @@ mod tests {
         let args = llama_server_args(Path::new("C:/models/gemma-4.gguf"), 8080, 8192, &hw);
         assert!(args.iter().any(|arg| arg == "--jinja"));
         assert!(args.iter().any(|arg| arg == "--batch-size"));
+        assert_eq!(arg_after(&args, "--n-gpu-layers"), Some(hw.gpu_layers.to_string()));
+    }
+
+    #[test]
+    fn llama_server_args_gpu_off_forces_zero_gpu_layers() {
+        let mut hw = model_prefs::HardwareParams::default();
+        hw.gpu_acceleration = false;
+        hw.gpu_layers = 99;
+        let args = llama_server_args(Path::new("C:/models/m.gguf"), 8080, 4096, &hw);
+        assert_eq!(arg_after(&args, "--n-gpu-layers"), Some("0".to_string()));
+    }
+
+    fn arg_after(args: &[OsString], flag: &str) -> Option<String> {
+        args.windows(2)
+            .find(|w| w[0] == flag)
+            .and_then(|w| w[1].to_str())
+            .map(|s| s.to_string())
     }
 
     #[test]

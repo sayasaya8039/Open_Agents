@@ -2905,7 +2905,7 @@ impl AppView {
             .gap(px(16.))
             .child(self.settings_labeled_block(
                 "GPU アクセラレーション",
-                "利用可能な場合、GPUを使用",
+                "オフのとき llama-server へ --n-gpu-layers 0（CPU のみ）。GPU ビルドを同梱したときオンで下記レイヤー数が有効になります。",
             ))
             .child(
                 div()
@@ -3381,7 +3381,9 @@ impl AppView {
                                                         cx,
                                                         HardwareParamAdjustKind::GpuLayers,
                                                         "GPU レイヤー数",
-                                                        Some("GPUにオフロードするレイヤー数"),
+                                                        Some(
+                                                            "オン時に --n-gpu-layers へそのまま渡します（Vulkan / CUDA / DirectML 等の llama-server.exe 同梱時）",
+                                                        ),
                                                     ))
                                                     .child(self.settings_hardware_stepper_row(
                                                         cx,

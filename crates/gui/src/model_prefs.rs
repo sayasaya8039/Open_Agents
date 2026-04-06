@@ -62,13 +62,13 @@ impl ModelParams {
     }
 }
 
-/// ローカル推論のハードウェア関連（llama.cpp 系の CLI フラグに相当する目安）
+/// ローカル推論のハードウェア関連（内蔵 llama-server 起動時の CLI にそのまま反映）
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct HardwareParams {
-    /// `-ngl` 利用の ON/OFF（レイヤー 0 のときは実質 CPU のイメージでも可）
+    /// オフのとき常に `--n-gpu-layers 0`。オンかつ GPU 対応同梱時は `gpu_layers` が渡る。
     pub gpu_acceleration: bool,
-    /// GPU にオフロードするレイヤー数（`-ngl`）
+    /// `--n-gpu-layers`（Vulkan / CUDA / DirectML 等の llama-server 同梱時に有効）
     pub gpu_layers: i32,
     /// CPU スレッド数（`--threads`）
     pub n_threads: i32,
