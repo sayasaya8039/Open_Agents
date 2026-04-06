@@ -273,6 +273,12 @@ struct ChatMsg {
     thinking: Option<String>,
 }
 
+enum ChatStreamEvent {
+    Delta(String),
+    Complete(String),
+    Error(String),
+}
+
 /// 設定画面のモデルパラメータ行（± で調整、`model_prefs` に保存）
 #[derive(Clone, Copy)]
 enum ModelParamAdjustKind {
@@ -585,40 +591,111 @@ impl AppView {
         let temperature = self.model_params.temperature;
         let max_tokens = self.model_params.max_output_tokens;
         let context_length = self.model_params.context_length;
+        let streaming_enabled = self.ai_prefs.streaming_responses;
 
-        cx.spawn(async move |this, cx| {
-            let result: Result<String, String> = smol::unblock(move || {
-                let backend = chat_client::resolve_chat_backend(
-                    &api_keys,
-                    &chat_prefs,
-                    &local_model_paths,
-                )?;
-                chat_client::complete_chat_blocking(
-                    &backend,
-                    &api_messages,
-                    temperature,
-                    max_tokens,
-                    context_length,
-                )
-            })
-            .await;
-
-            let _ = cx.update(|app| {
-                let _ = this.update(app, |this: &mut AppView, cx| {
-                    this.chat_pending = false;
-                    if let Some(last) = this.chat_messages.last_mut() {
-                        if last.role == "assistant" {
-                            last.content = match result {
-                                Ok(reply) => reply,
-                                Err(e) => format!("エラー: {e}"),
-                            };
+        match chat_client::resolve_chat_backend(&api_keys, &chat_prefs, &local_model_paths) {
+            Ok(chat_client::ChatBackend::LlamaCppLocal { path }) if streaming_enabled => {
+                let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
+                std::thread::spawn(move || {
+                    let result = llama_cpp_chat::stream_llama_cpp_chat_blocking(
+                        &path,
+                        &api_messages,
+                        temperature,
+                        max_tokens,
+                        context_length,
+                        |delta| {
+                            let _ = tx.send_blocking(ChatStreamEvent::Delta(delta.to_string()));
+                        },
+                    );
+                    match result {
+                        Ok(reply) => {
+                            let _ = tx.send_blocking(ChatStreamEvent::Complete(reply));
+                        }
+                        Err(err) => {
+                            let _ = tx.send_blocking(ChatStreamEvent::Error(err));
                         }
                     }
-                    cx.notify();
                 });
-            });
-        })
-        .detach();
+
+                cx.spawn(async move |this, cx| {
+                    let mut saw_delta = false;
+                    while let Ok(event) = rx.recv().await {
+                        let done = matches!(event, ChatStreamEvent::Complete(_) | ChatStreamEvent::Error(_));
+                        let _ = cx.update(|app| {
+                            let _ = this.update(app, |this: &mut AppView, cx| {
+                                if let Some(last) = this.chat_messages.last_mut() {
+                                    if last.role == "assistant" {
+                                        match event {
+                                            ChatStreamEvent::Delta(delta) => {
+                                                if !saw_delta {
+                                                    last.content.clear();
+                                                    saw_delta = true;
+                                                }
+                                                last.content.push_str(&delta);
+                                            }
+                                            ChatStreamEvent::Complete(reply) => {
+                                                this.chat_pending = false;
+                                                if !saw_delta {
+                                                    last.content = reply;
+                                                }
+                                            }
+                                            ChatStreamEvent::Error(err) => {
+                                                this.chat_pending = false;
+                                                last.content = format!("エラー: {err}");
+                                            }
+                                        }
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        });
+                        if done {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
+            Ok(backend) => {
+                cx.spawn(async move |this, cx| {
+                    let result: Result<String, String> = smol::unblock(move || {
+                        chat_client::complete_chat_blocking(
+                            &backend,
+                            &api_messages,
+                            temperature,
+                            max_tokens,
+                            context_length,
+                        )
+                    })
+                    .await;
+
+                    let _ = cx.update(|app| {
+                        let _ = this.update(app, |this: &mut AppView, cx| {
+                            this.chat_pending = false;
+                            if let Some(last) = this.chat_messages.last_mut() {
+                                if last.role == "assistant" {
+                                    last.content = match result {
+                                        Ok(reply) => reply,
+                                        Err(e) => format!("エラー: {e}"),
+                                    };
+                                }
+                            }
+                            cx.notify();
+                        });
+                    });
+                })
+                .detach();
+            }
+            Err(err) => {
+                self.chat_pending = false;
+                if let Some(last) = self.chat_messages.last_mut() {
+                    if last.role == "assistant" {
+                        last.content = format!("エラー: {err}");
+                    }
+                }
+                cx.notify();
+            }
+        }
     }
 }
 

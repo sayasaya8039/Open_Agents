@@ -64,6 +64,42 @@ pub fn complete_llama_cpp_chat_blocking(
     extract_openai_message_content(&text)
 }
 
+pub fn stream_llama_cpp_chat_blocking<F>(
+    model_path: &Path,
+    messages: &[(String, String)],
+    temperature: f32,
+    max_tokens: i32,
+    context_length: i32,
+    mut on_delta: F,
+) -> Result<String, String>
+where
+    F: FnMut(&str),
+{
+    let (base_url, model_id) = ensure_server(model_path, context_length)?;
+    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let body = json!({
+        "model": model_id,
+        "messages": messages_to_openai_json(messages),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": true,
+    });
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("Accept", "text/event-stream")
+        .send_json(body)
+        .map_err(|e| format!("llama.cpp ストリーミングリクエスト失敗: {e}"))?;
+    let status = resp.status();
+    if status >= 400 {
+        let text = resp
+            .into_string()
+            .map_err(|e| format!("llama.cpp エラー本文の読み取りに失敗しました: {e}"))?;
+        return Err(format!("llama.cpp HTTP {status}: {text}"));
+    }
+    let reader = resp.into_reader();
+    read_streaming_response(reader, &mut on_delta)
+}
+
 pub fn server_ready_for(model_path: &Path, context_length: i32) -> bool {
     let normalized_ctx = normalize_context_length(context_length);
     let normalized_path = normalize_model_path(model_path);
@@ -151,6 +187,60 @@ fn extract_openai_message_content(text: &str) -> Result<String, String> {
         .map(|s| s.to_string())
         .or_else(|| v.get("content").and_then(|x| x.as_str()).map(|s| s.to_string()))
         .ok_or_else(|| format!("choices[0].message.content がありません: {text}"))
+}
+
+fn read_streaming_response<R, F>(reader: R, on_delta: &mut F) -> Result<String, String>
+where
+    R: Read,
+    F: FnMut(&str),
+{
+    let mut out = String::new();
+    let mut saw_done = false;
+    let mut saw_any_chunk = false;
+    let mut buf = BufReader::new(reader);
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let read = buf
+            .read_line(&mut line)
+            .map_err(|e| format!("llama.cpp ストリームの読み取りに失敗しました: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(payload) = trimmed.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = payload.trim();
+        if payload == "[DONE]" {
+            saw_done = true;
+            break;
+        }
+        let value: Value = serde_json::from_str(payload)
+            .map_err(|e| format!("llama.cpp ストリーム JSON 解析に失敗しました: {e} ({payload})"))?;
+        if let Some(delta) = extract_stream_chunk_text(&value) {
+            saw_any_chunk = true;
+            out.push_str(delta);
+            on_delta(delta);
+        }
+    }
+
+    if !saw_done && !saw_any_chunk {
+        return Err("llama.cpp ストリームから本文を受け取れませんでした".to_string());
+    }
+
+    Ok(out)
+}
+
+fn extract_stream_chunk_text(value: &Value) -> Option<&str> {
+    value
+        .pointer("/choices/0/delta/content")
+        .and_then(|x| x.as_str())
+        .or_else(|| value.pointer("/choices/0/message/content").and_then(|x| x.as_str()))
 }
 
 fn spawn_llama_server(
@@ -361,5 +451,30 @@ mod tests {
         assert_eq!(normalize_context_length(0), DEFAULT_CONTEXT_LENGTH);
         assert_eq!(normalize_context_length(128), MIN_CONTEXT_LENGTH);
         assert_eq!(normalize_context_length(8192), 8192);
+    }
+
+    #[test]
+    fn extracts_stream_chunk_text_from_delta_shape() {
+        let value: Value = serde_json::from_str(
+            r#"{"choices":[{"delta":{"content":"こん"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_stream_chunk_text(&value), Some("こん"));
+    }
+
+    #[test]
+    fn reads_streaming_sse_payloads() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"こん\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"にちは\"}}]}\n\n",
+            "data: [DONE]\n"
+        );
+        let mut chunks = Vec::new();
+        let text = read_streaming_response(body.as_bytes(), &mut |delta| {
+            chunks.push(delta.to_string());
+        })
+        .unwrap();
+        assert_eq!(chunks, vec!["こん".to_string(), "にちは".to_string()]);
+        assert_eq!(text, "こんにちは");
     }
 }
