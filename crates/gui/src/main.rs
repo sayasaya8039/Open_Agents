@@ -90,9 +90,21 @@ fn human_readable_size(bytes: u64) -> String {
     }
 }
 
+fn chat_history_for_api(messages: &[ChatMsg]) -> Vec<(String, String)> {
+    let first_user_index = messages
+        .iter()
+        .position(|message| message.role == "user")
+        .unwrap_or(messages.len());
+
+    messages[first_user_index..]
+        .iter()
+        .map(|message| (message.role.clone(), message.content.clone()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ModelFormat, human_readable_size};
+    use super::{ChatMsg, ModelFormat, chat_history_for_api, human_readable_size};
     use std::path::Path;
 
     #[test]
@@ -118,6 +130,32 @@ mod tests {
         assert_eq!(human_readable_size(999), "999 B");
         assert_eq!(human_readable_size(1024), "1.0 KB");
         assert_eq!(human_readable_size(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn api_history_skips_leading_bootstrap_assistant_messages() {
+        let messages = vec![
+            ChatMsg {
+                role: "assistant".into(),
+                content: "こんにちは！Open Agents AIコーディングアシスタントです。".into(),
+                thinking: None,
+            },
+            ChatMsg {
+                role: "user".into(),
+                content: "こんにちは".into(),
+                thinking: None,
+            },
+            ChatMsg {
+                role: "assistant".into(),
+                content: "こんにちは！".into(),
+                thinking: None,
+            },
+        ];
+
+        let api_history = chat_history_for_api(&messages);
+        assert_eq!(api_history.len(), 2);
+        assert_eq!(api_history[0].0, "user");
+        assert_eq!(api_history[0].1, "こんにちは");
     }
 
     #[cfg(feature = "test-support")]
@@ -539,11 +577,7 @@ impl AppView {
             work_dir.display()
         );
         let api_messages: Vec<(String, String)> = std::iter::once(("system".into(), work_dir_msg))
-            .chain(
-                self.chat_messages
-                    .iter()
-                    .map(|m| (m.role.clone(), m.content.clone())),
-            )
+            .chain(chat_history_for_api(&self.chat_messages).into_iter())
             .chain(std::iter::once(("user".into(), text.clone())))
             .collect();
 
