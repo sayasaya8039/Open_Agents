@@ -347,7 +347,9 @@ fn render_chat_main(
                                 .flex_col()
                                 .gap(px(24.))
                                 .children(visible.iter().map(|msg| render_message(msg, chat_show_thinking))),
-                        ),
+                        )
+                        // 入力バーに隠れないためのスペーサー
+                        .child(div().h(px(160.)).flex_shrink_0()),
                 ),
         )
         // ── 入力バー ──
