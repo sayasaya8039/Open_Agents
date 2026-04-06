@@ -3473,6 +3473,7 @@ fn main() {
                         llama_cpp_bundle_error,
                         llama_cpp_update_notice: None,
                     };
+                    llama_cpp_chat::cleanup_orphan_servers();
                     app.start_llama_cpp_update_check(cx);
                     app.prewarm_llama_server(cx);
                     app

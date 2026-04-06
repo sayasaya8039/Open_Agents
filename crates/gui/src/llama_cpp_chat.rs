@@ -35,6 +35,14 @@ struct CachedServer {
     child: Child,
 }
 
+impl Drop for CachedServer {
+    fn drop(&mut self) {
+        eprintln!("llama.cpp: サーバを終了します ({})", self.base_url);
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 pub struct LlamaCppChatResponse {
     pub content: String,
     pub thinking: Option<String>,
@@ -140,6 +148,16 @@ pub fn server_ready_for(
         return false;
     }
     server_is_alive(server).unwrap_or(false)
+}
+
+/// 孤立した llama-server プロセスを停止（アプリ起動時に呼ぶ）
+pub fn cleanup_orphan_servers() {
+    if let Ok(mut cache) = server_cache().lock() {
+        if let Some(server) = cache.as_mut() {
+            stop_server(server);
+        }
+        *cache = None;
+    }
 }
 
 /// サーバが起動済みでなければ起動する（プリウォーム用に公開）
