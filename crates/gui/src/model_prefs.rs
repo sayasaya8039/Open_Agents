@@ -20,8 +20,8 @@ pub struct ModelParams {
     pub context_length: i32,
 }
 
-pub const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 256;
-pub const LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP: i32 = 512;
+pub const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 4096;
+pub const LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP: i32 = 8192;
 
 pub fn effective_local_max_output_tokens(max_output_tokens: i32) -> i32 {
     if max_output_tokens <= 0 {
