@@ -114,7 +114,7 @@ impl Default for HardwareParams {
     fn default() -> Self {
         Self {
             gpu_acceleration: true,
-            gpu_layers: 32,
+            gpu_layers: 99,
             n_threads: 8,
             batch_size: 512,
             kv_cache_type: KvCacheType::Turbo3,
@@ -124,7 +124,7 @@ impl Default for HardwareParams {
 
 impl HardwareParams {
     pub fn clamp(&mut self) {
-        self.gpu_layers = self.gpu_layers.clamp(0, 80);
+        self.gpu_layers = self.gpu_layers.clamp(0, 999);
         self.n_threads = self.n_threads.clamp(1, 32);
         self.batch_size = self.batch_size.clamp(128, 2048);
     }

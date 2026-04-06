@@ -142,7 +142,8 @@ pub fn server_ready_for(
     server_is_alive(server).unwrap_or(false)
 }
 
-fn ensure_server(
+/// サーバが起動済みでなければ起動する（プリウォーム用に公開）
+pub fn ensure_server(
     model_path: &Path,
     context_length: i32,
     hardware: &model_prefs::HardwareParams,

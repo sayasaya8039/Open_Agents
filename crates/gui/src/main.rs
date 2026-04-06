@@ -597,17 +597,10 @@ impl AppView {
         eprintln!("llama.cpp: prewarm — バックグラウンドでサーバを事前起動します");
         cx.spawn(async move |_this, _cx| {
             let _ = smol::unblock(move || {
-                // ensure_server は内部でサーバ起動 + キャッシュに保存
-                // 次回 on_chat_submitted 時に warm reuse される
-                let dummy_msgs: Vec<(String, String)> = Vec::new();
-                let _ = llama_cpp_chat::complete_llama_cpp_chat_blocking(
-                    &path,
-                    &dummy_msgs,
-                    0.7,
-                    1, // max_tokens=1 で即終了（サーバ起動だけが目的）
-                    ctx,
-                    &hw,
-                );
+                match llama_cpp_chat::ensure_server(&path, ctx, &hw) {
+                    Ok((url, model)) => eprintln!("llama.cpp: prewarm 完了 — {url} ({model})"),
+                    Err(e) => eprintln!("llama.cpp: prewarm 失敗 — {e}"),
+                }
             })
             .await;
         })
