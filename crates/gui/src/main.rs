@@ -576,6 +576,44 @@ impl AppView {
         self.editor_view.read(cx).chat_working_directory(&self.workspace_root)
     }
 
+    // ── llama-server プリウォーム（Chat画面切替時にバックグラウンド起動）──
+
+    fn prewarm_llama_server(&mut self, cx: &mut Context<Self>) {
+        // LocalWeights でなければ不要
+        if self.chat_prefs.source != model_prefs::ChatInferenceSource::LocalWeights {
+            return;
+        }
+        let paths = self.settings_model_paths.clone();
+        let idx = self.chat_prefs.local_model_index.min(paths.len().saturating_sub(1));
+        let Some(path) = paths.get(idx).cloned() else {
+            return;
+        };
+        let ctx = self.model_params.context_length;
+        let hw = self.hardware_params.clone();
+        // 既にwarmならスキップ
+        if llama_cpp_chat::server_ready_for(&path, ctx, &hw) {
+            return;
+        }
+        eprintln!("llama.cpp: prewarm — バックグラウンドでサーバを事前起動します");
+        cx.spawn(async move |_this, _cx| {
+            let _ = smol::unblock(move || {
+                // ensure_server は内部でサーバ起動 + キャッシュに保存
+                // 次回 on_chat_submitted 時に warm reuse される
+                let dummy_msgs: Vec<(String, String)> = Vec::new();
+                let _ = llama_cpp_chat::complete_llama_cpp_chat_blocking(
+                    &path,
+                    &dummy_msgs,
+                    0.7,
+                    1, // max_tokens=1 で即終了（サーバ起動だけが目的）
+                    ctx,
+                    &hw,
+                );
+            })
+            .await;
+        })
+        .detach();
+    }
+
     // ── Chat セッション操作 ──
 
     fn chat_new_session(&mut self, cx: &mut Context<Self>) {
@@ -1605,6 +1643,7 @@ impl AppView {
                     this.page = target;
                     if target == Page::Chat {
                         this.chat_composer.read(cx).focus(window);
+                        this.prewarm_llama_server(cx);
                     }
                     cx.notify();
                 }),
@@ -3441,6 +3480,7 @@ fn main() {
                         llama_cpp_update_notice: None,
                     };
                     app.start_llama_cpp_update_check(cx);
+                    app.prewarm_llama_server(cx);
                     app
                 })
             },
