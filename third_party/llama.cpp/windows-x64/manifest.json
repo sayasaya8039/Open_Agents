@@ -1,8 +1,8 @@
 {
-  "llama_cpp_tag": "b8668-turboquant",
-  "llama_server_version": "b8668-turboquant (TheTom/llama-cpp-turboquant feature/turboquant-kv-cache)",
-  "platform": "windows-x64-cpu",
-  "asset_name": "llama-server-turboquant-win-cpu-x64.exe",
+  "llama_cpp_tag": "b8668-turboquant-cuda",
+  "llama_server_version": "b8668-turboquant-cuda (TheTom/llama-cpp-turboquant + CUDA 13.2 + MSVC 19.50)",
+  "platform": "windows-x64-cuda",
+  "asset_name": "llama-server-turboquant-win-cuda-x64.exe",
   "source_release_url": "https://github.com/TheTom/llama-cpp-turboquant/tree/feature/turboquant-kv-cache",
-  "llama_server_sha256": "B99533D11A661909ADBD11A5CEA1DAE758A39F8830679654CB2DAF544C8AA0F2"
+  "llama_server_sha256": "6D8307A6F92D790F8ADA05EDC5A6C2527D3769AD86A3DCA847FD1CCC13C8ACC9"
 }

@@ -34,6 +34,8 @@ pub fn render_chat_page(
         .flex_1()
         .flex()
         .min_h(px(0.))
+        .min_w(px(0.))
+        .overflow_hidden()
         .bg(hex(BG))
         // 左: セッションサイドバー
         .child(render_session_sidebar(store, cx))
@@ -188,6 +190,7 @@ fn render_chat_main(
         .flex_col()
         .min_h(px(0.))
         .min_w(px(0.))
+        .overflow_hidden()
         // ── ヘッダー ──
         .child(
             div()
@@ -264,13 +267,15 @@ fn render_chat_main(
                 .id("chat-messages-scroll")
                 .flex_1()
                 .min_h(px(0.))
+                .min_w(px(0.))
                 .overflow_y_scroll()
                 .child(
                     div()
                         .max_w(px(720.))
                         .mx_auto()
                         .px(px(24.))
-                        .py(px(24.))
+                        .pt(px(24.))
+                        .pb(px(48.))
                         .flex()
                         .flex_col()
                         // 提案チップ
