@@ -914,6 +914,7 @@ impl Render for AppView {
                             .flex_1()
                             .min_h(px(0.))
                             .min_w(px(0.))
+                            .overflow_hidden()
                             .flex()
                             .flex_col()
                             .child(content),

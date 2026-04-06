@@ -275,7 +275,7 @@ fn render_chat_main(
                         .mx_auto()
                         .px(px(24.))
                         .pt(px(24.))
-                        .pb(px(48.))
+                        .pb(px(96.))
                         .flex()
                         .flex_col()
                         // 提案チップ
@@ -359,6 +359,8 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
     let content: SharedString = msg.content.clone().into();
 
     let mut block = div()
+        .w_full()
+        .min_w(px(0.))
         .flex()
         .flex_col()
         .gap(px(10.))
@@ -409,6 +411,8 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
             block = block.child(
                 div()
                     .ml(px(30.))
+                    .w_full()
+                    .min_w(px(0.))
                     .flex()
                     .child(
                         div()
@@ -419,11 +423,13 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
                     .child(
                         div()
                             .flex_1()
+                            .min_w(px(0.))
                             .p(px(10.))
                             .bg(hex(PANEL_BG))
                             .rounded_r(px(4.))
                             .text_size(px(12.))
                             .text_color(hex(TEXT_SECONDARY))
+                            .whitespace_normal()
                             .child(thinking_text),
                     ),
             );
@@ -433,8 +439,11 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
     block.child(
         div()
             .ml(px(30.))
+            .w_full()
+            .min_w(px(0.))
             .text_size(px(13.))
             .text_color(hex(TEXT_PRIMARY))
+            .whitespace_normal()
             .child(content),
     )
 }
