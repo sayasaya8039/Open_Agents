@@ -12,7 +12,6 @@ mod model_prefs;
 mod project_explorer;
 mod workspace_prefs;
 
-use editor::EditorView;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::collections::HashSet;
@@ -270,7 +269,6 @@ mod tests {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
-    Editor,
     Chat,
     Settings,
     Terminal,
@@ -383,7 +381,6 @@ struct AppView {
     explorer_expanded: HashSet<Vec<String>>,
     /// フォーカス/選択行
     explorer_selection: Option<Vec<String>>,
-    editor_view: Entity<EditorView>,
     chat_composer: Entity<chat_composer::ChatComposer>,
     /// Chat メッセージスクロールハンドル
     chat_scroll: ScrollHandle,
@@ -438,11 +435,7 @@ impl AppView {
                 self.explorer_reload_from_disk();
                 self.explorer_expanded.insert(parent_rel.clone());
                 let segs = path_to_segments(&self.workspace_root, &path);
-                self.explorer_selection = Some(segs.clone());
-                let wr = self.workspace_root.clone();
-                self.editor_view.update(cx, |ed, ecx| {
-                    ed.open_project_path(&wr, &segs, ecx);
-                });
+                self.explorer_selection = Some(segs);
                 cx.notify();
             }
             Err(e) => eprintln!("explorer: 新規ファイル {e}"),
@@ -575,7 +568,7 @@ impl AppView {
             }
         }
 
-        self.editor_view.read(cx).chat_working_directory(&self.workspace_root)
+        root
     }
 
     // ── llama-server プリウォーム（Chat画面切替時にバックグラウンド起動）──
@@ -696,19 +689,20 @@ impl AppView {
             }
         }
 
-        // エディタで開いているファイルの内容
-        let editor = self.editor_view.read(cx);
-        let editor_file = editor.tab_title();
-        if !editor_file.is_empty() && editor_file != "無題" {
-            parts.push(format!("エディタで開いているファイル: {editor_file}"));
-            let editor_content = editor.text_content();
-            if !editor_content.is_empty() {
-                let truncated = if editor_content.len() > MAX_FILE_BYTES {
-                    format!("{}…（以下省略）", &editor_content[..MAX_FILE_BYTES])
-                } else {
-                    editor_content
-                };
-                parts.push(format!("--- {editor_file} ---\n{truncated}\n--- ここまで ---"));
+        // エクスプローラ未選択時、ワークスペースルートの主要ファイルを自動検出
+        if self.explorer_selection.is_none() {
+            for name in &["CLAUDE.md", "AGENTS.md", "SKILL.md", "README.md", "Cargo.toml", "package.json"] {
+                let path = self.workspace_root.join(name);
+                if path.is_file() {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        let truncated = if content.len() > MAX_FILE_BYTES {
+                            format!("{}…（以下省略）", &content[..MAX_FILE_BYTES])
+                        } else {
+                            content
+                        };
+                        parts.push(format!("--- {name} ---\n{truncated}\n--- ここまで ---"));
+                    }
+                }
             }
         }
 
@@ -997,7 +991,6 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: AnyElement = match self.page {
-            Page::Editor => self.render_editor(cx).into_any_element(),
             Page::Chat => {
                 let model_status = self.chat_model_status_line();
                 let is_local_weights = self.chat_prefs.source == model_prefs::ChatInferenceSource::LocalWeights;
@@ -1519,7 +1512,6 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(self.nav_item("Editor", Page::Editor, cx))
                     .child(self.nav_item("Chat", Page::Chat, cx))
                     .child(self.nav_item("Settings", Page::Settings, cx)),
             )
@@ -1682,14 +1674,8 @@ impl AppView {
                                                         this.explorer_expanded.insert(path.clone());
                                                     }
                                                 } else {
-                                                    // Chat 等のページだとエディタが描画されないため必ず Editor へ
-                                                    this.page = Page::Editor;
-                                                    let wr = this.workspace_root.clone();
-                                                    let segs = path.clone();
-                                                    this.editor_view.update(cx, |ed, ecx| {
-                                                        ed.open_project_path(&wr, &segs, ecx);
-                                                    });
-                                                    this.editor_view.read(cx).focus_editor(window);
+                                                    // ファイル選択のみ（Chat コンテキストに自動注入される）
+                                                    let _ = window;
                                                 }
                                                 cx.notify();
                                             },
@@ -1743,7 +1729,6 @@ impl AppView {
         };
 
         let icon = match page {
-            Page::Editor => "💻",
             Page::Chat => "💬",
             Page::Settings => "⚙",
             Page::Terminal => "▶",
@@ -1774,111 +1759,6 @@ impl AppView {
             )
             .child(icon)
             .child(label.to_string())
-    }
-
-    // ============================================================
-    // Editor View — EditorView Entity を組み込む
-    // ============================================================
-
-    fn render_editor(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab_title = self.editor_view.read(cx).tab_title();
-
-        div()
-            .flex_1()
-            .min_h(px(0.))
-            .flex()
-            .flex_col()
-            .bg(hex(BG))
-            // タブヘッダー
-            .child(
-                div()
-                    .h(px(48.))
-                    .bg(hex(PANEL_BG))
-                    .border_b_1()
-                    .border_color(hex(BORDER))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(16.))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .px(px(12.))
-                                    .py(px(6.))
-                                    .bg(hex(BG))
-                                    .border_1()
-                                    .border_color(hex(BORDER))
-                                    .rounded_t(px(6.))
-                                    .text_size(px(12.))
-                                    .text_color(hex(TEXT_PRIMARY))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(tab_title)
-                                    .child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .text_color(hex(TEXT_MUTED))
-                                            .child("×"),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .p(px(6.))
-                                    .rounded(px(4.))
-                                    .text_size(px(14.))
-                                    .text_color(hex(TEXT_SECONDARY))
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                            let wr = this.workspace_root.clone();
-                                            this.editor_view.update(cx, |ed, ecx| {
-                                                ed.perform_save(ecx, Some(wr));
-                                            });
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child("💾"),
-                            ),
-                    ),
-            )
-            // エディタ本体
-            .child(self.editor_view.clone())
-            // ステータスバー
-            .child(
-                div()
-                    .h(px(32.))
-                    .bg(hex(STATUSBAR_BG))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(16.))
-                    .text_size(px(11.))
-                    .text_color(hex(0xFFFFFF))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(16.))
-                            .child("UTF-8")
-                            .child("LF"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(16.))
-                            .child("Spaces: 4"),
-                    ),
-            )
     }
 
     // ============================================================
@@ -2468,11 +2348,8 @@ impl AppView {
             )
     }
 
-    fn sync_editor_appearance(&self, cx: &mut Context<Self>) {
-        let ap = self.appearance_prefs.clone();
-        self.editor_view.update(cx, |ed, ecx| {
-            ed.apply_appearance(&ap, ecx);
-        });
+    fn sync_editor_appearance(&self, _cx: &mut Context<Self>) {
+        // Editor は削除済み — 外観同期は不要
     }
 
     fn cycle_appearance_theme(&mut self, cx: &mut Context<Self>) {
@@ -3562,8 +3439,6 @@ fn main() {
                         };
                     let local_llm = model_prefs::load_local_llm_prefs();
                     let api_keys = api_key_prefs::load_api_keys();
-                    let appearance = local_llm.appearance.clone();
-                    let editor_view = cx.new(|ecx| EditorView::new(ecx, &appearance));
                     let chat_composer = cx.new(|ecx| {
                         chat_composer::ChatComposer::new(ecx, "メッセージを入力…")
                     });
@@ -3581,7 +3456,7 @@ fn main() {
                     )
                     .detach();
                     let mut app = AppView {
-                        page: Page::Editor,
+                        page: Page::Chat,
                         session_store: chat_session::load_sessions(),
                         chat_show_thinking: true,
                         settings_model_paths: local_llm.model_paths,
@@ -3596,7 +3471,6 @@ fn main() {
                         file_tree,
                         explorer_expanded,
                         explorer_selection: None,
-                        editor_view,
                         chat_composer,
                         chat_scroll: ScrollHandle::new(),
                         chat_pending: false,
