@@ -410,6 +410,12 @@ fn llama_server_args(
         OsString::from("--n-gpu-layers"),
         OsString::from(n_gpu_layers.to_string()),
         OsString::from("--jinja"),
+        // Flash Attention を明示的に有効化（10-16x 高速化）
+        OsString::from("--flash-attn"),
+        OsString::from("on"),
+        // ubatch-size: prompt 処理加速
+        OsString::from("--ubatch-size"),
+        OsString::from("512"),
     ];
 
     // TurboQuant KVキャッシュ圧縮: turbo3 で 4.9x 圧縮 (K は q8_0 で品質維持、V は turbo3 で圧縮)
