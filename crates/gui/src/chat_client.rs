@@ -91,29 +91,45 @@ fn resolve_local_weights(paths: &[PathBuf], index: usize) -> Result<ChatBackend,
 }
 
 /// クラウド API のみ（OpenRouter → OpenAI → 汎用 OpenAI 互換）
+/// プロバイダ ID → (ベース URL, デフォルトモデル)
+const PROVIDER_ENDPOINTS: &[(&str, &str, &str)] = &[
+    ("openrouter",  "https://openrouter.ai/api",        "openai/gpt-4o-mini"),
+    ("openai",      "https://api.openai.com/v1",         "gpt-4o-mini"),
+    ("anthropic",   "https://api.anthropic.com/v1",      "claude-sonnet-4-20250514"),
+    ("google_gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
+    ("groq",        "https://api.groq.com/openai/v1",    "llama-3.3-70b-versatile"),
+    ("mistral",     "https://api.mistral.ai/v1",         "mistral-large-latest"),
+    ("deepseek",    "https://api.deepseek.com",          "deepseek-chat"),
+    ("xai",         "https://api.x.ai/v1",               "grok-3-mini"),
+    ("cohere",      "https://api.cohere.com/v2",         "command-a-03-2025"),
+    ("perplexity",  "https://api.perplexity.ai",         "sonar"),
+    ("fireworks",   "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/llama4-scout-instruct-basic"),
+    ("together",    "https://api.together.xyz/v1",       "meta-llama/Llama-4-Scout-17B-16E-Instruct"),
+    ("moonshot",    "https://api.moonshot.cn/v1",        "moonshot-v1-128k"),
+    ("siliconflow", "https://api.siliconflow.cn/v1",     "deepseek-ai/DeepSeek-R1"),
+    ("novita",      "https://api.novita.ai/v3/openai",   "deepseek/deepseek-r1"),
+    ("nebius",      "https://api.studio.nebius.ai/v1",   "deepseek-r1"),
+];
+
 fn resolve_api_backend(api: &ApiKeyPrefs, chat_model: &str) -> Result<ChatBackend, String> {
     let chat_model = chat_model.trim();
-    let openrouter_key = api.get_str("openrouter");
-    let openai_key = api.get_str("openai");
+
+    // 登録済みプロバイダを優先順に検索
+    for &(id, base_url, default_model) in PROVIDER_ENDPOINTS {
+        let key = api.get_str(id);
+        if !key.is_empty() {
+            let model = trimmed_or(chat_model, default_model);
+            return Ok(ChatBackend::OpenAiCompatible {
+                base_url: base_url.to_string(),
+                api_key: key.to_string(),
+                model,
+            });
+        }
+    }
+
+    // 汎用 OpenAI 互換
     let gen_base = api.get_str("generic_openai_base_url");
     let gen_key = api.get_str("generic_openai_api_key");
-
-    if !openrouter_key.is_empty() {
-        let model = trimmed_or(chat_model, "openai/gpt-4o-mini");
-        return Ok(ChatBackend::OpenAiCompatible {
-            base_url: OPENROUTER_BASE.to_string(),
-            api_key: openrouter_key.to_string(),
-            model,
-        });
-    }
-    if !openai_key.is_empty() {
-        let model = trimmed_or(chat_model, "gpt-4o-mini");
-        return Ok(ChatBackend::OpenAiCompatible {
-            base_url: OPENAI_BASE.to_string(),
-            api_key: openai_key.to_string(),
-            model,
-        });
-    }
     if !gen_base.is_empty() && !gen_key.is_empty() {
         let model = trimmed_or(chat_model, "gpt-4o-mini");
         let mut base = gen_base.trim_end_matches('/').to_string();
@@ -128,7 +144,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat_model: &str) -> Result<ChatBacken
     }
 
     Err(
-        "Chat をクラウド API に設定していますが、OpenRouter / OpenAI / 汎用 OpenAI 互換のいずれも利用できません。API キー管理でキーを登録するか、設定で「Ollama」または「ローカル GGUF/ONNX」に切り替えてください。"
+        "Chat をクラウド API に設定していますが、利用可能なプロバイダがありません。Settings の「API キー管理」でキーを登録してください。"
             .into(),
     )
 }
@@ -175,7 +191,12 @@ pub fn complete_chat_blocking(
             api_key,
             model,
         } => {
-            let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+            let base = base_url.trim_end_matches('/');
+            let url = if base.ends_with("/v1") || base.ends_with("/v1beta/openai") || base.ends_with("/v2") {
+                format!("{base}/chat/completions")
+            } else {
+                format!("{base}/v1/chat/completions")
+            };
             let body = json!({
                 "model": model,
                 "messages": messages_to_openai_json(messages),

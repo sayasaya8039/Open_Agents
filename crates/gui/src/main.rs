@@ -1602,50 +1602,93 @@ impl AppView {
 
     /// プロバイダ別モデルIDピッカー
     fn render_model_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let has_openrouter = !self.api_keys.get_str("openrouter").is_empty();
-        let has_openai = !self.api_keys.get_str("openai").is_empty();
-        let has_generic = !self.api_keys.get_str("generic_openai_api_key").is_empty();
         let current = self.chat_prefs.api_model.clone();
 
-        // プロバイダごとのモデルリスト
+        // 登録済みプロバイダに応じてモデルリストを構築
         let mut sections: Vec<(&str, Vec<&str>)> = Vec::new();
 
-        if has_openrouter {
-            sections.push(("OpenRouter", vec![
-                "anthropic/claude-sonnet-4",
-                "anthropic/claude-haiku-4",
-                "google/gemini-2.5-flash",
-                "google/gemini-2.5-pro",
-                "openai/gpt-4.1",
-                "openai/gpt-4.1-mini",
-                "openai/o3",
-                "openai/o4-mini",
-                "meta-llama/llama-4-maverick",
-                "meta-llama/llama-4-scout",
-                "qwen/qwen3-235b-a22b",
-                "deepseek/deepseek-r1",
-                "mistralai/mistral-large",
-            ]));
+        let provider_models: &[(&str, &str, &[&str])] = &[
+            ("openrouter", "OpenRouter (全プロバイダ統合)", &[
+                "anthropic/claude-sonnet-4", "anthropic/claude-haiku-4", "anthropic/claude-opus-4",
+                "google/gemini-2.5-flash", "google/gemini-2.5-pro",
+                "openai/gpt-4.1", "openai/gpt-4.1-mini", "openai/o3", "openai/o4-mini",
+                "meta-llama/llama-4-maverick", "meta-llama/llama-4-scout",
+                "qwen/qwen3-235b-a22b", "qwen/qwen3-30b-a3b",
+                "deepseek/deepseek-r1", "deepseek/deepseek-chat",
+                "mistralai/mistral-large", "mistralai/codestral",
+                "x-ai/grok-3", "x-ai/grok-3-mini",
+                "cohere/command-a", "cohere/command-r-plus",
+            ]),
+            ("openai", "OpenAI", &[
+                "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+                "o3", "o4-mini",
+                "gpt-4o", "gpt-4o-mini",
+            ]),
+            ("anthropic", "Anthropic (Claude)", &[
+                "claude-sonnet-4-20250514", "claude-haiku-4-20250414",
+                "claude-opus-4-20250514",
+            ]),
+            ("google_gemini", "Google Gemini", &[
+                "gemini-2.5-flash", "gemini-2.5-pro",
+                "gemini-2.0-flash",
+            ]),
+            ("groq", "Groq (超低レイテンシ)", &[
+                "llama-4-scout-17b-16e-instruct",
+                "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+                "gemma2-9b-it", "mixtral-8x7b-32768",
+                "qwen-qwq-32b",
+            ]),
+            ("mistral", "Mistral AI", &[
+                "mistral-large-latest", "mistral-small-latest",
+                "codestral-latest", "open-mistral-nemo",
+            ]),
+            ("deepseek", "DeepSeek", &[
+                "deepseek-chat", "deepseek-reasoner",
+            ]),
+            ("xai", "xAI (Grok)", &[
+                "grok-3", "grok-3-mini", "grok-2",
+            ]),
+            ("cohere", "Cohere", &[
+                "command-a-03-2025", "command-r-plus-08-2024",
+                "command-r-08-2024",
+            ]),
+            ("perplexity", "Perplexity (検索付きAI)", &[
+                "sonar-pro", "sonar", "sonar-reasoning-pro",
+            ]),
+            ("fireworks", "Fireworks AI", &[
+                "accounts/fireworks/models/llama4-scout-instruct-basic",
+                "accounts/fireworks/models/qwen3-235b-a22b",
+            ]),
+            ("together", "Together AI", &[
+                "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+                "Qwen/Qwen3-235B-A22B",
+                "deepseek-ai/DeepSeek-R1",
+            ]),
+            ("moonshot", "Moonshot (Kimi)", &[
+                "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k",
+            ]),
+            ("siliconflow", "SiliconFlow", &[
+                "deepseek-ai/DeepSeek-R1",
+                "Qwen/Qwen3-235B-A22B",
+            ]),
+        ];
+
+        for (key, label, models) in provider_models {
+            if !self.api_keys.get_str(key).is_empty() {
+                sections.push((label, models.to_vec()));
+            }
         }
-        if has_openai {
-            sections.push(("OpenAI", vec![
-                "gpt-4.1",
-                "gpt-4.1-mini",
-                "gpt-4.1-nano",
-                "o3",
-                "o4-mini",
-                "gpt-4o",
-                "gpt-4o-mini",
-            ]));
-        }
-        if has_generic {
+
+        // 汎用 OpenAI 互換
+        if !self.api_keys.get_str("generic_openai_api_key").is_empty() {
             sections.push(("汎用 OpenAI 互換", vec![
-                "(プロバイダのモデルIDを入力)",
+                "(プロバイダのモデルIDを貼り付けてください)",
             ]));
         }
+
         if sections.is_empty() {
             sections.push(("API キー未登録", vec![
-                "設定で OpenRouter / OpenAI のキーを登録してください",
+                "上の「API キー管理」でプロバイダのキーを登録すると、モデル一覧が表示されます",
             ]));
         }
 
