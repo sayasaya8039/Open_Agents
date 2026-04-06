@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::llama_cpp_runtime;
+use crate::{llama_cpp_runtime, model_prefs};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -42,6 +42,7 @@ pub fn complete_llama_cpp_chat_blocking(
     context_length: i32,
 ) -> Result<String, String> {
     let (base_url, model_id) = ensure_server(model_path, context_length)?;
+    let max_tokens = normalize_max_tokens(max_tokens);
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
     let body = json!({
         "model": model_id,
@@ -76,6 +77,7 @@ where
     F: FnMut(&str),
 {
     let (base_url, model_id) = ensure_server(model_path, context_length)?;
+    let max_tokens = normalize_max_tokens(max_tokens);
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
     let body = json!({
         "model": model_id,
@@ -139,8 +141,7 @@ fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, Stri
         }
     }
 
-    let binary = find_llama_server_binary()
-        .ok_or_else(missing_bundled_runtime_message)?;
+    let binary = find_llama_server_binary().ok_or_else(missing_bundled_runtime_message)?;
     let port = pick_free_port()?;
     let base_url = format!("http://127.0.0.1:{port}");
     let logs = Arc::new(Mutex::new(String::new()));
@@ -180,12 +181,16 @@ fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
 }
 
 fn extract_openai_message_content(text: &str) -> Result<String, String> {
-    let v: Value =
-        serde_json::from_str(text).map_err(|e| format!("llama.cpp JSON 解析に失敗しました: {e} ({text})"))?;
+    let v: Value = serde_json::from_str(text)
+        .map_err(|e| format!("llama.cpp JSON 解析に失敗しました: {e} ({text})"))?;
     v.pointer("/choices/0/message/content")
         .and_then(|x| x.as_str())
         .map(|s| s.to_string())
-        .or_else(|| v.get("content").and_then(|x| x.as_str()).map(|s| s.to_string()))
+        .or_else(|| {
+            v.get("content")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        })
         .ok_or_else(|| format!("choices[0].message.content がありません: {text}"))
 }
 
@@ -220,8 +225,9 @@ where
             saw_done = true;
             break;
         }
-        let value: Value = serde_json::from_str(payload)
-            .map_err(|e| format!("llama.cpp ストリーム JSON 解析に失敗しました: {e} ({payload})"))?;
+        let value: Value = serde_json::from_str(payload).map_err(|e| {
+            format!("llama.cpp ストリーム JSON 解析に失敗しました: {e} ({payload})")
+        })?;
         if let Some(delta) = extract_stream_chunk_text(&value) {
             saw_any_chunk = true;
             out.push_str(delta);
@@ -240,7 +246,11 @@ fn extract_stream_chunk_text(value: &Value) -> Option<&str> {
     value
         .pointer("/choices/0/delta/content")
         .and_then(|x| x.as_str())
-        .or_else(|| value.pointer("/choices/0/message/content").and_then(|x| x.as_str()))
+        .or_else(|| {
+            value
+                .pointer("/choices/0/message/content")
+                .and_then(|x| x.as_str())
+        })
 }
 
 fn spawn_llama_server(
@@ -328,7 +338,11 @@ fn wait_until_ready(
             return Err(format!(
                 "llama-server が起動直後に終了しました (status: {status})。モデル: {}{}{}",
                 model_path.display(),
-                if tail.is_empty() { "" } else { "\n\n直近ログ:\n" },
+                if tail.is_empty() {
+                    ""
+                } else {
+                    "\n\n直近ログ:\n"
+                },
                 tail
             ));
         }
@@ -343,7 +357,11 @@ fn wait_until_ready(
             return Err(format!(
                 "llama-server の起動待ちがタイムアウトしました。モデル: {}{}{}",
                 model_path.display(),
-                if tail.is_empty() { "" } else { "\n\n直近ログ:\n" },
+                if tail.is_empty() {
+                    ""
+                } else {
+                    "\n\n直近ログ:\n"
+                },
                 tail
             ));
         }
@@ -394,6 +412,10 @@ fn normalize_context_length(context_length: i32) -> i32 {
     }
 }
 
+fn normalize_max_tokens(max_tokens: i32) -> i32 {
+    model_prefs::effective_local_max_output_tokens(max_tokens)
+}
+
 fn normalize_model_path(model_path: &Path) -> PathBuf {
     model_path
         .canonicalize()
@@ -429,7 +451,10 @@ mod tests {
     #[test]
     fn model_id_falls_back_to_stem_when_server_not_ready() {
         let path = Path::new(r"C:\models\gemma-4-27b-it-Q4_K_M.gguf");
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
         assert_eq!(stem, "gemma-4-27b-it-Q4_K_M");
     }
 
@@ -454,11 +479,21 @@ mod tests {
     }
 
     #[test]
+    fn max_tokens_are_normalized_for_local_runtime() {
+        assert_eq!(
+            normalize_max_tokens(0),
+            model_prefs::DEFAULT_MAX_OUTPUT_TOKENS
+        );
+        assert_eq!(
+            normalize_max_tokens(2048),
+            model_prefs::LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP
+        );
+    }
+
+    #[test]
     fn extracts_stream_chunk_text_from_delta_shape() {
-        let value: Value = serde_json::from_str(
-            r#"{"choices":[{"delta":{"content":"こん"}}]}"#,
-        )
-        .unwrap();
+        let value: Value =
+            serde_json::from_str(r#"{"choices":[{"delta":{"content":"こん"}}]}"#).unwrap();
         assert_eq!(extract_stream_chunk_text(&value), Some("こん"));
     }
 

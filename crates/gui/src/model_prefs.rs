@@ -20,11 +20,21 @@ pub struct ModelParams {
     pub context_length: i32,
 }
 
+pub const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 256;
+pub const LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP: i32 = 512;
+
+pub fn effective_local_max_output_tokens(max_output_tokens: i32) -> i32 {
+    if max_output_tokens <= 0 {
+        return DEFAULT_MAX_OUTPUT_TOKENS;
+    }
+    max_output_tokens.clamp(DEFAULT_MAX_OUTPUT_TOKENS, LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP)
+}
+
 impl Default for ModelParams {
     fn default() -> Self {
         Self {
             temperature: 0.7,
-            max_output_tokens: 2048,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             context_length: 4096,
         }
     }
@@ -385,6 +395,10 @@ impl LocalLlmPrefs {
         self.ai = self.ai.sanitize();
         self.model_paths = sanitize_model_paths(std::mem::take(&mut self.model_paths));
         self.chat = self.chat.clone().sanitize();
+        if self.chat.source == ChatInferenceSource::LocalWeights {
+            self.model.max_output_tokens =
+                effective_local_max_output_tokens(self.model.max_output_tokens);
+        }
         self
     }
 
@@ -394,6 +408,10 @@ impl LocalLlmPrefs {
         self.appearance.clamp();
         self.ai = self.ai.clone().sanitize();
         self.chat = self.chat.clone().sanitize();
+        if self.chat.source == ChatInferenceSource::LocalWeights {
+            self.model.max_output_tokens =
+                effective_local_max_output_tokens(self.model.max_output_tokens);
+        }
     }
 }
 
@@ -411,17 +429,25 @@ pub fn load_local_llm_prefs() -> LocalLlmPrefs {
     };
     let migrated = migrate_prefs_json(&raw);
     match serde_json::from_str::<LocalLlmPrefs>(&migrated) {
-        Ok(p) => p.sanitize(),
+        Ok(p) => {
+            let sanitized = p.clone().sanitize();
+            if sanitized != p || migrated != raw {
+                save_local_llm_prefs(&sanitized);
+            }
+            sanitized
+        }
         Err(_) => {
             let model = serde_json::from_str::<ModelParams>(&raw)
                 .or_else(|_| serde_json::from_str::<ModelParams>(&migrated))
                 .unwrap_or_default()
                 .sanitize();
-            LocalLlmPrefs {
+            let prefs = LocalLlmPrefs {
                 model,
                 ..LocalLlmPrefs::default()
             }
-            .sanitize()
+            .sanitize();
+            save_local_llm_prefs(&prefs);
+            prefs
         }
     }
 }
@@ -474,6 +500,19 @@ mod tests {
     }
 
     #[test]
+    fn local_gguf_max_tokens_defaults_and_caps() {
+        assert_eq!(
+            effective_local_max_output_tokens(0),
+            DEFAULT_MAX_OUTPUT_TOKENS
+        );
+        assert_eq!(
+            effective_local_max_output_tokens(2048),
+            LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP
+        );
+        assert_eq!(effective_local_max_output_tokens(384), 384);
+    }
+
+    #[test]
     fn hardware_sanitize_clamps() {
         let h = HardwareParams {
             gpu_acceleration: true,
@@ -505,7 +544,10 @@ mod tests {
         let migrated = migrate_prefs_json(raw);
         let p: LocalLlmPrefs = serde_json::from_str(&migrated).unwrap();
         assert_eq!(p.model_paths.len(), 1);
-        assert!(p.model_paths[0].as_os_str().to_string_lossy().contains("x.gguf"));
+        assert!(p.model_paths[0]
+            .as_os_str()
+            .to_string_lossy()
+            .contains("x.gguf"));
     }
 
     #[test]
@@ -536,6 +578,43 @@ mod tests {
         }
         .sanitize();
         assert!(p.model_paths.is_empty());
+    }
+
+    #[test]
+    fn local_weights_source_caps_extreme_max_tokens() {
+        let prefs = LocalLlmPrefs {
+            model: ModelParams {
+                max_output_tokens: 2048,
+                ..ModelParams::default()
+            },
+            chat: ChatPrefs {
+                source: ChatInferenceSource::LocalWeights,
+                ..ChatPrefs::default()
+            },
+            ..LocalLlmPrefs::default()
+        }
+        .sanitize();
+        assert_eq!(
+            prefs.model.max_output_tokens,
+            LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP
+        );
+    }
+
+    #[test]
+    fn api_source_preserves_large_max_tokens() {
+        let prefs = LocalLlmPrefs {
+            model: ModelParams {
+                max_output_tokens: 2048,
+                ..ModelParams::default()
+            },
+            chat: ChatPrefs {
+                source: ChatInferenceSource::Api,
+                ..ChatPrefs::default()
+            },
+            ..LocalLlmPrefs::default()
+        }
+        .sanitize();
+        assert_eq!(prefs.model.max_output_tokens, 2048);
     }
 
     #[test]

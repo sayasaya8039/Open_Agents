@@ -2039,8 +2039,17 @@ impl AppView {
             }
         }
         self.model_params.clamp();
+        self.normalize_model_params_for_chat_source();
         self.persist_local_llm_prefs();
         cx.notify();
+    }
+
+    fn normalize_model_params_for_chat_source(&mut self) {
+        if self.chat_prefs.source == model_prefs::ChatInferenceSource::LocalWeights {
+            self.model_params.max_output_tokens = model_prefs::effective_local_max_output_tokens(
+                self.model_params.max_output_tokens,
+            );
+        }
     }
 
     fn persist_local_llm_prefs(&self) {
@@ -2057,6 +2066,7 @@ impl AppView {
     fn cycle_chat_inference_source(&mut self, cx: &mut Context<Self>) {
         self.chat_prefs.source = self.chat_prefs.source.cycle();
         self.chat_prefs = self.chat_prefs.clone().sanitize();
+        self.normalize_model_params_for_chat_source();
         self.persist_local_llm_prefs();
         cx.notify();
     }
@@ -3275,7 +3285,7 @@ impl AppView {
                                                         cx,
                                                         ModelParamAdjustKind::MaxOutputTokens,
                                                         "最大トークン数",
-                                                        None,
+                                                        Some("ローカル GGUF は 256〜512 推奨。大きい値は応答完了まで極端に遅くなります"),
                                                     ))
                                                     .child(self.settings_model_param_row(
                                                         cx,

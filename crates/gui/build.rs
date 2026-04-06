@@ -37,7 +37,7 @@ fn main() {
         .flag_if_supported("/utf-8")
         .define("NDEBUG", None)
         .define("OAG_HAS_CPU_BACKEND", "1")
-        .define("OAG_VERSION", "\"0.2.46\"")
+        .define("OAG_VERSION", "\"0.2.47\"")
         .compile("oag_core");
 
     // Link Windows libraries (for C core)
@@ -66,14 +66,32 @@ fn sync_bundled_llama_runtime(src_dir: &Path) {
         }
         println!("cargo:rerun-if-changed={}", src_path.display());
         let dst_path = profile_dir.join(entry.file_name());
-        fs::copy(&src_path, &dst_path).unwrap_or_else(|err| {
-            panic!(
-                "failed to copy bundled llama runtime {} -> {}: {err}",
-                src_path.display(),
-                dst_path.display()
-            )
-        });
+        match fs::copy(&src_path, &dst_path) {
+            Ok(_) => {}
+            Err(err) if files_match(&src_path, &dst_path).unwrap_or(false) => {
+                println!(
+                    "cargo:warning=bundled llama runtime already matches destination, skipping locked file: {}",
+                    dst_path.display()
+                );
+            }
+            Err(err) => {
+                panic!(
+                    "failed to copy bundled llama runtime {} -> {}: {err}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            }
+        }
     }
+}
+
+fn files_match(src_path: &Path, dst_path: &Path) -> Result<bool, std::io::Error> {
+    let src_meta = fs::metadata(src_path)?;
+    let dst_meta = fs::metadata(dst_path)?;
+    if src_meta.len() != dst_meta.len() {
+        return Ok(false);
+    }
+    Ok(fs::read(src_path)? == fs::read(dst_path)?)
 }
 
 fn profile_output_dir() -> PathBuf {
