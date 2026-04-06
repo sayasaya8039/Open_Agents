@@ -76,7 +76,8 @@ impl EditorView {
             show_line_numbers: ap.show_line_numbers,
             ui_theme: ap.theme,
             grid_renderer: None,
-            use_grid_renderer: true,
+            // グリッドは VGA 8×16 の ASCII のみ。日本語・記号は欠けて表示が壊れるため既定はベクタテキスト経路。
+            use_grid_renderer: false,
         }
     }
 
