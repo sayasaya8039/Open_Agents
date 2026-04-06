@@ -14,6 +14,73 @@ use serde_json::{json, Value};
 
 use crate::{llama_cpp_runtime, model_prefs};
 
+// Windows Job Object: 親プロセス終了時に全子プロセスを自動終了
+#[cfg(windows)]
+fn assign_child_to_job(child: &Child) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::mem;
+    use std::ptr;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attrs: *mut u8, name: *const u16) -> usize;
+        fn SetInformationJobObject(job: usize, class: u32, info: *const u8, len: u32) -> i32;
+        fn AssignProcessToJobObject(job: usize, process: usize) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> usize;
+        fn CloseHandle(handle: usize) -> i32;
+    }
+
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+    const JOBOBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+    const PROCESS_ALL_ACCESS: u32 = 0x1FFFFF;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters { _pad: [u64; 6] }
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicLimitInfo { _pad: [u64; 8] }
+    #[repr(C)]
+    #[derive(Default)]
+    struct ExtendedLimitInfo {
+        basic: BasicLimitInfo,
+        _io: IoCounters,
+        _sizes: [usize; 4],
+    }
+
+    static JOB_HANDLE: AtomicUsize = AtomicUsize::new(0);
+
+    let mut handle = JOB_HANDLE.load(Ordering::Acquire);
+    if handle == 0 {
+        handle = unsafe {
+            let job = CreateJobObjectW(ptr::null_mut(), ptr::null());
+            if job == 0 {
+                eprintln!("llama.cpp: Job Object の作成に失敗しました");
+                return;
+            }
+            let mut info = ExtendedLimitInfo::default();
+            let flags_ptr = (&mut info.basic as *mut BasicLimitInfo as *mut u8).add(16) as *mut u32;
+            *flags_ptr = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                &info as *const _ as *const u8,
+                mem::size_of::<ExtendedLimitInfo>() as u32,
+            );
+            job
+        };
+        JOB_HANDLE.store(handle, Ordering::Release);
+    }
+
+    unsafe {
+        let process = OpenProcess(PROCESS_ALL_ACCESS, 0, child.id());
+        if process != 0 {
+            AssignProcessToJobObject(handle, process);
+            CloseHandle(process);
+        }
+    }
+}
+
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_LOG_BYTES: usize = 32 * 1024;
@@ -459,6 +526,10 @@ fn spawn_llama_server(
     let mut child = command
         .spawn()
         .map_err(|e| format!("llama-server の起動に失敗しました: {e}"))?;
+
+    // Windows: Job Object で親プロセス終了時に子プロセスも自動終了
+    #[cfg(windows)]
+    assign_child_to_job(&child);
 
     if let Some(stdout) = child.stdout.take() {
         spawn_log_drain(stdout, "stdout", Arc::clone(&logs));
