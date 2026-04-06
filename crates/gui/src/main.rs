@@ -619,6 +619,7 @@ impl AppView {
                             llama_cpp_chat::server_ready_for(
                                 path,
                                 self.model_params.context_length,
+                                &self.hardware_params,
                             )
                         })
                         .unwrap_or(false);
@@ -641,6 +642,7 @@ impl AppView {
         let temperature = self.model_params.temperature;
         let max_tokens = self.model_params.max_output_tokens;
         let context_length = self.model_params.context_length;
+        let hardware_params = self.hardware_params.clone();
         let streaming_enabled = self.ai_prefs.streaming_responses;
 
         match chat_client::resolve_chat_backend(&api_keys, &chat_prefs, &local_model_paths) {
@@ -653,6 +655,7 @@ impl AppView {
                         temperature,
                         max_tokens,
                         context_length,
+                        &hardware_params,
                         |delta| {
                             let _ =
                                 tx.send_blocking(ChatStreamEvent::ContentDelta(delta.to_string()));
@@ -722,6 +725,7 @@ impl AppView {
                 .detach();
             }
             Ok(chat_client::ChatBackend::LlamaCppLocal { path }) => {
+                let hw = hardware_params.clone();
                 cx.spawn(async move |this, cx| {
                     let result = smol::unblock(move || {
                         llama_cpp_chat::complete_llama_cpp_chat_blocking(
@@ -730,6 +734,7 @@ impl AppView {
                             temperature,
                             max_tokens,
                             context_length,
+                            &hw,
                         )
                     })
                     .await;
@@ -752,6 +757,7 @@ impl AppView {
                 .detach();
             }
             Ok(backend) => {
+                let hw = hardware_params.clone();
                 cx.spawn(async move |this, cx| {
                     let result: Result<String, String> = smol::unblock(move || {
                         chat_client::complete_chat_blocking(
@@ -760,6 +766,7 @@ impl AppView {
                             temperature,
                             max_tokens,
                             context_length,
+                            &hw,
                         )
                     })
                     .await;

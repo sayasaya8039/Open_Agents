@@ -29,6 +29,7 @@ use std::os::windows::process::CommandExt;
 struct CachedServer {
     model_path: PathBuf,
     context_length: i32,
+    hardware: model_prefs::HardwareParams,
     base_url: String,
     model_id: String,
     child: Child,
@@ -50,8 +51,9 @@ pub fn complete_llama_cpp_chat_blocking(
     temperature: f32,
     max_tokens: i32,
     context_length: i32,
+    hardware: &model_prefs::HardwareParams,
 ) -> Result<LlamaCppChatResponse, String> {
-    let (base_url, model_id) = ensure_server(model_path, context_length)?;
+    let (base_url, model_id) = ensure_server(model_path, context_length, hardware)?;
     let max_tokens = normalize_max_tokens(max_tokens);
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, false, max_tokens);
@@ -82,6 +84,7 @@ pub fn stream_llama_cpp_chat_blocking<F, G>(
     temperature: f32,
     max_tokens: i32,
     context_length: i32,
+    hardware: &model_prefs::HardwareParams,
     mut on_content_delta: F,
     mut on_thinking_delta: G,
 ) -> Result<LlamaCppChatResponse, String>
@@ -89,7 +92,7 @@ where
     F: FnMut(&str),
     G: FnMut(&str),
 {
-    let (base_url, model_id) = ensure_server(model_path, context_length)?;
+    let (base_url, model_id) = ensure_server(model_path, context_length, hardware)?;
     let max_tokens = normalize_max_tokens(max_tokens);
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, true, max_tokens);
@@ -116,30 +119,46 @@ where
     read_streaming_response(reader, &mut on_content_delta, &mut on_thinking_delta)
 }
 
-pub fn server_ready_for(model_path: &Path, context_length: i32) -> bool {
+pub fn server_ready_for(
+    model_path: &Path,
+    context_length: i32,
+    hardware: &model_prefs::HardwareParams,
+) -> bool {
     let normalized_ctx = effective_context_length(model_path, context_length);
     let normalized_path = normalize_model_path(model_path);
+    let normalized_hw = launch_hardware_params(hardware);
     let Ok(mut cache) = server_cache().lock() else {
         return false;
     };
     let Some(server) = cache.as_mut() else {
         return false;
     };
-    if server.model_path != normalized_path || server.context_length != normalized_ctx {
+    if server.model_path != normalized_path
+        || server.context_length != normalized_ctx
+        || server.hardware != normalized_hw
+    {
         return false;
     }
     server_is_alive(server).unwrap_or(false)
 }
 
-fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, String), String> {
+fn ensure_server(
+    model_path: &Path,
+    context_length: i32,
+    hardware: &model_prefs::HardwareParams,
+) -> Result<(String, String), String> {
     let normalized_ctx = effective_context_length(model_path, context_length);
     let normalized_path = normalize_model_path(model_path);
+    let normalized_hw = launch_hardware_params(hardware);
     let mut cache = server_cache()
         .lock()
         .map_err(|_| "llama.cpp サーバキャッシュのロックに失敗しました".to_string())?;
 
     if let Some(server) = cache.as_mut() {
-        if server.model_path == normalized_path && server.context_length == normalized_ctx {
+        if server.model_path == normalized_path
+            && server.context_length == normalized_ctx
+            && server.hardware == normalized_hw
+        {
             if server_is_alive(server)? {
                 eprintln!(
                     "llama.cpp: warm server reused for {}",
@@ -164,6 +183,7 @@ fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, Stri
         &normalized_path,
         port,
         normalized_ctx,
+        &normalized_hw,
         Arc::clone(&logs),
     )?;
     let model_id = wait_until_ready(&mut child, &base_url, &normalized_path, Arc::clone(&logs))?;
@@ -175,6 +195,7 @@ fn ensure_server(model_path: &Path, context_length: i32) -> Result<(String, Stri
     *cache = Some(CachedServer {
         model_path: normalized_path,
         context_length: normalized_ctx,
+        hardware: normalized_hw,
         base_url: base_url.clone(),
         model_id: model_id.clone(),
         child,
@@ -326,8 +347,28 @@ fn log_chat_template_mode(model_path: &Path, streaming: bool, max_tokens: i32) {
     );
 }
 
-fn llama_server_args(model_path: &Path, port: u16, context_length: i32) -> Vec<OsString> {
-    vec![
+fn launch_hardware_params(hardware: &model_prefs::HardwareParams) -> model_prefs::HardwareParams {
+    let mut h = hardware.clone();
+    h.clamp();
+    h
+}
+
+fn effective_cpu_threads(hardware: &model_prefs::HardwareParams) -> usize {
+    let h = launch_hardware_params(hardware);
+    let want = h.n_threads.max(1) as usize;
+    let cap = available_thread_count();
+    want.min(cap).max(1)
+}
+
+fn llama_server_args(
+    model_path: &Path,
+    port: u16,
+    context_length: i32,
+    hardware: &model_prefs::HardwareParams,
+) -> Vec<OsString> {
+    let hw = launch_hardware_params(hardware);
+    let threads = effective_cpu_threads(&hw);
+    let mut args = vec![
         OsString::from("--model"),
         model_path.as_os_str().to_os_string(),
         OsString::from("--host"),
@@ -337,9 +378,16 @@ fn llama_server_args(model_path: &Path, port: u16, context_length: i32) -> Vec<O
         OsString::from("--ctx-size"),
         OsString::from(context_length.to_string()),
         OsString::from("--threads"),
-        OsString::from(available_thread_count().to_string()),
+        OsString::from(threads.to_string()),
+        OsString::from("--batch-size"),
+        OsString::from(hw.batch_size.to_string()),
         OsString::from("--jinja"),
-    ]
+    ];
+    if hw.gpu_acceleration && hw.gpu_layers > 0 {
+        args.push(OsString::from("--n-gpu-layers"));
+        args.push(OsString::from(hw.gpu_layers.to_string()));
+    }
+    args
 }
 
 fn spawn_llama_server(
@@ -347,11 +395,17 @@ fn spawn_llama_server(
     model_path: &Path,
     port: u16,
     context_length: i32,
+    hardware: &model_prefs::HardwareParams,
     logs: Arc<Mutex<String>>,
 ) -> Result<Child, String> {
     let mut command = Command::new(binary);
     command
-        .args(llama_server_args(model_path, port, context_length))
+        .args(llama_server_args(
+            model_path,
+            port,
+            context_length,
+            hardware,
+        ))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -739,8 +793,10 @@ mod tests {
 
     #[test]
     fn llama_server_args_enable_jinja_templates() {
-        let args = llama_server_args(Path::new("C:/models/gemma-4.gguf"), 8080, 8192);
+        let hw = model_prefs::HardwareParams::default();
+        let args = llama_server_args(Path::new("C:/models/gemma-4.gguf"), 8080, 8192, &hw);
         assert!(args.iter().any(|arg| arg == "--jinja"));
+        assert!(args.iter().any(|arg| arg == "--batch-size"));
     }
 
     #[test]

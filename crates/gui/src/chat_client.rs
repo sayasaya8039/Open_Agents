@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::api_key_prefs::ApiKeyPrefs;
 use crate::llama_cpp_chat;
-use crate::model_prefs::{ChatInferenceSource, ChatPrefs};
+use crate::model_prefs::{ChatInferenceSource, ChatPrefs, HardwareParams};
 use serde_json::{json, Value};
 
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api";
@@ -167,6 +167,7 @@ pub fn complete_chat_blocking(
     temperature: f32,
     max_tokens: i32,
     context_length: i32,
+    hardware: &HardwareParams,
 ) -> Result<String, String> {
     match backend {
         ChatBackend::OpenAiCompatible {
@@ -244,6 +245,7 @@ pub fn complete_chat_blocking(
                 temperature,
                 max_tokens,
                 context_length,
+                hardware,
             )
             .map(|response| response.content)
         }
