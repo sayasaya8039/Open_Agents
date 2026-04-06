@@ -5,6 +5,8 @@ mod llama_cpp_chat;
 mod llama_cpp_runtime;
 mod chat_client;
 mod chat_composer;
+mod chat_page;
+mod chat_session;
 mod editor;
 mod model_prefs;
 mod project_explorer;
@@ -305,11 +307,7 @@ impl ModelFormat {
     }
 }
 
-struct ChatMsg {
-    role: String,
-    content: String,
-    thinking: Option<String>,
-}
+use chat_session::ChatMsg;
 
 enum ChatStreamEvent {
     ContentDelta(String),
@@ -357,7 +355,8 @@ enum AiToggleKind {
 
 struct AppView {
     page: Page,
-    chat_messages: Vec<ChatMsg>,
+    /// チャットセッション管理（マルチセッション + 永続化）
+    session_store: chat_session::SessionStore,
     /// Figma Chat ヘッダー「思考を表示」トグル
     chat_show_thinking: bool,
     /// 設定で読み込んだローカル LLM（下に追加・永続化）
@@ -577,6 +576,21 @@ impl AppView {
         self.editor_view.read(cx).chat_working_directory(&self.workspace_root)
     }
 
+    // ── Chat セッション操作 ──
+
+    fn chat_new_session(&mut self, cx: &mut Context<Self>) {
+        self.session_store.new_session();
+        self.chat_pending = false;
+        chat_session::save_sessions(&self.session_store);
+        cx.notify();
+    }
+
+    fn chat_switch_session(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.session_store.switch_to(id);
+        self.chat_pending = false;
+        cx.notify();
+    }
+
     /// Chat: Enter / 送信ボタンから呼ばれ、外部 API または Ollama で応答を取得する。
     fn on_chat_submitted(&mut self, cx: &mut Context<Self>) {
         if self.chat_pending {
@@ -592,21 +606,28 @@ impl AppView {
             "作業ディレクトリ（Editor / エクスプローラで選んだ場所。相対パス・ターミナルコマンドの cwd はここを基準に解釈してください）: {}",
             work_dir.display()
         );
+
+        let session_messages = self.session_store.active()
+            .map(|s| &s.messages[..])
+            .unwrap_or(&[]);
         let api_messages: Vec<(String, String)> = std::iter::once(("system".into(), work_dir_msg))
-            .chain(chat_history_for_api(&self.chat_messages).into_iter())
+            .chain(chat_history_for_api(session_messages).into_iter())
             .chain(std::iter::once(("user".into(), text.clone())))
             .collect();
 
         self.chat_composer.update(cx, |c, ecx| c.clear(ecx));
 
-        self.chat_messages.push(ChatMsg {
-            role: "user".into(),
-            content: text,
-            thinking: None,
-        });
-        self.chat_messages.push(ChatMsg {
-            role: "assistant".into(),
-            content: match self.chat_prefs.source {
+        if let Some(session) = self.session_store.active_mut() {
+            session.messages.push(ChatMsg {
+                role: "user".into(),
+                content: text,
+                thinking: None,
+            });
+            // 最初のユーザーメッセージでタイトル自動生成
+            if session.messages.iter().filter(|m| m.role == "user").count() == 1 {
+                session.auto_title();
+            }
+            let placeholder: String = match self.chat_prefs.source {
                 model_prefs::ChatInferenceSource::LocalWeights => {
                     let warm = self
                         .settings_model_paths
@@ -630,9 +651,14 @@ impl AppView {
                     }
                 }
                 _ => "応答を待っています…".into(),
-            },
-            thinking: None,
-        });
+            };
+            session.messages.push(ChatMsg {
+                role: "assistant".into(),
+                content: placeholder,
+                thinking: None,
+            });
+            session.touch();
+        }
         self.chat_pending = true;
         cx.notify();
 
@@ -685,7 +711,7 @@ impl AppView {
                         );
                         let _ = cx.update(|app| {
                             let _ = this.update(app, |this: &mut AppView, cx| {
-                                if let Some(last) = this.chat_messages.last_mut() {
+                                if let Some(last) = this.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
                                     if last.role == "assistant" {
                                         match event {
                                             ChatStreamEvent::ContentDelta(delta) => {
@@ -706,10 +732,12 @@ impl AppView {
                                                 if !saw_content_delta || !saw_thinking_delta {
                                                     apply_local_chat_response(last, reply);
                                                 }
+                                                chat_session::save_sessions(&this.session_store);
                                             }
                                             ChatStreamEvent::Error(err) => {
                                                 this.chat_pending = false;
                                                 last.content = format!("エラー: {err}");
+                                                chat_session::save_sessions(&this.session_store);
                                             }
                                         }
                                     }
@@ -742,7 +770,7 @@ impl AppView {
                     let _ = cx.update(|app| {
                         let _ = this.update(app, |this: &mut AppView, cx| {
                             this.chat_pending = false;
-                            if let Some(last) = this.chat_messages.last_mut() {
+                            if let Some(last) = this.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
                                 if last.role == "assistant" {
                                     match result {
                                         Ok(reply) => apply_local_chat_response(last, reply),
@@ -750,6 +778,7 @@ impl AppView {
                                     }
                                 }
                             }
+                            chat_session::save_sessions(&this.session_store);
                             cx.notify();
                         });
                     });
@@ -774,7 +803,7 @@ impl AppView {
                     let _ = cx.update(|app| {
                         let _ = this.update(app, |this: &mut AppView, cx| {
                             this.chat_pending = false;
-                            if let Some(last) = this.chat_messages.last_mut() {
+                            if let Some(last) = this.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
                                 if last.role == "assistant" {
                                     last.content = match result {
                                         Ok(reply) => reply,
@@ -782,6 +811,7 @@ impl AppView {
                                     };
                                 }
                             }
+                            chat_session::save_sessions(&this.session_store);
                             cx.notify();
                         });
                     });
@@ -790,11 +820,12 @@ impl AppView {
             }
             Err(err) => {
                 self.chat_pending = false;
-                if let Some(last) = self.chat_messages.last_mut() {
+                if let Some(last) = self.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
                     if last.role == "assistant" {
                         last.content = format!("エラー: {err}");
                     }
                 }
+                chat_session::save_sessions(&self.session_store);
                 cx.notify();
             }
         }
@@ -809,7 +840,17 @@ impl Render for AppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: AnyElement = match self.page {
             Page::Editor => self.render_editor(cx).into_any_element(),
-            Page::Chat => self.render_chat_page(cx).into_any_element(),
+            Page::Chat => {
+                let model_status = self.chat_model_status_line();
+                chat_page::render_chat_page(
+                    &self.session_store,
+                    self.chat_pending,
+                    self.chat_show_thinking,
+                    &model_status,
+                    self.chat_composer.clone(),
+                    cx,
+                ).into_any_element()
+            }
             Page::Settings => self.render_settings(cx).into_any_element(),
             Page::Terminal => self.render_terminal().into_any_element(),
         };
@@ -1675,361 +1716,6 @@ impl AppView {
                             .child("Spaces: 4"),
                     ),
             )
-    }
-
-    // ============================================================
-    // Chat View（Figma Make: ChatView.tsx に合わせたレイアウト）
-    // ============================================================
-
-    fn render_chat_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let show_suggestions = self.chat_messages.len() == 1;
-        let thinking_toggle = self.chat_show_thinking;
-        let send_disabled = self.chat_pending;
-
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .min_h(px(0.))
-            .bg(hex(BG))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .bg(hex(PANEL_BG))
-                    .border_b_1()
-                    .border_color(hex(BORDER))
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(48.))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .px(px(16.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .w(px(24.))
-                                            .h(px(24.))
-                                            .rounded(px(6.))
-                                            .bg(hex(ACCENT_ORANGE))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_size(px(12.))
-                                            .text_color(hex(0xFFFFFF))
-                                            .child("✦"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .text_color(hex(TEXT_PRIMARY))
-                                            .child("Open Agents"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(hex(TEXT_SECONDARY))
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                            this.chat_show_thinking = !this.chat_show_thinking;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(if thinking_toggle {
-                                        "思考を非表示"
-                                    } else {
-                                        "思考を表示"
-                                    }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .px(px(16.))
-                            .pb(px(8.))
-                            .text_size(px(10.))
-                            .text_color(hex(TEXT_MUTED))
-                            .child(self.chat_model_status_line()),
-                    ),
-            )
-            .child(
-                div()
-                    .id("chat-messages-scroll")
-                    .flex_1()
-                    .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .child(
-                        div()
-                            .max_w(px(896.))
-                            .mx_auto()
-                            .px(px(24.))
-                            .py(px(32.))
-                            .flex()
-                            .flex_col()
-                            .when(show_suggestions, |d| {
-                                d.child(
-                                    div()
-                                        .mb(px(32.))
-                                        .flex()
-                                        .flex_col()
-                                        .child(
-                                            div()
-                                                .text_size(px(10.))
-                                                .text_color(hex(TEXT_MUTED))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .mb(px(12.))
-                                                .child("提案"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap(px(8.))
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .gap(px(8.))
-                                                        .child(self.suggestion_chip("Reactコンポーネントを作成"))
-                                                        .child(self.suggestion_chip("バグを修正")),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .gap(px(8.))
-                                                        .child(self.suggestion_chip("コードをリファクタリング"))
-                                                        .child(self.suggestion_chip("テストを追加")),
-                                                ),
-                                        ),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(32.))
-                                    .children(self.chat_messages.iter().map(|msg| {
-                                        let is_user = msg.role == "user";
-                                        let mut block = div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(12.))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap(px(8.))
-                                                    .child(if is_user {
-                                                        div()
-                                                            .w(px(24.))
-                                                            .h(px(24.))
-                                                            .rounded(px(6.))
-                                                            .bg(hex(ACCENT_BLUE))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .text_size(px(11.))
-                                                            .text_color(hex(0xFFFFFF))
-                                                            .child("U")
-                                                            .into_any_element()
-                                                    } else {
-                                                        div()
-                                                            .w(px(24.))
-                                                            .h(px(24.))
-                                                            .rounded(px(6.))
-                                                            .bg(hex(ACCENT_ORANGE))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .text_size(px(11.))
-                                                            .text_color(hex(0xFFFFFF))
-                                                            .child("✦")
-                                                            .into_any_element()
-                                                    })
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(12.))
-                                                            .text_color(hex(TEXT_SECONDARY))
-                                                            .child(if is_user {
-                                                                "You"
-                                                            } else {
-                                                                "Agent"
-                                                            }),
-                                                    ),
-                                            );
-                                        if let Some(th) = &msg.thinking {
-                                            if self.chat_show_thinking {
-                                                block = block.child(
-                                                    div()
-                                                        .ml(px(32.))
-                                                        .flex()
-                                                        .gap(px(0.))
-                                                        .child(
-                                                            div()
-                                                                .w(px(2.))
-                                                                .flex_shrink_0()
-                                                                .bg(hex(PURPLE)),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .flex_1()
-                                                                .p(px(12.))
-                                                                .bg(hex(PANEL_BG))
-                                                                .rounded(px(4.))
-                                                                .text_size(px(12.))
-                                                                .text_color(hex(TEXT_SECONDARY))
-                                                                .child(th.clone()),
-                                                        ),
-                                                );
-                                            }
-                                        }
-                                        block.child(
-                                            div()
-                                                .ml(px(32.))
-                                                .text_size(px(13.))
-                                                .text_color(hex(TEXT_PRIMARY))
-                                                .child(msg.content.clone()),
-                                        )
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .border_t_1()
-                    .border_color(hex(BORDER))
-                    .bg(hex(PANEL_BG))
-                    .p(px(16.))
-                    .child(
-                        div()
-                            .max_w(px(896.))
-                            .mx_auto()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .min_h(px(72.))
-                                    .flex()
-                                    .gap(px(8.))
-                                    .items_end()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_h(px(72.))
-                                            .min_w(px(0.))
-                                            .bg(hex(BG))
-                                            .border_1()
-                                            .border_color(hex(BORDER))
-                                            .rounded(px(12.))
-                                            .px(px(12.))
-                                            .py(px(8.))
-                                            .flex()
-                                            .items_center()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, window, cx| {
-                                                    this.chat_composer.read(cx).focus(window);
-                                                }),
-                                            )
-                                            .child(self.chat_composer.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .mb(px(4.))
-                                            .mr(px(4.))
-                                            .p(px(8.))
-                                            .rounded(px(8.))
-                                            .bg(if send_disabled {
-                                                hex_a(ACCENT_BLUE, 0.45)
-                                            } else {
-                                                hex(ACCENT_BLUE)
-                                            })
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_size(px(12.))
-                                            .text_color(hex(0xFFFFFF))
-                                            .cursor(if send_disabled {
-                                                CursorStyle::OperationNotAllowed
-                                            } else {
-                                                CursorStyle::PointingHand
-                                            })
-                                            .when(!send_disabled, |d| {
-                                                d.on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, _, cx| {
-                                                        this.on_chat_submitted(cx);
-                                                    }),
-                                                )
-                                            })
-                                            .child("➤"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(8.))
-                                    .text_size(px(11.))
-                                    .text_color(hex(TEXT_MUTED))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .child("⌨".to_string())
-                                    .child(
-                                        div()
-                                            .px(px(6.))
-                                            .py(px(2.))
-                                            .bg(hex(BORDER))
-                                            .rounded(px(4.))
-                                            .text_size(px(10.))
-                                            .child("Enter"),
-                                    )
-                                    .child("送信".to_string())
-                                    .child(
-                                        div()
-                                            .px(px(6.))
-                                            .py(px(2.))
-                                            .bg(hex(BORDER))
-                                            .rounded(px(4.))
-                                            .text_size(px(10.))
-                                            .child("Shift+Enter"),
-                                    )
-                                    .child("改行".to_string()),
-                            ),
-                    ),
-            )
-    }
-
-    fn suggestion_chip(&self, label: &str) -> impl IntoElement {
-        div()
-            .flex_1()
-            .min_w(px(0.))
-            .px(px(16.))
-            .py(px(12.))
-            .bg(hex(PANEL_BG))
-            .border_1()
-            .border_color(hex(BORDER))
-            .rounded(px(8.))
-            .text_size(px(12.))
-            .text_color(hex(TEXT_SECONDARY))
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .text_color(hex(ACCENT_BLUE))
-                    .child("⚡"),
-            )
-            .child(label.to_string())
     }
 
     // ============================================================
@@ -3733,11 +3419,7 @@ fn main() {
                     .detach();
                     let mut app = AppView {
                         page: Page::Editor,
-                        chat_messages: vec![ChatMsg {
-                            role: "assistant".into(),
-                            content: "こんにちは！Open Agents AIコーディングアシスタントです。コードの作成、編集、リファクタリングなど、お手伝いします。".into(),
-                            thinking: None,
-                        }],
+                        session_store: chat_session::load_sessions(),
                         chat_show_thinking: true,
                         settings_model_paths: local_llm.model_paths,
                         model_params: local_llm.model,
