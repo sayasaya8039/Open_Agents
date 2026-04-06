@@ -1881,6 +1881,114 @@ impl AppView {
         cx.notify();
     }
 
+    /// プロバイダ別モデルIDピッカー
+    fn render_model_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_openrouter = !self.api_keys.get_str("openrouter").is_empty();
+        let has_openai = !self.api_keys.get_str("openai").is_empty();
+        let has_generic = !self.api_keys.get_str("generic_openai_api_key").is_empty();
+        let current = self.chat_prefs.api_model.clone();
+
+        // プロバイダごとのモデルリスト
+        let mut sections: Vec<(&str, Vec<&str>)> = Vec::new();
+
+        if has_openrouter {
+            sections.push(("OpenRouter", vec![
+                "anthropic/claude-sonnet-4",
+                "anthropic/claude-haiku-4",
+                "google/gemini-2.5-flash",
+                "google/gemini-2.5-pro",
+                "openai/gpt-4.1",
+                "openai/gpt-4.1-mini",
+                "openai/o3",
+                "openai/o4-mini",
+                "meta-llama/llama-4-maverick",
+                "meta-llama/llama-4-scout",
+                "qwen/qwen3-235b-a22b",
+                "deepseek/deepseek-r1",
+                "mistralai/mistral-large",
+            ]));
+        }
+        if has_openai {
+            sections.push(("OpenAI", vec![
+                "gpt-4.1",
+                "gpt-4.1-mini",
+                "gpt-4.1-nano",
+                "o3",
+                "o4-mini",
+                "gpt-4o",
+                "gpt-4o-mini",
+            ]));
+        }
+        if has_generic {
+            sections.push(("汎用 OpenAI 互換", vec![
+                "(プロバイダのモデルIDを入力)",
+            ]));
+        }
+        if sections.is_empty() {
+            sections.push(("API キー未登録", vec![
+                "設定で OpenRouter / OpenAI のキーを登録してください",
+            ]));
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .children(sections.into_iter().map(|(provider, models)| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(hex(TEXT_DIM))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(provider.to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(4.))
+                            .children(models.into_iter().map(|model_id| {
+                                let is_current = current == model_id;
+                                let id_string = model_id.to_string();
+                                div()
+                                    .px(px(8.))
+                                    .py(px(3.))
+                                    .rounded(px(4.))
+                                    .text_size(px(10.))
+                                    .bg(if is_current {
+                                        hex(ACCENT_BLUE)
+                                    } else {
+                                        hex(BORDER)
+                                    })
+                                    .text_color(if is_current {
+                                        hex(0xFFFFFF)
+                                    } else {
+                                        hex(TEXT_SECONDARY)
+                                    })
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(hex(HOVER_BG)))
+                                    .when(!model_id.starts_with('('), |d| {
+                                        d.on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                                this.chat_prefs.api_model = id_string.clone();
+                                                this.save_chat_prefs();
+                                                cx.notify();
+                                            }),
+                                        )
+                                    })
+                                    .child(model_id.to_string())
+                                    .into_any_element()
+                            })),
+                    )
+                    .into_any_element()
+            }))
+    }
+
     fn settings_chat_paste_api_model(&mut self, cx: &mut Context<Self>) {
         if let Some(item) = cx.read_from_clipboard() {
             if let Some(text) = item.text() {
@@ -2231,7 +2339,7 @@ impl AppView {
                         div()
                             .text_size(px(12.))
                             .text_color(hex(TEXT_SECONDARY))
-                            .child("クラウド API モデル ID"),
+                            .child("クラウド API モデル ID（クリックで選択）"),
                     )
                     .child(
                         div()
@@ -2244,6 +2352,8 @@ impl AppView {
                             .text_color(hex(TEXT_MUTED))
                             .child(api_disp),
                     )
+                    // モデルIDリスト（クリックで選択）
+                    .child(self.render_model_picker(cx))
                     .child(
                         div()
                             .flex()
