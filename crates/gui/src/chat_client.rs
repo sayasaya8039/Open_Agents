@@ -9,8 +9,25 @@ use crate::llama_cpp_chat;
 use crate::model_prefs::{ChatInferenceSource, ChatPrefs, HardwareParams};
 use serde_json::{json, Value};
 
-const OPENROUTER_BASE: &str = "https://openrouter.ai/api";
-const OPENAI_BASE: &str = "https://api.openai.com/v1";
+fn is_xai_multi_agent_model(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.contains("multi-agent") || model.contains("multiagent")
+}
+
+fn supports_chat_completions(provider_id: &str, model: &str) -> bool {
+    !(provider_id == "xai" && is_xai_multi_agent_model(model))
+}
+
+fn unsupported_chat_completions_message(provider_id: &str, model: &str) -> String {
+    match provider_id {
+        "xai" if is_xai_multi_agent_model(model) => format!(
+            "選択中の xAI モデル `{model}` は Chat Completions API 非対応です。xAI docs では Responses API を使う必要があります。現バージョンの Open_Agents クラウド API チャットは Chat Completions のみ対応なので、`grok-4.20-0309-reasoning` か `grok-4.20-0309-non-reasoning` などの通常モデルへ切り替えてください。"
+        ),
+        _ => format!(
+            "選択中のモデル `{model}` は現在の Chat Completions 実装では利用できません。"
+        ),
+    }
+}
 
 /// プロバイダの /v1/models エンドポイントからモデル一覧を取得（同期・重い処理）
 /// (プロバイダID, 表示ラベル, モデルID一覧)
@@ -23,14 +40,23 @@ pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, String, Vec<Stri
             continue;
         }
         let base = base_url.trim_end_matches('/');
-        let url = if base.ends_with("/v1") || base.ends_with("/v1beta/openai") || base.ends_with("/v2") {
-            format!("{base}/models")
-        } else {
-            format!("{base}/v1/models")
-        };
+        let url =
+            if base.ends_with("/v1") || base.ends_with("/v1beta/openai") || base.ends_with("/v2") {
+                format!("{base}/models")
+            } else {
+                format!("{base}/v1/models")
+            };
 
         match fetch_models_from_url(&url, key) {
-            Ok(models) if !models.is_empty() => {
+            Ok(models) => {
+                let models: Vec<String> = models
+                    .into_iter()
+                    .filter(|model| supports_chat_completions(id, model))
+                    .collect();
+                if models.is_empty() {
+                    eprintln!("models: {id} — Chat Completions で使えるモデルがありません");
+                    continue;
+                }
                 let label = match id {
                     "openrouter" => "OpenRouter",
                     "openai" => "OpenAI",
@@ -52,7 +78,6 @@ pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, String, Vec<Stri
                 };
                 results.push((id.to_string(), label.to_string(), models));
             }
-            Ok(_) => eprintln!("models: {id} — 空のレスポンス"),
             Err(e) => eprintln!("models: {id} — 取得失敗: {e}"),
         }
     }
@@ -67,7 +92,9 @@ fn fetch_models_from_url(url: &str, api_key: &str) -> Result<Vec<String>, String
         .call()
         .map_err(|e| format!("リクエスト失敗: {e}"))?;
     let status = resp.status();
-    let text = resp.into_string().map_err(|e| format!("読み取り失敗: {e}"))?;
+    let text = resp
+        .into_string()
+        .map_err(|e| format!("読み取り失敗: {e}"))?;
     if status >= 400 {
         return Err(format!("HTTP {status}"));
     }
@@ -78,7 +105,11 @@ fn fetch_models_from_url(url: &str, api_key: &str) -> Result<Vec<String>, String
         .and_then(|d| d.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()))
+                .filter_map(|item| {
+                    item.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -101,7 +132,9 @@ pub enum ChatBackend {
     },
     /// llama.cpp サーバ経由でローカル GGUF を実行。
     /// GUI では raw `/completion` を使わず、常に OpenAI 互換 `/v1/chat/completions` を使う。
-    LlamaCppLocal { path: PathBuf },
+    LlamaCppLocal {
+        path: PathBuf,
+    },
 }
 
 fn trimmed_or(s: &str, default: &str) -> String {
@@ -169,28 +202,71 @@ fn resolve_local_weights(paths: &[PathBuf], index: usize) -> Result<ChatBackend,
 /// クラウド API のみ（OpenRouter → OpenAI → 汎用 OpenAI 互換）
 /// プロバイダ ID → (ベース URL, デフォルトモデル)
 pub const PROVIDER_ENDPOINTS: &[(&str, &str, &str)] = &[
-    ("openrouter",  "https://openrouter.ai/api",        "openai/gpt-4o-mini"),
-    ("openai",      "https://api.openai.com/v1",         "gpt-4o-mini"),
-    ("anthropic",   "https://api.anthropic.com/v1",      "claude-sonnet-4-20250514"),
-    ("google_gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
-    ("groq",        "https://api.groq.com/openai/v1",    "llama-3.3-70b-versatile"),
-    ("mistral",     "https://api.mistral.ai/v1",         "mistral-large-latest"),
-    ("deepseek",    "https://api.deepseek.com",          "deepseek-chat"),
-    ("xai",         "https://api.x.ai/v1",               "grok-3-mini"),
-    ("cohere",      "https://api.cohere.com/v2",         "command-a-03-2025"),
-    ("perplexity",  "https://api.perplexity.ai",         "sonar"),
-    ("fireworks",   "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/llama4-scout-instruct-basic"),
-    ("together",    "https://api.together.xyz/v1",       "meta-llama/Llama-4-Scout-17B-16E-Instruct"),
-    ("moonshot",    "https://api.moonshot.cn/v1",        "moonshot-v1-128k"),
-    ("siliconflow", "https://api.siliconflow.cn/v1",     "deepseek-ai/DeepSeek-R1"),
-    ("novita",      "https://api.novita.ai/v3/openai",   "deepseek/deepseek-r1"),
-    ("nebius",      "https://api.studio.nebius.ai/v1",   "deepseek-r1"),
+    (
+        "openrouter",
+        "https://openrouter.ai/api",
+        "openai/gpt-4o-mini",
+    ),
+    ("openai", "https://api.openai.com/v1", "gpt-4o-mini"),
+    (
+        "anthropic",
+        "https://api.anthropic.com/v1",
+        "claude-sonnet-4-20250514",
+    ),
+    (
+        "google_gemini",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "gemini-2.5-flash",
+    ),
+    (
+        "groq",
+        "https://api.groq.com/openai/v1",
+        "llama-3.3-70b-versatile",
+    ),
+    (
+        "mistral",
+        "https://api.mistral.ai/v1",
+        "mistral-large-latest",
+    ),
+    ("deepseek", "https://api.deepseek.com", "deepseek-chat"),
+    ("xai", "https://api.x.ai/v1", "grok-3-mini"),
+    ("cohere", "https://api.cohere.com/v2", "command-a-03-2025"),
+    ("perplexity", "https://api.perplexity.ai", "sonar"),
+    (
+        "fireworks",
+        "https://api.fireworks.ai/inference/v1",
+        "accounts/fireworks/models/llama4-scout-instruct-basic",
+    ),
+    (
+        "together",
+        "https://api.together.xyz/v1",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+    ),
+    ("moonshot", "https://api.moonshot.cn/v1", "moonshot-v1-128k"),
+    (
+        "siliconflow",
+        "https://api.siliconflow.cn/v1",
+        "deepseek-ai/DeepSeek-R1",
+    ),
+    (
+        "novita",
+        "https://api.novita.ai/v3/openai",
+        "deepseek/deepseek-r1",
+    ),
+    ("nebius", "https://api.studio.nebius.ai/v1", "deepseek-r1"),
 ];
 
 /// モデルIDからプロバイダを推定（grok-* → xai, deepseek-* → deepseek 等）
 fn guess_provider_from_model(model: &str) -> Option<&'static str> {
     let m = model.to_lowercase();
-    if m.starts_with("gpt-") || m.starts_with("o3") || m.starts_with("o4") || m.starts_with("dall-e") || m.starts_with("text-") || m.starts_with("tts-") || m.starts_with("whisper") {
+    if m.starts_with("gpt-")
+        || m.starts_with("o3")
+        || m.starts_with("o4")
+        || m.starts_with("dall-e")
+        || m.starts_with("text-")
+        || m.starts_with("tts-")
+        || m.starts_with("whisper")
+    {
         return Some("openai");
     }
     if m.starts_with("claude-") {
@@ -241,10 +317,16 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
 
     // 1. 明示的または推定されたプロバイダを使う
     if !provider_id.is_empty() {
-        if let Some(&(_, base_url, default_model)) = PROVIDER_ENDPOINTS.iter().find(|(id, _, _)| *id == provider_id) {
+        if let Some(&(_, base_url, default_model)) = PROVIDER_ENDPOINTS
+            .iter()
+            .find(|(id, _, _)| *id == provider_id)
+        {
             let key = api.get_str(&provider_id);
             if !key.is_empty() {
                 let model = trimmed_or(chat_model, default_model);
+                if !supports_chat_completions(&provider_id, &model) {
+                    return Err(unsupported_chat_completions_message(&provider_id, &model));
+                }
                 return Ok(ChatBackend::OpenAiCompatible {
                     base_url: base_url.to_string(),
                     api_key: key.to_string(),
@@ -259,6 +341,9 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
         let key = api.get_str(id);
         if !key.is_empty() {
             let model = trimmed_or(chat_model, default_model);
+            if !supports_chat_completions(id, &model) {
+                return Err(unsupported_chat_completions_message(id, &model));
+            }
             return Ok(ChatBackend::OpenAiCompatible {
                 base_url: base_url.to_string(),
                 api_key: key.to_string(),
@@ -332,7 +417,10 @@ pub fn complete_chat_blocking(
             model,
         } => {
             let base = base_url.trim_end_matches('/');
-            let url = if base.ends_with("/v1") || base.ends_with("/v1beta/openai") || base.ends_with("/v2") {
+            let url = if base.ends_with("/v1")
+                || base.ends_with("/v1beta/openai")
+                || base.ends_with("/v2")
+            {
                 format!("{base}/chat/completions")
             } else {
                 format!("{base}/v1/chat/completions")
@@ -348,7 +436,10 @@ pub fn complete_chat_blocking(
                 .set("Content-Type", "application/json");
             if base_url.contains("openrouter.ai") {
                 req = req
-                    .set("HTTP-Referer", "https://github.com/sayasaya8039/Open_Agents")
+                    .set(
+                        "HTTP-Referer",
+                        "https://github.com/sayasaya8039/Open_Agents",
+                    )
                     .set("X-Title", "Open Agents");
             }
             let resp = match req.send_json(body) {
@@ -397,24 +488,21 @@ pub fn complete_chat_blocking(
             if status >= 400 {
                 return Err(format!("Ollama HTTP {status}: {text}"));
             }
-            let v: Value =
-                serde_json::from_str(&text).map_err(|e| format!("JSON 解析: {e}"))?;
+            let v: Value = serde_json::from_str(&text).map_err(|e| format!("JSON 解析: {e}"))?;
             v.pointer("/message/content")
                 .and_then(|x| x.as_str())
                 .map(|s| s.to_string())
                 .ok_or_else(|| format!("想定外の Ollama 応答: {text}"))
         }
-        ChatBackend::LlamaCppLocal { path } => {
-            llama_cpp_chat::complete_llama_cpp_chat_blocking(
-                path,
-                messages,
-                temperature,
-                max_tokens,
-                context_length,
-                hardware,
-            )
-            .map(|response| response.content)
-        }
+        ChatBackend::LlamaCppLocal { path } => llama_cpp_chat::complete_llama_cpp_chat_blocking(
+            path,
+            messages,
+            temperature,
+            max_tokens,
+            context_length,
+            hardware,
+        )
+        .map(|response| response.content),
     }
 }
 
@@ -424,7 +512,9 @@ fn extract_openai_message_content(v: &Value) -> Result<String, String> {
         .map(|s| s.to_string())
         .or_else(|| {
             // 一部プロバイダはトップレベル text
-            v.get("content").and_then(|x| x.as_str()).map(|s| s.to_string())
+            v.get("content")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
         })
         .ok_or_else(|| {
             format!(
@@ -460,11 +550,52 @@ mod tests {
         let chat = ChatPrefs::default();
         let b = resolve_chat_backend(&p, &chat, &[]).expect("backend");
         match b {
-            ChatBackend::OpenAiCompatible { base_url, model, .. } => {
+            ChatBackend::OpenAiCompatible {
+                base_url, model, ..
+            } => {
                 assert!(base_url.contains("openrouter"));
                 assert_eq!(model, "openai/gpt-4o-mini");
             }
             _ => panic!("expected openrouter"),
+        }
+    }
+
+    #[test]
+    fn xai_multi_agent_model_is_rejected_before_request() {
+        let mut p = ApiKeyPrefs::default();
+        p.set_entry("xai", "xai-key".into());
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::Api,
+            api_model: "grok-4.20-multi-agent-0309".into(),
+            api_provider: "xai".into(),
+            ..Default::default()
+        };
+
+        let err = resolve_chat_backend(&p, &chat, &[]).unwrap_err();
+        assert!(err.contains("Chat Completions API 非対応"));
+        assert!(err.contains("Responses API"));
+    }
+
+    #[test]
+    fn xai_reasoning_model_is_allowed() {
+        let mut p = ApiKeyPrefs::default();
+        p.set_entry("xai", "xai-key".into());
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::Api,
+            api_model: "grok-4.20-0309-reasoning".into(),
+            api_provider: "xai".into(),
+            ..Default::default()
+        };
+
+        let backend = resolve_chat_backend(&p, &chat, &[]).expect("backend");
+        match backend {
+            ChatBackend::OpenAiCompatible {
+                base_url, model, ..
+            } => {
+                assert_eq!(base_url, "https://api.x.ai/v1");
+                assert_eq!(model, "grok-4.20-0309-reasoning");
+            }
+            _ => panic!("expected xAI backend"),
         }
     }
 
