@@ -1,0 +1,8 @@
+{
+  "llama_cpp_tag": "b8683",
+  "llama_server_version": "b8683",
+  "platform": "windows-x64-vulkan",
+  "asset_name": "llama-b8683-bin-win-vulkan-x64.zip",
+  "source_release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b8683",
+  "llama_server_sha256": "AACEDA4E07FA05BD7819805CFE4B6DD49C362369AB217F36E960683D561DA3A5"
+}

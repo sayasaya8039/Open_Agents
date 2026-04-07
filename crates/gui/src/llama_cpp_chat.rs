@@ -17,9 +17,9 @@ use crate::{llama_cpp_runtime, model_prefs};
 // Windows Job Object: 親プロセス終了時に全子プロセスを自動終了
 #[cfg(windows)]
 fn assign_child_to_job(child: &Child) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::mem;
     use std::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[link(name = "kernel32")]
     extern "system" {
@@ -36,10 +36,14 @@ fn assign_child_to_job(child: &Child) {
 
     #[repr(C)]
     #[derive(Default)]
-    struct IoCounters { _pad: [u64; 6] }
+    struct IoCounters {
+        _pad: [u64; 6],
+    }
     #[repr(C)]
     #[derive(Default)]
-    struct BasicLimitInfo { _pad: [u64; 8] }
+    struct BasicLimitInfo {
+        _pad: [u64; 8],
+    }
     #[repr(C)]
     #[derive(Default)]
     struct ExtendedLimitInfo {
@@ -97,6 +101,7 @@ struct CachedServer {
     model_path: PathBuf,
     context_length: i32,
     hardware: model_prefs::HardwareParams,
+    launch_fingerprint: String,
     base_url: String,
     model_id: String,
     child: Child,
@@ -113,6 +118,30 @@ impl Drop for CachedServer {
 pub struct LlamaCppChatResponse {
     pub content: String,
     pub thinking: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeviceVendor {
+    Nvidia,
+    Intel,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeDevice {
+    id: String,
+    name: String,
+    vendor: DeviceVendor,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LaunchPlan {
+    runtime: llama_cpp_runtime::BundledLlamaRuntime,
+    device_csv: Option<String>,
+    split_mode: Option<&'static str>,
+    env: Vec<(OsString, OsString)>,
+    summary: String,
+    fingerprint: String,
 }
 
 fn server_cache() -> &'static Mutex<Option<CachedServer>> {
@@ -214,6 +243,15 @@ pub fn server_ready_for(
     {
         return false;
     }
+    let Ok(plans) = candidate_launch_plans(&normalized_hw) else {
+        return false;
+    };
+    if !plans
+        .iter()
+        .any(|plan| plan.fingerprint == server.launch_fingerprint)
+    {
+        return false;
+    }
     server_is_alive(server).unwrap_or(false)
 }
 
@@ -236,6 +274,7 @@ pub fn ensure_server(
     let normalized_ctx = effective_context_length(model_path, context_length);
     let normalized_path = normalize_model_path(model_path);
     let normalized_hw = launch_hardware_params(hardware);
+    let launch_plans = candidate_launch_plans(&normalized_hw)?;
     let mut cache = server_cache()
         .lock()
         .map_err(|_| "llama.cpp サーバキャッシュのロックに失敗しました".to_string())?;
@@ -245,7 +284,10 @@ pub fn ensure_server(
             && server.context_length == normalized_ctx
             && server.hardware == normalized_hw
         {
-            if server_is_alive(server)? {
+            let launch_matches = launch_plans
+                .iter()
+                .any(|plan| plan.fingerprint == server.launch_fingerprint);
+            if launch_matches && server_is_alive(server)? {
                 eprintln!(
                     "llama.cpp: warm server reused for {}",
                     normalized_path.display()
@@ -260,33 +302,59 @@ pub fn ensure_server(
         }
     }
 
-    let binary = find_llama_server_binary().ok_or_else(missing_bundled_runtime_message)?;
-    let port = pick_free_port()?;
-    let base_url = format!("http://127.0.0.1:{port}");
-    let logs = Arc::new(Mutex::new(String::new()));
-    let mut child = spawn_llama_server(
-        &binary,
-        &normalized_path,
-        port,
-        normalized_ctx,
-        &normalized_hw,
-        Arc::clone(&logs),
-    )?;
-    let model_id = wait_until_ready(&mut child, &base_url, &normalized_path, Arc::clone(&logs))?;
-    eprintln!(
-        "llama.cpp: started bundled server for {} on {}",
-        normalized_path.display(),
-        base_url
-    );
-    *cache = Some(CachedServer {
-        model_path: normalized_path,
-        context_length: normalized_ctx,
-        hardware: normalized_hw,
-        base_url: base_url.clone(),
-        model_id: model_id.clone(),
-        child,
-    });
-    Ok((base_url, model_id))
+    let mut failures = Vec::new();
+
+    for plan in launch_plans {
+        let port = pick_free_port()?;
+        let base_url = format!("http://127.0.0.1:{port}");
+        let logs = Arc::new(Mutex::new(String::new()));
+        eprintln!(
+            "llama.cpp: launch plan {} using {}",
+            plan.summary,
+            plan.runtime.binary_path.display()
+        );
+        let mut child = match spawn_llama_server(
+            &plan,
+            &normalized_path,
+            port,
+            normalized_ctx,
+            &normalized_hw,
+            Arc::clone(&logs),
+        ) {
+            Ok(child) => child,
+            Err(error) => {
+                failures.push(error);
+                continue;
+            }
+        };
+        match wait_until_ready(&mut child, &base_url, &normalized_path, Arc::clone(&logs)) {
+            Ok(model_id) => {
+                eprintln!(
+                    "llama.cpp: started bundled server for {} on {} ({})",
+                    normalized_path.display(),
+                    base_url,
+                    plan.summary
+                );
+                *cache = Some(CachedServer {
+                    model_path: normalized_path,
+                    context_length: normalized_ctx,
+                    hardware: normalized_hw,
+                    launch_fingerprint: plan.fingerprint.clone(),
+                    base_url: base_url.clone(),
+                    model_id: model_id.clone(),
+                    child,
+                });
+                return Ok((base_url, model_id));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                failures.push(format!("{}: {}", plan.summary, error));
+            }
+        }
+    }
+
+    Err(failures.join("\n\n"))
 }
 
 fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
@@ -439,6 +507,237 @@ fn launch_hardware_params(hardware: &model_prefs::HardwareParams) -> model_prefs
     h
 }
 
+fn candidate_launch_plans(
+    hardware: &model_prefs::HardwareParams,
+) -> Result<Vec<LaunchPlan>, String> {
+    let hw = launch_hardware_params(hardware);
+    match hw.llama_runtime_preset {
+        model_prefs::LlamaRuntimePreset::HighPerformance4090 => {
+            let runtime = llama_cpp_runtime::load_bundled_runtime_for_backend(
+                llama_cpp_runtime::BundledLlamaBackend::Cuda,
+            )?;
+            Ok(vec![build_cuda_single_plan(runtime, &hw)])
+        }
+        model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
+            build_hybrid_vulkan_plans(&hw)
+        }
+        model_prefs::LlamaRuntimePreset::IntelNpuEfficient => Err(
+            "Intel NPU 省電力モードは OpenVINO runtime が未同梱のため、現バージョンでは利用できません。"
+                .to_string(),
+        ),
+    }
+}
+
+fn build_hybrid_vulkan_plans(
+    hardware: &model_prefs::HardwareParams,
+) -> Result<Vec<LaunchPlan>, String> {
+    let mut plans = Vec::new();
+    let mut errors = Vec::new();
+
+    match llama_cpp_runtime::load_bundled_runtime_for_backend(
+        llama_cpp_runtime::BundledLlamaBackend::Vulkan,
+    ) {
+        Ok(runtime) => match list_runtime_devices(&runtime.binary_path) {
+            Ok(devices) => {
+                let nvidia = devices
+                    .iter()
+                    .find(|device| device.vendor == DeviceVendor::Nvidia);
+                let intel = devices
+                    .iter()
+                    .find(|device| device.vendor == DeviceVendor::Intel);
+                if let (Some(nvidia), Some(intel)) = (nvidia, intel) {
+                    plans.push(build_vulkan_hybrid_plan(
+                        runtime.clone(),
+                        &hw_device_ids([nvidia, intel]),
+                        hardware,
+                    ));
+                }
+                if let Some(nvidia) = nvidia {
+                    plans.push(build_vulkan_single_plan(runtime, &nvidia.id, hardware));
+                } else {
+                    errors.push("Vulkan runtime で NVIDIA GPU を検出できませんでした".to_string());
+                }
+            }
+            Err(error) => errors.push(error),
+        },
+        Err(error) => errors.push(error),
+    }
+
+    match llama_cpp_runtime::load_bundled_runtime_for_backend(
+        llama_cpp_runtime::BundledLlamaBackend::Cuda,
+    ) {
+        Ok(runtime) => plans.push(build_cuda_single_plan(runtime, hardware)),
+        Err(error) => errors.push(error),
+    }
+
+    if plans.is_empty() {
+        return Err(errors.join("\n"));
+    }
+    Ok(plans)
+}
+
+fn hw_device_ids<const N: usize>(devices: [&RuntimeDevice; N]) -> String {
+    devices
+        .iter()
+        .map(|device| device.id.clone())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn build_cuda_single_plan(
+    runtime: llama_cpp_runtime::BundledLlamaRuntime,
+    hardware: &model_prefs::HardwareParams,
+) -> LaunchPlan {
+    let summary = format!("{} 単独", runtime.backend.label());
+    build_launch_plan(runtime, None, None, hardware, summary)
+}
+
+fn build_vulkan_single_plan(
+    runtime: llama_cpp_runtime::BundledLlamaRuntime,
+    device_id: &str,
+    hardware: &model_prefs::HardwareParams,
+) -> LaunchPlan {
+    build_launch_plan(
+        runtime,
+        Some(device_id.to_string()),
+        None,
+        hardware,
+        "Vulkan 単独".to_string(),
+    )
+}
+
+fn build_vulkan_hybrid_plan(
+    runtime: llama_cpp_runtime::BundledLlamaRuntime,
+    device_ids: &str,
+    hardware: &model_prefs::HardwareParams,
+) -> LaunchPlan {
+    build_launch_plan(
+        runtime,
+        Some(device_ids.to_string()),
+        Some("layer"),
+        hardware,
+        "Vulkan 混成".to_string(),
+    )
+}
+
+fn build_launch_plan(
+    runtime: llama_cpp_runtime::BundledLlamaRuntime,
+    device_csv: Option<String>,
+    split_mode: Option<&'static str>,
+    hardware: &model_prefs::HardwareParams,
+    summary: String,
+) -> LaunchPlan {
+    let hw = launch_hardware_params(hardware);
+    let n_gpu_layers = if hw.gpu_acceleration {
+        hw.gpu_layers.max(0)
+    } else {
+        0
+    };
+    let fingerprint = format!(
+        "{}|{}|{}|{}|{}",
+        runtime.backend.label(),
+        runtime.binary_path.display(),
+        device_csv.clone().unwrap_or_else(|| "-".to_string()),
+        split_mode.unwrap_or("none"),
+        n_gpu_layers
+    );
+    LaunchPlan {
+        runtime,
+        device_csv,
+        split_mode,
+        env: Vec::new(),
+        summary,
+        fingerprint,
+    }
+}
+
+fn list_runtime_devices(binary: &Path) -> Result<Vec<RuntimeDevice>, String> {
+    let mut command = Command::new(binary);
+    command.arg("--list-devices");
+
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| format!("llama-server の device 列挙に失敗しました: {e}"))?;
+    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+    if !output.stderr.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    let devices = parse_list_devices_output(&text);
+    if devices.is_empty() {
+        return Err(format!(
+            "llama-server の device 列挙結果を解析できませんでした: {}",
+            text.trim()
+        ));
+    }
+    Ok(devices)
+}
+
+fn parse_list_devices_output(text: &str) -> Vec<RuntimeDevice> {
+    text.lines()
+        .filter_map(|line| {
+            let line = strip_ansi(line).trim().to_string();
+            let (id, rest) = line.split_once(':')?;
+            let id = id.trim();
+            if id.is_empty() || !id.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            let name = rest
+                .trim()
+                .split(" (")
+                .next()
+                .unwrap_or(rest.trim())
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                return None;
+            }
+            Some(RuntimeDevice {
+                id: id.to_string(),
+                vendor: detect_vendor(&name),
+                name,
+            })
+        })
+        .collect()
+}
+
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            let _ = chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn detect_vendor(name: &str) -> DeviceVendor {
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("nvidia") || lower.contains("geforce") {
+        DeviceVendor::Nvidia
+    } else if lower.contains("intel") || lower.contains("arc") {
+        DeviceVendor::Intel
+    } else {
+        DeviceVendor::Other
+    }
+}
+
 fn effective_cpu_threads(hardware: &model_prefs::HardwareParams) -> usize {
     let h = launch_hardware_params(hardware);
     let want = h.n_threads.max(1) as usize;
@@ -451,6 +750,7 @@ fn llama_server_args(
     port: u16,
     context_length: i32,
     hardware: &model_prefs::HardwareParams,
+    plan: &LaunchPlan,
 ) -> Vec<OsString> {
     let hw = launch_hardware_params(hardware);
     let threads = effective_cpu_threads(&hw);
@@ -495,27 +795,41 @@ fn llama_server_args(
         args.push(OsString::from(kv_type));
     }
 
+    if let Some(device_csv) = &plan.device_csv {
+        args.push(OsString::from("--device"));
+        args.push(OsString::from(device_csv));
+    }
+
+    if let Some(split_mode) = plan.split_mode {
+        args.push(OsString::from("--split-mode"));
+        args.push(OsString::from(split_mode));
+    }
+
     args
 }
 
 fn spawn_llama_server(
-    binary: &Path,
+    plan: &LaunchPlan,
     model_path: &Path,
     port: u16,
     context_length: i32,
     hardware: &model_prefs::HardwareParams,
     logs: Arc<Mutex<String>>,
 ) -> Result<Child, String> {
-    let mut command = Command::new(binary);
+    let mut command = Command::new(&plan.runtime.binary_path);
     command
         .args(llama_server_args(
             model_path,
             port,
             context_length,
             hardware,
+            plan,
         ))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in &plan.env {
+        command.env(key, value);
+    }
 
     #[cfg(windows)]
     {
@@ -525,7 +839,7 @@ fn spawn_llama_server(
 
     let mut child = command
         .spawn()
-        .map_err(|e| format!("llama-server の起動に失敗しました: {e}"))?;
+        .map_err(|e| format!("llama-server の起動に失敗しました ({}): {e}", plan.summary))?;
 
     // Windows: Job Object で親プロセス終了時に子プロセスも自動終了
     #[cfg(windows)]
@@ -787,22 +1101,6 @@ fn available_thread_count() -> usize {
         .unwrap_or(8)
 }
 
-fn find_llama_server_binary() -> Option<PathBuf> {
-    llama_cpp_runtime::bundled_server_binary()
-}
-
-fn missing_bundled_runtime_message() -> String {
-    let search_roots = llama_cpp_runtime::bundled_runtime_search_dirs();
-    format!(
-        "内蔵 llama-server が見つかりません。`open_agents.exe` と同じフォルダに同梱 runtime が配置されている必要があります。`cargo build --release -p open-agents-gui` をやり直すか、配布物を再配置してください。探索先: {}",
-        search_roots
-            .iter()
-            .map(|dir| dir.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,15 +1116,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_runtime_message_mentions_bundled_runtime() {
-        let msg = missing_bundled_runtime_message();
-        assert!(msg.contains("内蔵 llama-server"));
-        assert!(msg.contains("cargo build --release -p open-agents-gui"));
-    }
-
-    #[test]
     fn bundled_runtime_search_dirs_are_available() {
-        let dirs = llama_cpp_runtime::bundled_runtime_search_dirs();
+        let dirs = llama_cpp_runtime::bundled_runtime_search_dirs_for_backend(
+            llama_cpp_runtime::BundledLlamaBackend::Cuda,
+        );
         assert!(!dirs.is_empty());
     }
 
@@ -906,10 +1199,19 @@ mod tests {
     #[test]
     fn llama_server_args_enable_jinja_templates() {
         let hw = model_prefs::HardwareParams::default();
-        let args = llama_server_args(Path::new("C:/models/gemma-4.gguf"), 8080, 8192, &hw);
+        let args = llama_server_args(
+            Path::new("C:/models/gemma-4.gguf"),
+            8080,
+            8192,
+            &hw,
+            &test_launch_plan(),
+        );
         assert!(args.iter().any(|arg| arg == "--jinja"));
         assert!(args.iter().any(|arg| arg == "--batch-size"));
-        assert_eq!(arg_after(&args, "--n-gpu-layers"), Some(hw.gpu_layers.to_string()));
+        assert_eq!(
+            arg_after(&args, "--n-gpu-layers"),
+            Some(hw.gpu_layers.to_string())
+        );
     }
 
     #[test]
@@ -917,8 +1219,26 @@ mod tests {
         let mut hw = model_prefs::HardwareParams::default();
         hw.gpu_acceleration = false;
         hw.gpu_layers = 99;
-        let args = llama_server_args(Path::new("C:/models/m.gguf"), 8080, 4096, &hw);
+        let args = llama_server_args(
+            Path::new("C:/models/m.gguf"),
+            8080,
+            4096,
+            &hw,
+            &test_launch_plan(),
+        );
         assert_eq!(arg_after(&args, "--n-gpu-layers"), Some("0".to_string()));
+    }
+
+    #[test]
+    fn llama_server_args_include_device_and_split_mode_when_plan_requests_them() {
+        let hw = model_prefs::HardwareParams::default();
+        let plan = test_launch_plan_with(Some("Vulkan0,Vulkan1"), Some("layer"));
+        let args = llama_server_args(Path::new("C:/models/m.gguf"), 8080, 4096, &hw, &plan);
+        assert_eq!(
+            arg_after(&args, "--device"),
+            Some("Vulkan0,Vulkan1".to_string())
+        );
+        assert_eq!(arg_after(&args, "--split-mode"), Some("layer".to_string()));
     }
 
     fn arg_after(args: &[OsString], flag: &str) -> Option<String> {
@@ -926,6 +1246,47 @@ mod tests {
             .find(|w| w[0] == flag)
             .and_then(|w| w[1].to_str())
             .map(|s| s.to_string())
+    }
+
+    fn test_launch_plan() -> LaunchPlan {
+        test_launch_plan_with(None, None)
+    }
+
+    fn test_launch_plan_with(
+        device_csv: Option<&str>,
+        split_mode: Option<&'static str>,
+    ) -> LaunchPlan {
+        LaunchPlan {
+            runtime: llama_cpp_runtime::BundledLlamaRuntime {
+                backend: llama_cpp_runtime::BundledLlamaBackend::Cuda,
+                dir: PathBuf::from("C:/runtime"),
+                binary_path: PathBuf::from("C:/runtime/llama-server.exe"),
+                manifest: llama_cpp_runtime::BundledLlamaManifest {
+                    llama_cpp_tag: "b8678".into(),
+                    llama_server_version: "b8678".into(),
+                    platform: "windows-x64-cuda-13.1".into(),
+                    asset_name: "llama-b8678-bin-win-cuda-13.1-x64.zip".into(),
+                    source_release_url: "https://example.com".into(),
+                    llama_server_sha256: "abc".into(),
+                },
+            },
+            device_csv: device_csv.map(|value| value.to_string()),
+            split_mode,
+            env: Vec::new(),
+            summary: "test".into(),
+            fingerprint: "test".into(),
+        }
+    }
+
+    #[test]
+    fn parses_runtime_devices_from_list_devices_output() {
+        let text = "Available devices:\n  Vulkan0: NVIDIA GeForce RTX 4090 Laptop GPU (16048 MiB, 15280 MiB free)\n  Vulkan1: Intel(R) Arc(TM) Graphics (37094 MiB, 36326 MiB free)\n";
+        let devices = parse_list_devices_output(text);
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].id, "Vulkan0");
+        assert_eq!(devices[0].vendor, DeviceVendor::Nvidia);
+        assert_eq!(devices[1].id, "Vulkan1");
+        assert_eq!(devices[1].vendor, DeviceVendor::Intel);
     }
 
     #[test]

@@ -37,7 +37,7 @@ fn main() {
         .flag_if_supported("/utf-8")
         .define("NDEBUG", None)
         .define("OAG_HAS_CPU_BACKEND", "1")
-        .define("OAG_VERSION", "\"0.2.51\"")
+        .define("OAG_VERSION", "\"0.3.2\"")
         .compile("oag_core");
 
     // Link Windows libraries (for C core)
@@ -58,14 +58,27 @@ fn sync_bundled_llama_runtime(src_dir: &Path) {
     let profile_dir = profile_output_dir();
     fs::create_dir_all(&profile_dir).expect("failed to create cargo profile output directory");
 
-    for entry in fs::read_dir(src_dir).expect("failed to read bundled llama runtime directory") {
+    copy_runtime_tree(src_dir, src_dir, &profile_dir);
+}
+
+fn copy_runtime_tree(root: &Path, current: &Path, dst_root: &Path) {
+    for entry in fs::read_dir(current).expect("failed to read bundled llama runtime directory") {
         let entry = entry.expect("failed to read bundled llama runtime entry");
         let src_path = entry.path();
-        if !src_path.is_file() {
+        println!("cargo:rerun-if-changed={}", src_path.display());
+        if src_path.is_dir() {
+            copy_runtime_tree(root, &src_path, dst_root);
             continue;
         }
-        println!("cargo:rerun-if-changed={}", src_path.display());
-        let dst_path = profile_dir.join(entry.file_name());
+
+        let relative = src_path
+            .strip_prefix(root)
+            .expect("failed to compute bundled runtime relative path");
+        let dst_path = dst_root.join(relative);
+        if let Some(parent) = dst_path.parent() {
+            fs::create_dir_all(parent)
+                .expect("failed to create bundled llama runtime destination directory");
+        }
         match fs::copy(&src_path, &dst_path) {
             Ok(_) => {}
             Err(err) if files_match(&src_path, &dst_path).unwrap_or(false) => {

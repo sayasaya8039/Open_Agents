@@ -5,6 +5,37 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BundledLlamaBackend {
+    Cuda,
+    Vulkan,
+    OpenVino,
+}
+
+impl BundledLlamaBackend {
+    pub const ALL: [Self; 3] = [Self::Cuda, Self::Vulkan, Self::OpenVino];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cuda => "CUDA",
+            Self::Vulkan => "Vulkan",
+            Self::OpenVino => "OpenVINO",
+        }
+    }
+
+    pub fn dir_name(self) -> &'static str {
+        match self {
+            Self::Cuda => "cuda",
+            Self::Vulkan => "vulkan",
+            Self::OpenVino => "openvino",
+        }
+    }
+
+    fn allows_legacy_root(self) -> bool {
+        matches!(self, Self::Cuda)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct BundledLlamaManifest {
     pub llama_cpp_tag: String,
@@ -13,6 +44,21 @@ pub struct BundledLlamaManifest {
     pub asset_name: String,
     pub source_release_url: String,
     pub llama_server_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundledLlamaRuntime {
+    pub backend: BundledLlamaBackend,
+    pub dir: PathBuf,
+    pub binary_path: PathBuf,
+    pub manifest: BundledLlamaManifest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundledLlamaRuntimeStatus {
+    pub backend: BundledLlamaBackend,
+    pub manifest: Option<BundledLlamaManifest>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,29 +89,65 @@ struct GithubAssetResponse {
     browser_download_url: String,
 }
 
-pub fn bundled_server_binary() -> Option<PathBuf> {
-    resolve_dir_with_file(binary_name()).map(|dir| dir.join(binary_name()))
+pub fn bundled_runtime_search_dirs_for_backend(backend: BundledLlamaBackend) -> Vec<PathBuf> {
+    candidate_runtime_dirs_for_backend(backend)
 }
 
-pub fn bundled_runtime_search_dirs() -> Vec<PathBuf> {
-    candidate_runtime_dirs()
+pub fn load_bundled_runtime_for_backend(
+    backend: BundledLlamaBackend,
+) -> Result<BundledLlamaRuntime, String> {
+    let dir = resolve_runtime_dir_for_backend(backend).ok_or_else(|| {
+        format!(
+            "{} 向け内蔵 llama.cpp runtime が見つかりません。探索先: {}",
+            backend.label(),
+            format_search_dirs(&bundled_runtime_search_dirs_for_backend(backend))
+        )
+    })?;
+    let binary_path = dir.join(binary_name());
+    let manifest = load_manifest_from_dir(&dir, backend)?;
+    Ok(BundledLlamaRuntime {
+        backend,
+        dir,
+        binary_path,
+        manifest,
+    })
 }
 
-pub fn load_bundled_manifest() -> Result<BundledLlamaManifest, String> {
-    let path = resolve_dir_with_file("manifest.json")
-        .map(|dir| dir.join("manifest.json"))
-        .ok_or_else(|| {
-            format!(
-                "内蔵 llama.cpp manifest が見つかりません。探索先: {}",
-                format_search_dirs(&candidate_runtime_dirs())
-            )
-        })?;
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("内蔵 llama.cpp manifest の読み込みに失敗しました ({}): {e}", path.display()))?;
+pub fn probe_bundled_runtime_statuses() -> Vec<BundledLlamaRuntimeStatus> {
+    BundledLlamaBackend::ALL
+        .into_iter()
+        .map(|backend| match load_bundled_runtime_for_backend(backend) {
+            Ok(runtime) => BundledLlamaRuntimeStatus {
+                backend,
+                manifest: Some(runtime.manifest),
+                error: None,
+            },
+            Err(error) => BundledLlamaRuntimeStatus {
+                backend,
+                manifest: None,
+                error: Some(error),
+            },
+        })
+        .collect()
+}
+
+fn load_manifest_from_dir(
+    dir: &Path,
+    backend: BundledLlamaBackend,
+) -> Result<BundledLlamaManifest, String> {
+    let path = dir.join("manifest.json");
+    let raw = fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "{} 向け内蔵 llama.cpp manifest の読み込みに失敗しました ({}): {e}",
+            backend.label(),
+            path.display()
+        )
+    })?;
     serde_json::from_str(&raw).map_err(|e| {
         format!(
-            "内蔵 llama.cpp manifest の JSON 解析に失敗しました ({}): {e}",
-            path.display()
+            "{} 向け内蔵 llama.cpp manifest の JSON 解析に失敗しました ({}): {e}",
+            backend.label(),
+            path.display(),
         )
     })
 }
@@ -115,11 +197,17 @@ pub fn compute_update_notice(
     })
 }
 
-fn resolve_dir_with_file(file_name: &str) -> Option<PathBuf> {
-    resolve_dir_with_file_from_candidates(&candidate_runtime_dirs(), file_name)
+fn resolve_runtime_dir_for_backend(backend: BundledLlamaBackend) -> Option<PathBuf> {
+    candidate_runtime_dirs_for_backend(backend)
+        .into_iter()
+        .find(|dir| dir.join(binary_name()).is_file() && dir.join("manifest.json").is_file())
 }
 
-fn resolve_dir_with_file_from_candidates(candidates: &[PathBuf], file_name: &str) -> Option<PathBuf> {
+#[cfg(test)]
+fn resolve_dir_with_file_from_candidates(
+    candidates: &[PathBuf],
+    file_name: &str,
+) -> Option<PathBuf> {
     candidates
         .iter()
         .find(|dir| dir.join(file_name).is_file())
@@ -136,8 +224,21 @@ fn candidate_runtime_dirs() -> Vec<PathBuf> {
             }
         }
     }
-    let repo_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party/llama.cpp/windows-x64");
+    let repo_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party/llama.cpp/windows-x64");
     push_unique_path(&mut dirs, repo_dir);
+    dirs
+}
+
+fn candidate_runtime_dirs_for_backend(backend: BundledLlamaBackend) -> Vec<PathBuf> {
+    let roots = candidate_runtime_dirs();
+    let mut dirs = Vec::new();
+    for root in roots {
+        if backend.allows_legacy_root() {
+            push_unique_path(&mut dirs, root.clone());
+        }
+        push_unique_path(&mut dirs, root.join(backend.dir_name()));
+    }
     dirs
 }
 
@@ -191,11 +292,29 @@ mod tests {
         fs::create_dir_all(&second).unwrap();
         fs::write(second.join(binary_name()), b"stub").unwrap();
 
-        let resolved = resolve_dir_with_file_from_candidates(&[first.clone(), second.clone()], binary_name());
+        let resolved =
+            resolve_dir_with_file_from_candidates(&[first.clone(), second.clone()], binary_name());
         assert_eq!(resolved, Some(second));
 
         let _ = fs::remove_dir_all(&first);
         let _ = fs::remove_dir_all(&resolved.unwrap());
+    }
+
+    #[test]
+    fn cuda_backend_search_dirs_include_legacy_root() {
+        let dirs = bundled_runtime_search_dirs_for_backend(BundledLlamaBackend::Cuda);
+        assert!(!dirs.is_empty());
+        let repo_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party/llama.cpp/windows-x64");
+        let normalized_repo = repo_dir.canonicalize().unwrap_or(repo_dir);
+        assert!(dirs.iter().any(|dir| dir == &normalized_repo));
+    }
+
+    #[test]
+    fn vulkan_backend_search_dirs_include_subdirectory() {
+        let dirs = bundled_runtime_search_dirs_for_backend(BundledLlamaBackend::Vulkan);
+        assert!(!dirs.is_empty());
+        assert!(dirs.iter().any(|dir| dir.ends_with("vulkan")));
     }
 
     #[test]

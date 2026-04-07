@@ -1,27 +1,30 @@
+#![recursion_limit = "1024"]
+
 mod api_key_prefs;
-#[cfg(any(test, feature = "test-support"))]
-mod native_chat;
-mod llama_cpp_chat;
-mod llama_cpp_runtime;
 mod chat_client;
 mod chat_composer;
 mod chat_page;
 mod chat_session;
 mod editor;
+mod llama_cpp_chat;
+mod llama_cpp_runtime;
 mod model_prefs;
+#[cfg(any(test, feature = "test-support"))]
+mod native_chat;
 mod project_explorer;
 mod workspace_prefs;
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use project_explorer::{
-    TreeNode, absolute_path, default_expanded_set, default_sample_tree, expanded_first_level,
+    absolute_path, default_expanded_set, default_sample_tree, expanded_first_level,
     flatten_visible, path_to_segments, prune_expanded, read_tree_from_disk, unique_child_name,
+    TreeNode,
 };
 
 // ============================================================
@@ -105,13 +108,19 @@ fn chat_history_for_api(messages: &[ChatMsg]) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatMsg, ModelFormat, chat_history_for_api, human_readable_size};
+    use super::{chat_history_for_api, human_readable_size, ChatMsg, ModelFormat};
     use std::path::Path;
 
     #[test]
     fn detects_model_format_from_extension_case_insensitively() {
-        assert_eq!(ModelFormat::from_path(Path::new("model.gguf")), ModelFormat::Gguf);
-        assert_eq!(ModelFormat::from_path(Path::new("model.ONNX")), ModelFormat::Onnx);
+        assert_eq!(
+            ModelFormat::from_path(Path::new("model.gguf")),
+            ModelFormat::Gguf
+        );
+        assert_eq!(
+            ModelFormat::from_path(Path::new("model.ONNX")),
+            ModelFormat::Onnx
+        );
     }
 
     #[test]
@@ -163,8 +172,8 @@ mod tests {
     mod chat_submit_tests {
         use super::super::{chat_composer, install_chat_submit_fallback};
         use gpui::{
-            AppContext, Context, Entity, IntoElement, KeyDownEvent, Keystroke, ParentElement,
-            Render, Styled, TestAppContext, Window, div,
+            div, AppContext, Context, Entity, IntoElement, KeyDownEvent, Keystroke, ParentElement,
+            Render, Styled, TestAppContext, Window,
         };
 
         struct ChatSubmitHarness {
@@ -390,10 +399,8 @@ struct AppView {
     chat_scroll: ScrollHandle,
     /// Chat API リクエスト送信中（再送信ガード）
     chat_pending: bool,
-    /// 同梱 llama.cpp runtime manifest
-    llama_cpp_manifest: Option<llama_cpp_runtime::BundledLlamaManifest>,
-    /// 同梱 runtime 読み込み失敗時の表示用
-    llama_cpp_bundle_error: Option<String>,
+    /// backend ごとの同梱 llama.cpp runtime 状態
+    llama_cpp_runtime_statuses: Vec<llama_cpp_runtime::BundledLlamaRuntimeStatus>,
     /// GitHub Releases の更新通知
     llama_cpp_update_notice: Option<llama_cpp_runtime::LlamaCppUpdateNotice>,
 }
@@ -583,7 +590,10 @@ impl AppView {
             return;
         }
         let paths = self.settings_model_paths.clone();
-        let idx = self.chat_prefs.local_model_index.min(paths.len().saturating_sub(1));
+        let idx = self
+            .chat_prefs
+            .local_model_index
+            .min(paths.len().saturating_sub(1));
         let Some(path) = paths.get(idx).cloned() else {
             return;
         };
@@ -595,12 +605,12 @@ impl AppView {
         }
         eprintln!("llama.cpp: prewarm — バックグラウンドでサーバを事前起動します");
         cx.spawn(async move |_this, _cx| {
-            let _ = smol::unblock(move || {
-                match llama_cpp_chat::ensure_server(&path, ctx, &hw) {
+            let _ = smol::unblock(
+                move || match llama_cpp_chat::ensure_server(&path, ctx, &hw) {
                     Ok((url, model)) => eprintln!("llama.cpp: prewarm 完了 — {url} ({model})"),
                     Err(e) => eprintln!("llama.cpp: prewarm 失敗 — {e}"),
-                }
-            })
+                },
+            )
             .await;
         })
         .detach();
@@ -669,7 +679,11 @@ impl AppView {
                 parts.push(format!("選択中のファイル: {rel}"));
                 if let Ok(content) = fs::read_to_string(&abs) {
                     let truncated = if content.len() > MAX_FILE_BYTES {
-                        format!("{}…（以下省略、全{}バイト）", &content[..MAX_FILE_BYTES], content.len())
+                        format!(
+                            "{}…（以下省略、全{}バイト）",
+                            &content[..MAX_FILE_BYTES],
+                            content.len()
+                        )
                     } else {
                         content
                     };
@@ -683,7 +697,11 @@ impl AppView {
                         .take(30)
                         .map(|e| {
                             let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() { format!("  {name}/") } else { format!("  {name}") }
+                            if e.path().is_dir() {
+                                format!("  {name}/")
+                            } else {
+                                format!("  {name}")
+                            }
                         })
                         .collect();
                     if !listing.is_empty() {
@@ -695,7 +713,14 @@ impl AppView {
 
         // エクスプローラ未選択時、ワークスペースルートの主要ファイルを自動検出
         if self.explorer_selection.is_none() {
-            for name in &["CLAUDE.md", "AGENTS.md", "SKILL.md", "README.md", "Cargo.toml", "package.json"] {
+            for name in &[
+                "CLAUDE.md",
+                "AGENTS.md",
+                "SKILL.md",
+                "README.md",
+                "Cargo.toml",
+                "package.json",
+            ] {
                 let path = self.workspace_root.join(name);
                 if path.is_file() {
                     if let Ok(content) = fs::read_to_string(&path) {
@@ -719,7 +744,9 @@ impl AppView {
             if depth > 2 || lines.len() >= max {
                 return;
             }
-            let Ok(entries) = fs::read_dir(dir) else { return };
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
             let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
             entries.sort_by_key(|e| e.file_name());
             for entry in entries {
@@ -729,7 +756,10 @@ impl AppView {
                 }
                 let name = entry.file_name().to_string_lossy().to_string();
                 // .git, target, node_modules 等をスキップ
-                if matches!(name.as_str(), ".git" | "target" | "node_modules" | ".zig-cache" | "__pycache__") {
+                if matches!(
+                    name.as_str(),
+                    ".git" | "target" | "node_modules" | ".zig-cache" | "__pycache__"
+                ) {
                     continue;
                 }
                 let path = entry.path();
@@ -759,7 +789,9 @@ impl AppView {
         let work_dir = self.chat_working_directory(cx);
         let system_msg = self.build_chat_system_message(&work_dir, cx);
 
-        let session_messages = self.session_store.active()
+        let session_messages = self
+            .session_store
+            .active()
             .map(|s| &s.messages[..])
             .unwrap_or(&[]);
         let api_messages: Vec<(String, String)> = std::iter::once(("system".into(), system_msg))
@@ -797,7 +829,8 @@ impl AppView {
                         })
                         .unwrap_or(false);
                     if warm {
-                        "GGUF 応答を生成中です… 既に起動済みの llama.cpp サーバを再利用しています。".into()
+                        "GGUF 応答を生成中です… 既に起動済みの llama.cpp サーバを再利用しています。"
+                            .into()
                     } else {
                         "GGUF モデルを準備中です… 内蔵 llama.cpp サーバの初回起動には時間がかかります。大型 BF16/F16 モデルでは量子化 GGUF を推奨します。".into()
                     }
@@ -864,7 +897,11 @@ impl AppView {
                         );
                         let _ = cx.update(|app| {
                             let _ = this.update(app, |this: &mut AppView, cx| {
-                                if let Some(last) = this.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
+                                if let Some(last) = this
+                                    .session_store
+                                    .active_mut()
+                                    .and_then(|s| s.messages.last_mut())
+                                {
                                     if last.role == "assistant" {
                                         match event {
                                             ChatStreamEvent::ContentDelta(delta) => {
@@ -924,7 +961,11 @@ impl AppView {
                     let _ = cx.update(|app| {
                         let _ = this.update(app, |this: &mut AppView, cx| {
                             this.chat_pending = false;
-                            if let Some(last) = this.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
+                            if let Some(last) = this
+                                .session_store
+                                .active_mut()
+                                .and_then(|s| s.messages.last_mut())
+                            {
                                 if last.role == "assistant" {
                                     match result {
                                         Ok(reply) => apply_local_chat_response(last, reply),
@@ -958,7 +999,11 @@ impl AppView {
                     let _ = cx.update(|app| {
                         let _ = this.update(app, |this: &mut AppView, cx| {
                             this.chat_pending = false;
-                            if let Some(last) = this.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
+                            if let Some(last) = this
+                                .session_store
+                                .active_mut()
+                                .and_then(|s| s.messages.last_mut())
+                            {
                                 if last.role == "assistant" {
                                     last.content = match result {
                                         Ok(reply) => reply,
@@ -976,7 +1021,11 @@ impl AppView {
             }
             Err(err) => {
                 self.chat_pending = false;
-                if let Some(last) = self.session_store.active_mut().and_then(|s| s.messages.last_mut()) {
+                if let Some(last) = self
+                    .session_store
+                    .active_mut()
+                    .and_then(|s| s.messages.last_mut())
+                {
                     if last.role == "assistant" {
                         last.content = format!("エラー: {err}");
                     }
@@ -997,7 +1046,8 @@ impl Render for AppView {
         let content: AnyElement = match self.page {
             Page::Chat => {
                 let model_status = self.chat_model_status_line();
-                let is_local_weights = self.chat_prefs.source == model_prefs::ChatInferenceSource::LocalWeights;
+                let is_local_weights =
+                    self.chat_prefs.source == model_prefs::ChatInferenceSource::LocalWeights;
                 chat_page::render_chat_page(
                     &self.session_store,
                     self.chat_pending,
@@ -1007,7 +1057,8 @@ impl Render for AppView {
                     self.chat_composer.clone(),
                     &self.chat_scroll,
                     cx,
-                ).into_any_element()
+                )
+                .into_any_element()
             }
             Page::Settings => self.render_settings(cx).into_any_element(),
             Page::Terminal => self.render_terminal().into_any_element(),
@@ -1219,11 +1270,7 @@ impl AppView {
         let provider_id = def.id;
         let key_ref = self.api_keys.get_str(provider_id);
         let has_key = !key_ref.is_empty();
-        let reveal = self
-            .api_key_reveal
-            .get(row_idx)
-            .copied()
-            .unwrap_or(false);
+        let reveal = self.api_key_reveal.get(row_idx).copied().unwrap_or(false);
         let masked: SharedString = api_key_prefs::masked_line(key_ref, reveal).into();
         let title = def.title;
         let tag = def.env_hint;
@@ -1402,8 +1449,7 @@ impl AppView {
                             origin: point(bounds.origin.x + px(80.), bounds.origin.y),
                             size: size(bounds.size.width - px(80.), bounds.size.height),
                         };
-                        let drag_hitbox =
-                            window.insert_hitbox(drag_bounds, HitboxBehavior::Normal);
+                        let drag_hitbox = window.insert_hitbox(drag_bounds, HitboxBehavior::Normal);
 
                         let close_bounds = Bounds {
                             origin: point(bounds.origin.x + px(16.), bounds.origin.y + px(16.)),
@@ -1416,15 +1462,13 @@ impl AppView {
                             origin: point(bounds.origin.x + px(36.), bounds.origin.y + px(16.)),
                             size: size(px(12.), px(12.)),
                         };
-                        let min_hitbox =
-                            window.insert_hitbox(min_bounds, HitboxBehavior::Normal);
+                        let min_hitbox = window.insert_hitbox(min_bounds, HitboxBehavior::Normal);
 
                         let max_bounds = Bounds {
                             origin: point(bounds.origin.x + px(56.), bounds.origin.y + px(16.)),
                             size: size(px(12.), px(12.)),
                         };
-                        let max_hitbox =
-                            window.insert_hitbox(max_bounds, HitboxBehavior::Normal);
+                        let max_hitbox = window.insert_hitbox(max_bounds, HitboxBehavior::Normal);
 
                         (drag_hitbox, close_hitbox, min_hitbox, max_hitbox)
                     },
@@ -1542,7 +1586,12 @@ impl AppView {
             )
     }
 
-    fn adjust_model_param(&mut self, kind: ModelParamAdjustKind, steps: i32, cx: &mut Context<Self>) {
+    fn adjust_model_param(
+        &mut self,
+        kind: ModelParamAdjustKind,
+        steps: i32,
+        cx: &mut Context<Self>,
+    ) {
         const TEMP_STEP: f32 = 0.1;
         match kind {
             ModelParamAdjustKind::Temperature => {
@@ -1566,9 +1615,8 @@ impl AppView {
 
     fn normalize_model_params_for_chat_source(&mut self) {
         if self.chat_prefs.source == model_prefs::ChatInferenceSource::LocalWeights {
-            self.model_params.max_output_tokens = model_prefs::effective_local_max_output_tokens(
-                self.model_params.max_output_tokens,
-            );
+            self.model_params.max_output_tokens =
+                model_prefs::effective_local_max_output_tokens(self.model_params.max_output_tokens);
         }
     }
 
@@ -1613,9 +1661,8 @@ impl AppView {
         cx.notify();
         let api_keys = self.api_keys.clone();
         cx.spawn(async move |this, cx| {
-            let results = smol::unblock(move || {
-                chat_client::fetch_provider_models(&api_keys)
-            }).await;
+            let results =
+                smol::unblock(move || chat_client::fetch_provider_models(&api_keys)).await;
             let _ = cx.update(|app| {
                 let _ = this.update(app, |this: &mut AppView, cx| {
                     this.fetched_models = results;
@@ -1623,7 +1670,8 @@ impl AppView {
                     cx.notify();
                 });
             });
-        }).detach();
+        })
+        .detach();
     }
 
     /// プロバイダ別モデルIDピッカー（API取得 + フォールバック）
@@ -1634,7 +1682,8 @@ impl AppView {
         // 取得済みモデル: (provider_id, label, models)
         let sections = self.fetched_models.clone();
 
-        let has_any_key = chat_client::PROVIDER_ENDPOINTS.iter()
+        let has_any_key = chat_client::PROVIDER_ENDPOINTS
+            .iter()
             .any(|(id, _, _)| !self.api_keys.get_str(id).is_empty());
 
         div()
@@ -1651,11 +1700,19 @@ impl AppView {
                         div()
                             .px(px(10.))
                             .py(px(5.))
-                            .bg(if fetching { hex(BORDER) } else { hex(ACCENT_BLUE) })
+                            .bg(if fetching {
+                                hex(BORDER)
+                            } else {
+                                hex(ACCENT_BLUE)
+                            })
                             .rounded(px(6.))
                             .text_size(px(11.))
                             .text_color(hex(0xFFFFFF))
-                            .cursor(if fetching { CursorStyle::OperationNotAllowed } else { CursorStyle::PointingHand })
+                            .cursor(if fetching {
+                                CursorStyle::OperationNotAllowed
+                            } else {
+                                CursorStyle::PointingHand
+                            })
                             .when(!fetching, |d| {
                                 d.on_mouse_down(
                                     MouseButton::Left,
@@ -1664,18 +1721,20 @@ impl AppView {
                                     }),
                                 )
                             })
-                            .child(if fetching { "取得中…" } else { "🔄 最新モデル一覧を取得" }),
+                            .child(if fetching {
+                                "取得中…"
+                            } else {
+                                "🔄 最新モデル一覧を取得"
+                            }),
                     )
                     .when(!sections.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(hex(TEXT_MUTED))
-                                .child(format!("{}プロバイダ / {}モデル",
-                                    sections.len(),
-                                    sections.iter().map(|(_, _, m)| m.len()).sum::<usize>()
-                                )),
-                        )
+                        d.child(div().text_size(px(10.)).text_color(hex(TEXT_MUTED)).child(
+                            format!(
+                                "{}プロバイダ / {}モデル",
+                                sections.len(),
+                                sections.iter().map(|(_, _, m)| m.len()).sum::<usize>()
+                            ),
+                        ))
                     }),
             )
             .when(!has_any_key && sections.is_empty(), |d| {
@@ -1787,18 +1846,21 @@ impl AppView {
 
     fn chat_local_weights_summary(&self) -> String {
         if self.settings_model_paths.is_empty() {
-            return "モデルファイルを「ローカルLLM設定」で追加すると、ここで番号を選べます。".into();
+            return "モデルファイルを「ローカルLLM設定」で追加すると、ここで番号を選べます。"
+                .into();
         }
         let i = self
             .chat_prefs
             .local_model_index
             .min(self.settings_model_paths.len() - 1);
         let path = &self.settings_model_paths[i];
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("-");
-        format!("選択中 [{}/{}]: {}", i + 1, self.settings_model_paths.len(), name)
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("-");
+        format!(
+            "選択中 [{}/{}]: {}",
+            i + 1,
+            self.settings_model_paths.len(),
+            name
+        )
     }
 
     /// Chat ヘッダー用: 現在の推論先とモデル
@@ -1838,14 +1900,67 @@ impl AppView {
         }
     }
 
+    fn selected_runtime_backend(&self) -> llama_cpp_runtime::BundledLlamaBackend {
+        match self.hardware_params.llama_runtime_preset {
+            model_prefs::LlamaRuntimePreset::HighPerformance4090 => {
+                llama_cpp_runtime::BundledLlamaBackend::Cuda
+            }
+            model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
+                llama_cpp_runtime::BundledLlamaBackend::Vulkan
+            }
+            model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
+                llama_cpp_runtime::BundledLlamaBackend::OpenVino
+            }
+        }
+    }
+
+    fn runtime_status_for_backend(
+        &self,
+        backend: llama_cpp_runtime::BundledLlamaBackend,
+    ) -> Option<&llama_cpp_runtime::BundledLlamaRuntimeStatus> {
+        self.llama_cpp_runtime_statuses
+            .iter()
+            .find(|status| status.backend == backend)
+    }
+
+    fn selected_runtime_manifest(&self) -> Option<&llama_cpp_runtime::BundledLlamaManifest> {
+        self.runtime_status_for_backend(self.selected_runtime_backend())
+            .and_then(|status| status.manifest.as_ref())
+    }
+
+    fn selected_runtime_error(&self) -> Option<String> {
+        self.runtime_status_for_backend(self.selected_runtime_backend())
+            .and_then(|status| status.error.clone())
+    }
+
+    fn runtime_preset_is_available(&self, preset: model_prefs::LlamaRuntimePreset) -> bool {
+        let backend = match preset {
+            model_prefs::LlamaRuntimePreset::HighPerformance4090 => {
+                llama_cpp_runtime::BundledLlamaBackend::Cuda
+            }
+            model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
+                llama_cpp_runtime::BundledLlamaBackend::Vulkan
+            }
+            model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
+                llama_cpp_runtime::BundledLlamaBackend::OpenVino
+            }
+        };
+        self.runtime_status_for_backend(backend)
+            .and_then(|status| status.manifest.as_ref())
+            .is_some()
+    }
+
     fn llama_cpp_bundle_status_line(&self) -> String {
-        if let Some(manifest) = &self.llama_cpp_manifest {
+        let backend = self.selected_runtime_backend();
+        if let Some(manifest) = self.selected_runtime_manifest() {
             return format!(
-                "内蔵 llama-server: {} ({})",
-                manifest.llama_server_version, manifest.platform
+                "内蔵 llama-server [{}]: {} ({})",
+                backend.label(),
+                manifest.llama_server_version,
+                manifest.platform
             );
         }
-        "内蔵 llama-server: manifest 未検出".to_string()
+        format!("内蔵 llama-server [{}]: 未同梱", backend.label())
     }
 
     fn copy_llama_cpp_release_url(&mut self, cx: &mut Context<Self>) {
@@ -1855,7 +1970,8 @@ impl AppView {
     }
 
     fn start_llama_cpp_update_check(&mut self, cx: &mut Context<Self>) {
-        let Some(manifest) = self.llama_cpp_manifest.clone() else {
+        self.llama_cpp_update_notice = None;
+        let Some(manifest) = self.selected_runtime_manifest().cloned() else {
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -1888,7 +2004,7 @@ impl AppView {
         };
         let ollama_disp: SharedString = self.chat_prefs.ollama_model.clone().into();
         let bundle_status: SharedString = self.llama_cpp_bundle_status_line().into();
-        let bundle_error = self.llama_cpp_bundle_error.clone();
+        let bundle_error = self.selected_runtime_error();
         let update_notice = self.llama_cpp_update_notice.clone();
 
         div()
@@ -2217,9 +2333,8 @@ impl AppView {
     }
 
     fn cycle_appearance_theme(&mut self, cx: &mut Context<Self>) {
-        self.appearance_prefs.theme = model_prefs::AppearancePrefs::cycle_theme(
-            self.appearance_prefs.theme,
-        );
+        self.appearance_prefs.theme =
+            model_prefs::AppearancePrefs::cycle_theme(self.appearance_prefs.theme);
         self.appearance_prefs.clamp();
         self.persist_local_llm_prefs();
         self.sync_editor_appearance(cx);
@@ -2227,10 +2342,8 @@ impl AppView {
     }
 
     fn adjust_appearance_font(&mut self, delta: i32, cx: &mut Context<Self>) {
-        self.appearance_prefs.font_size_px = model_prefs::AppearancePrefs::step_font_size(
-            self.appearance_prefs.font_size_px,
-            delta,
-        );
+        self.appearance_prefs.font_size_px =
+            model_prefs::AppearancePrefs::step_font_size(self.appearance_prefs.font_size_px, delta);
         self.appearance_prefs.clamp();
         self.persist_local_llm_prefs();
         self.sync_editor_appearance(cx);
@@ -2365,10 +2478,7 @@ impl AppView {
             .items_center()
             .justify_between()
             .gap(px(16.))
-            .child(self.settings_labeled_block(
-                "行番号を表示",
-                "エディタ左端に行番号を表示",
-            ))
+            .child(self.settings_labeled_block("行番号を表示", "エディタ左端に行番号を表示"))
             .child(
                 div()
                     .px(px(10.))
@@ -2486,44 +2596,108 @@ impl AppView {
         cx.notify();
     }
 
-    fn settings_gpu_acceleration_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let on = self.hardware_params.gpu_acceleration;
+    fn settings_runtime_preset_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.hardware_params.llama_runtime_preset;
+        let options = model_prefs::LlamaRuntimePreset::ALL;
         div()
             .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(16.))
+            .flex_col()
+            .gap(px(10.))
             .child(self.settings_labeled_block(
-                "GPU アクセラレーション",
-                "オフのとき llama-server へ --n-gpu-layers 0（CPU のみ）。GPU ビルドを同梱したときオンで下記レイヤー数が有効になります。",
+                "実行モード",
+                "llama.cpp runtime の起動方針をプリセットで切り替えます。4090 + Arc は実験機能で、利用可能な runtime が無いモードは選択できません。",
             ))
             .child(
-                div()
-                    .px(px(10.))
-                    .py(px(4.))
-                    .rounded(px(9999.))
-                    .cursor_pointer()
-                    .bg(if on {
-                        hex_a(ACCENT_BLUE, 0.35)
+                div().flex().flex_col().gap(px(8.)).children(options.into_iter().map(|preset| {
+                    let is_selected = preset == selected;
+                    let is_available = self.runtime_preset_is_available(preset);
+                    let badge = if preset.is_experimental() {
+                        "Experimental"
+                    } else if is_available {
+                        "Available"
                     } else {
-                        hex(CONTROL_BG)
-                    })
-                    .text_size(px(11.))
-                    .text_color(if on {
-                        hex(TEXT_PRIMARY)
-                    } else {
-                        hex(TEXT_MUTED)
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                            this.hardware_params.gpu_acceleration =
-                                !this.hardware_params.gpu_acceleration;
-                            this.persist_local_llm_prefs();
-                            cx.notify();
-                        }),
-                    )
-                    .child(if on { "オン" } else { "オフ" }),
+                        "Unavailable"
+                    };
+                    div()
+                        .p(px(10.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(if is_selected {
+                            hex(ACCENT_BLUE)
+                        } else {
+                            hex(CONTROL_BORDER)
+                        })
+                        .bg(if is_selected {
+                            hex_a(ACCENT_BLUE, 0.18)
+                        } else {
+                            hex(CONTROL_BG)
+                        })
+                        .cursor_pointer()
+                        .when(!is_available, |d| d.opacity(0.55))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                if !this.runtime_preset_is_available(preset) {
+                                    return;
+                                }
+                                this.hardware_params.llama_runtime_preset = preset;
+                                this.hardware_params.gpu_acceleration = true;
+                                this.persist_local_llm_prefs();
+                                this.start_llama_cpp_update_check(cx);
+                                cx.notify();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(12.))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(4.))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(hex(TEXT_PRIMARY))
+                                                .child(preset.label()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(hex(TEXT_MUTED))
+                                                .whitespace_normal()
+                                                .child(preset.subtitle()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(10.))
+                                        .py(px(4.))
+                                        .rounded(px(9999.))
+                                        .bg(if is_selected {
+                                            hex_a(ACCENT_BLUE, 0.35)
+                                        } else if preset.is_experimental() {
+                                            hex_a(ACCENT_ORANGE, 0.2)
+                                        } else {
+                                            hex(0x2c2c2c)
+                                        })
+                                        .text_size(px(10.))
+                                        .text_color(if is_selected {
+                                            hex(TEXT_PRIMARY)
+                                        } else if is_available {
+                                            hex(TEXT_SECONDARY)
+                                        } else {
+                                            hex(TEXT_MUTED)
+                                        })
+                                        .child(badge),
+                                ),
+                        )
+                })),
             )
     }
 
@@ -2619,20 +2793,9 @@ impl AppView {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .h(px(4.))
-                    .w_full()
-                    .rounded(px(2.))
-                    .bg(hex(CONTROL_BG)),
-            );
+            .child(div().h(px(4.)).w_full().rounded(px(2.)).bg(hex(CONTROL_BG)));
         if let Some(h) = hint {
-            col = col.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(hex(TEXT_DIM))
-                    .child(h),
-            );
+            col = col.child(div().text_size(px(11.)).text_color(hex(TEXT_DIM)).child(h));
         }
         col
     }
@@ -2730,20 +2893,9 @@ impl AppView {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .h(px(4.))
-                    .w_full()
-                    .rounded(px(2.))
-                    .bg(hex(CONTROL_BG)),
-            );
+            .child(div().h(px(4.)).w_full().rounded(px(2.)).bg(hex(CONTROL_BG)));
         if let Some(h) = hint {
-            col = col.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(hex(TEXT_DIM))
-                    .child(h),
-            );
+            col = col.child(div().text_size(px(11.)).text_color(hex(TEXT_DIM)).child(h));
         }
         col
     }
@@ -2985,13 +3137,13 @@ impl AppView {
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child("ハードウェア設定"),
                                                     )
-                                                    .child(self.settings_gpu_acceleration_row(cx))
+                                                    .child(self.settings_runtime_preset_row(cx))
                                                     .child(self.settings_hardware_stepper_row(
                                                         cx,
                                                         HardwareParamAdjustKind::GpuLayers,
                                                         "GPU レイヤー数",
                                                         Some(
-                                                            "オン時に --n-gpu-layers へそのまま渡します（Vulkan / CUDA / DirectML 等の llama-server.exe 同梱時）",
+                                                            "選択中モードの llama-server に対して --n-gpu-layers へ渡します。混成モードでもレイヤー数の上限として扱います。",
                                                         ),
                                                     ))
                                                     .child(self.settings_hardware_stepper_row(
@@ -3247,11 +3399,7 @@ impl AppView {
                                 div()
                                     .flex()
                                     .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .text_color(hex(TRAFFIC_GREEN))
-                                            .child("$"),
-                                    )
+                                    .child(div().text_color(hex(TRAFFIC_GREEN)).child("$"))
                                     .child("open_agents --gpus"),
                             )
                             .child(
@@ -3263,11 +3411,7 @@ impl AppView {
                                 div()
                                     .flex()
                                     .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .text_color(hex(TRAFFIC_GREEN))
-                                            .child("$"),
-                                    )
+                                    .child(div().text_color(hex(TRAFFIC_GREEN)).child("$"))
                                     .child("_"),
                             ),
                     ),
@@ -3307,30 +3451,23 @@ fn main() {
 
                 cx.new(|cx| {
                     let workspace_root = workspace_prefs::resolve_workspace_at_launch();
-                    let (file_tree, explorer_expanded) =
-                        match read_tree_from_disk(&workspace_root) {
-                            Ok(tree) => {
-                                let exp = expanded_first_level(&tree);
-                                (tree, exp)
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "explorer: 初期読込失敗 ({e}), デモツリーを使用します"
-                                );
-                                (default_sample_tree(), default_expanded_set())
-                            }
-                        };
+                    let (file_tree, explorer_expanded) = match read_tree_from_disk(&workspace_root)
+                    {
+                        Ok(tree) => {
+                            let exp = expanded_first_level(&tree);
+                            (tree, exp)
+                        }
+                        Err(e) => {
+                            eprintln!("explorer: 初期読込失敗 ({e}), デモツリーを使用します");
+                            (default_sample_tree(), default_expanded_set())
+                        }
+                    };
                     let local_llm = model_prefs::load_local_llm_prefs();
                     let api_keys = api_key_prefs::load_api_keys();
-                    let chat_composer = cx.new(|ecx| {
-                        chat_composer::ChatComposer::new(ecx, "メッセージを入力…")
-                    });
-                    let llama_cpp_manifest_result = llama_cpp_runtime::load_bundled_manifest();
-                    let (llama_cpp_manifest, llama_cpp_bundle_error) =
-                        match llama_cpp_manifest_result {
-                            Ok(manifest) => (Some(manifest), None),
-                            Err(err) => (None, Some(err)),
-                        };
+                    let chat_composer =
+                        cx.new(|ecx| chat_composer::ChatComposer::new(ecx, "メッセージを入力…"));
+                    let llama_cpp_runtime_statuses =
+                        llama_cpp_runtime::probe_bundled_runtime_statuses();
                     cx.subscribe(
                         &chat_composer,
                         |this: &mut AppView, _, _: &chat_composer::SubmitChat, cx| {
@@ -3359,8 +3496,7 @@ fn main() {
                         chat_composer,
                         chat_scroll: ScrollHandle::new(),
                         chat_pending: false,
-                        llama_cpp_manifest,
-                        llama_cpp_bundle_error,
+                        llama_cpp_runtime_statuses,
                         llama_cpp_update_notice: None,
                     };
                     llama_cpp_chat::cleanup_orphan_servers();

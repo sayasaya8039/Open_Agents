@@ -94,11 +94,55 @@ impl KvCacheType {
     }
 }
 
+/// ローカル GGUF 実行に使う runtime プリセット
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LlamaRuntimePreset {
+    /// CUDA 版を使う通常モード
+    #[default]
+    HighPerformance4090,
+    /// Vulkan 版で NVIDIA + Intel GPU の混成を試す実験モード
+    ExperimentalHybrid4090Arc,
+    /// OpenVINO / NPU 優先の省電力モード
+    IntelNpuEfficient,
+}
+
+impl LlamaRuntimePreset {
+    pub const ALL: [Self; 3] = [
+        Self::HighPerformance4090,
+        Self::ExperimentalHybrid4090Arc,
+        Self::IntelNpuEfficient,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HighPerformance4090 => "4090 最優先",
+            Self::ExperimentalHybrid4090Arc => "4090 + Arc 実験",
+            Self::IntelNpuEfficient => "Intel NPU 省電力",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::HighPerformance4090 => "CUDA 単独で速度を優先",
+            Self::ExperimentalHybrid4090Arc => "Vulkan で NVIDIA + Intel GPU の混成を試す",
+            Self::IntelNpuEfficient => "OpenVINO / NPU 優先の省電力モード",
+        }
+    }
+
+    pub fn is_experimental(self) -> bool {
+        matches!(self, Self::ExperimentalHybrid4090Arc)
+    }
+}
+
 /// ローカル推論のハードウェア関連（内蔵 llama-server 起動時の CLI にそのまま反映）
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct HardwareParams {
+    /// llama.cpp runtime の実行プリセット
+    pub llama_runtime_preset: LlamaRuntimePreset,
     /// オフのとき常に `--n-gpu-layers 0`。オンかつ GPU 対応同梱時は `gpu_layers` が渡る。
+    #[serde(default = "default_gpu_acceleration")]
     pub gpu_acceleration: bool,
     /// `--n-gpu-layers`（Vulkan / CUDA / DirectML 等の llama-server 同梱時に有効）
     pub gpu_layers: i32,
@@ -113,7 +157,8 @@ pub struct HardwareParams {
 impl Default for HardwareParams {
     fn default() -> Self {
         Self {
-            gpu_acceleration: true,
+            llama_runtime_preset: LlamaRuntimePreset::default(),
+            gpu_acceleration: default_gpu_acceleration(),
             gpu_layers: 99,
             n_threads: 8,
             batch_size: 512,
@@ -124,7 +169,7 @@ impl Default for HardwareParams {
 
 impl HardwareParams {
     pub fn clamp(&mut self) {
-        self.gpu_layers = self.gpu_layers.clamp(0, 999);
+        self.gpu_layers = self.gpu_layers.clamp(0, 80);
         self.n_threads = self.n_threads.clamp(1, 32);
         self.batch_size = self.batch_size.clamp(128, 2048);
     }
@@ -146,6 +191,10 @@ impl HardwareParams {
             KvCacheType::Turbo2 => "turbo2",
         }
     }
+}
+
+const fn default_gpu_acceleration() -> bool {
+    true
 }
 
 /// エディタ UI テーマ（`Auto` は当面 Dark と同じ配色）
@@ -566,15 +615,21 @@ mod tests {
     #[test]
     fn hardware_sanitize_clamps() {
         let h = HardwareParams {
+            llama_runtime_preset: LlamaRuntimePreset::ExperimentalHybrid4090Arc,
             gpu_acceleration: true,
             gpu_layers: 1000,
             n_threads: 0,
             batch_size: 50,
+            kv_cache_type: KvCacheType::Q8,
         }
         .sanitize();
         assert_eq!(h.gpu_layers, 80);
         assert_eq!(h.n_threads, 1);
         assert_eq!(h.batch_size, 128);
+        assert_eq!(
+            h.llama_runtime_preset,
+            LlamaRuntimePreset::ExperimentalHybrid4090Arc
+        );
     }
 
     #[test]
@@ -608,6 +663,17 @@ mod tests {
         assert_eq!(p.appearance.theme, UiTheme::Light);
         assert_eq!(p.appearance.font_size_px, 16);
         assert!(!p.appearance.show_line_numbers);
+    }
+
+    #[test]
+    fn hardware_runtime_preset_json_roundtrip() {
+        let raw = r#"{"temperature":0.7,"max_output_tokens":2048,"context_length":4096,"hardware":{"llama_runtime_preset":"experimental_hybrid_4090_arc","gpu_layers":64,"n_threads":12,"batch_size":768,"kv_cache_type":"q8"},"appearance":{},"ai":{},"model_paths":[],"chat":{}}"#;
+        let p: LocalLlmPrefs = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            p.hardware.llama_runtime_preset,
+            LlamaRuntimePreset::ExperimentalHybrid4090Arc
+        );
+        assert_eq!(p.hardware.gpu_layers, 64);
     }
 
     #[test]
