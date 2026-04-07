@@ -3,6 +3,7 @@
 mod api_key_prefs;
 mod chat_client;
 mod chat_composer;
+mod chat_markdown;
 mod chat_page;
 mod chat_session;
 mod editor;

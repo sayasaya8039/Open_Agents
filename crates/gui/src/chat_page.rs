@@ -8,6 +8,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
+use crate::chat_markdown::render_markdown_blocks;
 use crate::chat_session::{ChatMsg, SessionStore};
 use crate::{
     hex, hex_a, ACCENT_BLUE, ACCENT_ORANGE, BG, BORDER, HOVER_BG, PANEL_BG, SIDEBAR_BG, TEXT_DIM,
@@ -400,8 +401,6 @@ fn render_message(
 ) -> impl IntoElement {
     let is_user = msg.role == "user";
     let is_last_message = message_index + 1 == total_messages;
-    // SharedString 化（clone 排除: &str → SharedString は参照コピー相当）
-    let content: SharedString = msg.content.clone().into();
     let model_label: Option<SharedString> = msg
         .metrics
         .as_ref()
@@ -500,10 +499,10 @@ fn render_message(
             .ml(px(30.))
             .w_full()
             .min_w(px(0.))
-            .text_size(px(14.))
-            .text_color(hex(TEXT_PRIMARY))
-            .whitespace_normal()
-            .child(content),
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .children(render_markdown_blocks(&msg.content)),
     );
 
     if !is_user && !metric_labels.is_empty() {

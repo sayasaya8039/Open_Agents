@@ -1,6 +1,6 @@
 [package]
 name = "open-agents-gui"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 
 [features]
@@ -21,6 +21,7 @@ image = { version = "0.25", default-features = false }
 smallvec = "1"
 unicode-segmentation = "1.11"
 ureq = { version = "2.12", features = ["json"] }
+pulldown-cmark = "0.12"
 
 [build-dependencies]
 cc = "1.2"
