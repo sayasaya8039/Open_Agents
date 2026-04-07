@@ -93,6 +93,7 @@ const MIN_CONTEXT_LENGTH: i32 = 512;
 const GEMMA4_MIN_CONTEXT_LENGTH: i32 = 8192;
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
+const GGML_SUPPORTED_TENSOR_TYPE_COUNT: u32 = 41;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -270,6 +271,7 @@ pub fn ensure_server(
 ) -> Result<(String, String), String> {
     let normalized_ctx = effective_context_length(model_path, context_length);
     let normalized_path = normalize_model_path(model_path);
+    validate_gguf_tensor_types(&normalized_path)?;
     let normalized_hw = launch_hardware_params(hardware);
     let launch_plans = candidate_launch_plans(&normalized_hw)?;
     let mut cache = server_cache()
@@ -1142,6 +1144,88 @@ fn read_gguf_architecture(path: &Path) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnsupportedTensorType {
+    tensor_name: String,
+    type_id: u32,
+}
+
+fn validate_gguf_tensor_types(path: &Path) -> Result<(), String> {
+    let unsupported = scan_gguf_unsupported_tensor_types(path)?;
+    if unsupported.is_empty() {
+        return Ok(());
+    }
+
+    let first = &unsupported[0];
+    let examples = unsupported
+        .iter()
+        .take(3)
+        .map(|tensor| format!("{} (type={})", tensor.tensor_name, tensor.type_id))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Err(format!(
+        "この GGUF は現在の Open Agents 同梱 llama.cpp runtime で未対応の tensor type を含んでいるため読み込めません。\n\
+モデル: {}\n\
+最初の未対応 tensor: {} (type={})\n\
+未対応 tensor 数: {}\n\
+例: {}\n\
+現在対応している tensor type は 0..{} 未満です。\n\
+配布元で llama.cpp 互換 GGUF を確認するか、対応済み量子化の GGUF を使用してください。",
+        path.display(),
+        first.tensor_name,
+        first.type_id,
+        unsupported.len(),
+        examples,
+        GGML_SUPPORTED_TENSOR_TYPE_COUNT,
+    ))
+}
+
+fn scan_gguf_unsupported_tensor_types(path: &Path) -> Result<Vec<UnsupportedTensorType>, String> {
+    let file = fs::File::open(path)
+        .map_err(|e| format!("GGUF を開けませんでした ({}): {e}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut magic = [0_u8; 4];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|e| format!("GGUF magic の読み取りに失敗しました: {e}"))?;
+    if magic != GGUF_MAGIC {
+        return Ok(Vec::new());
+    }
+
+    let version = read_gguf_u32(&mut reader)?;
+    if !(2..=3).contains(&version) {
+        return Ok(Vec::new());
+    }
+
+    let n_tensors = read_gguf_u64(&mut reader)?;
+    let n_kv = read_gguf_u64(&mut reader)?;
+    for _ in 0..n_kv {
+        let _key = read_gguf_string(&mut reader)?;
+        let value_type = read_gguf_u32(&mut reader)?;
+        skip_gguf_value(&mut reader, value_type)?;
+    }
+
+    let mut unsupported = Vec::new();
+    for _ in 0..n_tensors {
+        let tensor_name = read_gguf_string(&mut reader)?;
+        let n_dim = read_gguf_u32(&mut reader)?;
+        for _ in 0..n_dim {
+            let _ = read_gguf_u64(&mut reader)?;
+        }
+        let type_id = read_gguf_u32(&mut reader)?;
+        let _offset = read_gguf_u64(&mut reader)?;
+        if type_id >= GGML_SUPPORTED_TENSOR_TYPE_COUNT {
+            unsupported.push(UnsupportedTensorType {
+                tensor_name,
+                type_id,
+            });
+        }
+    }
+
+    Ok(unsupported)
+}
+
 fn read_gguf_u32<R: Read>(reader: &mut R) -> Result<u32, String> {
     let mut buf = [0_u8; 4];
     reader
@@ -1264,6 +1348,36 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    fn write_gguf_with_tensor_type(
+        path: &Path,
+        architecture: &str,
+        tensor_name: &str,
+        tensor_type: u32,
+    ) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(architecture.as_bytes());
+
+        bytes.extend_from_slice(&(tensor_name.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(tensor_name.as_bytes());
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&4_u64.to_le_bytes());
+        bytes.extend_from_slice(&8_u64.to_le_bytes());
+        bytes.extend_from_slice(&tensor_type.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+
+        fs::write(path, bytes).unwrap();
+    }
+
     #[test]
     fn gemma4_context_length_has_higher_floor() {
         let path = temp_gguf_path("gemma4_ctx");
@@ -1281,6 +1395,27 @@ mod tests {
         let path = temp_gguf_path("llama_ctx");
         write_minimal_gguf(&path, "llama");
         assert_eq!(effective_context_length(&path, 4096), 4096);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_detects_unsupported_tensor_types() {
+        let path = temp_gguf_path("unsupported_tensor");
+        write_gguf_with_tensor_type(&path, "llama", "output.weight", 41);
+        let unsupported = scan_gguf_unsupported_tensor_types(&path).unwrap();
+        assert_eq!(unsupported.len(), 1);
+        assert_eq!(unsupported[0].tensor_name, "output.weight");
+        assert_eq!(unsupported[0].type_id, 41);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_reports_friendly_error_for_unsupported_tensor_types() {
+        let path = temp_gguf_path("validate_unsupported");
+        write_gguf_with_tensor_type(&path, "llama", "output.weight", 41);
+        let error = validate_gguf_tensor_types(&path).unwrap_err();
+        assert!(error.contains("未対応の tensor type"));
+        assert!(error.contains("output.weight"));
         let _ = fs::remove_file(path);
     }
 
