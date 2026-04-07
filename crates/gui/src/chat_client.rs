@@ -351,9 +351,14 @@ pub fn complete_chat_blocking(
                     .set("HTTP-Referer", "https://github.com/sayasaya8039/Open_Agents")
                     .set("X-Title", "Open Agents");
             }
-            let resp = req
-                .send_json(body)
-                .map_err(|e| format!("リクエスト失敗: {e}"))?;
+            let resp = match req.send_json(body) {
+                Ok(r) => r,
+                Err(ureq::Error::Status(code, response)) => {
+                    let body = response.into_string().unwrap_or_default();
+                    return Err(format!("HTTP {code}: {body}"));
+                }
+                Err(e) => return Err(format!("リクエスト失敗: {e}")),
+            };
             let status = resp.status();
             let text = resp
                 .into_string()
