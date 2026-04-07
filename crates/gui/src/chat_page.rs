@@ -5,13 +5,13 @@
 //! - 可視メッセージ数を制限（末尾 MAX_VISIBLE_MESSAGES 件）
 //! - ストリーミングの notify バッチ化は呼び出し側（main.rs）で制御
 
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 
 use crate::chat_session::{ChatMsg, SessionStore};
 use crate::{
-    hex, hex_a, ACCENT_BLUE, ACCENT_ORANGE, BG, BORDER, HOVER_BG, PANEL_BG, SIDEBAR_BG,
-    TEXT_DIM, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
+    hex, hex_a, ACCENT_BLUE, ACCENT_ORANGE, BG, BORDER, HOVER_BG, PANEL_BG, SIDEBAR_BG, TEXT_DIM,
+    TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
 };
 
 /// 描画するメッセージの最大件数（パフォーマンス対策）
@@ -40,7 +40,7 @@ pub fn render_chat_page(
         .overflow_hidden()
         .bg(hex(BG))
         // 左: セッションサイドバー
-        .child(render_session_sidebar(store, cx))
+        .child(render_session_sidebar(store, chat_pending, cx))
         .child(div().w(px(1.)).h_full().bg(hex(BORDER)))
         // 右: メインチャット
         .child(render_chat_main(
@@ -59,6 +59,7 @@ pub fn render_chat_page(
 
 fn render_session_sidebar(
     store: &SessionStore,
+    chat_pending: bool,
     cx: &mut Context<crate::AppView>,
 ) -> impl IntoElement {
     let groups = store.grouped_sessions();
@@ -73,31 +74,29 @@ fn render_session_sidebar(
         .overflow_hidden()
         // New Session ボタン
         .child(
-            div()
-                .p(px(12.))
-                .child(
-                    div()
-                        .w_full()
-                        .px(px(12.))
-                        .py(px(8.))
-                        .bg(hex(ACCENT_BLUE))
-                        .rounded(px(8.))
-                        .text_size(px(12.))
-                        .text_color(hex(0xFFFFFF))
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(6.))
-                        .child("＋")
-                        .child("New Session")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                this.chat_new_session(cx);
-                            }),
-                        ),
-                ),
+            div().p(px(12.)).child(
+                div()
+                    .w_full()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .bg(hex(ACCENT_BLUE))
+                    .rounded(px(8.))
+                    .text_size(px(12.))
+                    .text_color(hex(0xFFFFFF))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.))
+                    .child("＋")
+                    .child("New Session")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.chat_new_session(cx);
+                        }),
+                    ),
+            ),
         )
         // セッション一覧（日付グループ）
         .child(
@@ -112,17 +111,45 @@ fn render_session_sidebar(
                 .flex_col()
                 .gap(px(4.))
                 .children(groups.into_iter().map(|(label, sessions)| {
+                    let label_for_delete = label;
                     div()
                         .flex()
                         .flex_col()
                         .child(
                             div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
                                 .px(px(8.))
                                 .py(px(6.))
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(hex(TEXT_DIM))
-                                .child(label.to_string()),
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(hex(TEXT_DIM))
+                                        .child(label.to_string()),
+                                )
+                                .when(!chat_pending, |d| {
+                                    d.child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .cursor_pointer()
+                                            .hover(|d| d.text_color(hex(TEXT_PRIMARY)))
+                                            .child("削除")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(
+                                                    move |this, _: &MouseDownEvent, _, cx| {
+                                                        this.chat_delete_section(
+                                                            label_for_delete,
+                                                            cx,
+                                                        );
+                                                    },
+                                                ),
+                                            ),
+                                    )
+                                }),
                         )
                         .children(sessions.into_iter().map(|session| {
                             let id = session.id;
@@ -207,10 +234,7 @@ fn render_chat_main(
     scroll_handle: &ScrollHandle,
     cx: &mut Context<crate::AppView>,
 ) -> impl IntoElement {
-    let messages: &[ChatMsg] = store
-        .active()
-        .map(|s| s.messages.as_slice())
-        .unwrap_or(&[]);
+    let messages: &[ChatMsg] = store.active().map(|s| s.messages.as_slice()).unwrap_or(&[]);
     let show_suggestions = messages.len() <= 1;
     let model_status_text: SharedString = model_status.to_string().into();
 
@@ -339,14 +363,18 @@ fn render_chat_main(
                                                 div()
                                                     .flex()
                                                     .gap(px(6.))
-                                                    .child(suggestion_chip("Reactコンポーネントを作成"))
+                                                    .child(suggestion_chip(
+                                                        "Reactコンポーネントを作成",
+                                                    ))
                                                     .child(suggestion_chip("バグを修正")),
                                             )
                                             .child(
                                                 div()
                                                     .flex()
                                                     .gap(px(6.))
-                                                    .child(suggestion_chip("コードをリファクタリング"))
+                                                    .child(suggestion_chip(
+                                                        "コードをリファクタリング",
+                                                    ))
                                                     .child(suggestion_chip("テストを追加")),
                                             ),
                                     ),
@@ -355,39 +383,40 @@ fn render_chat_main(
                         // 「過去のメッセージを読み込む」
                         .when(has_older, |d| {
                             d.child(
-                                div()
-                                    .mb(px(16.))
-                                    .py(px(8.))
-                                    .flex()
-                                    .justify_center()
-                                    .child(
-                                        div()
-                                            .px(px(12.))
-                                            .py(px(4.))
-                                            .rounded(px(6.))
-                                            .bg(hex(PANEL_BG))
-                                            .border_1()
-                                            .border_color(hex(BORDER))
-                                            .text_size(px(11.))
-                                            .text_color(hex(TEXT_MUTED))
-                                            .child(format!("↑ 過去 {skip} 件のメッセージ")),
-                                    ),
+                                div().mb(px(16.)).py(px(8.)).flex().justify_center().child(
+                                    div()
+                                        .px(px(12.))
+                                        .py(px(4.))
+                                        .rounded(px(6.))
+                                        .bg(hex(PANEL_BG))
+                                        .border_1()
+                                        .border_color(hex(BORDER))
+                                        .text_size(px(11.))
+                                        .text_color(hex(TEXT_MUTED))
+                                        .child(format!("↑ 過去 {skip} 件のメッセージ")),
+                                ),
                             )
                         })
                         // メッセージ一覧
                         .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(24.))
-                                .children(visible.iter().map(|msg| render_message(msg, chat_show_thinking))),
+                            div().flex().flex_col().gap(px(24.)).children(
+                                visible
+                                    .iter()
+                                    .map(|msg| render_message(msg, chat_show_thinking)),
+                            ),
                         )
                         // 入力バーに隠れないためのスペーサー
                         .child(div().h(px(160.)).flex_shrink_0()),
                 ),
         )
         // ── 入力バー ──
-        .child(render_input_bar(chat_pending, model_status, is_local_weights, composer, cx))
+        .child(render_input_bar(
+            chat_pending,
+            model_status,
+            is_local_weights,
+            composer,
+            cx,
+        ))
 }
 
 // ── メッセージバブル ──
@@ -454,10 +483,7 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
                     .min_w(px(0.))
                     .flex()
                     .child(
-                        div()
-                            .w(px(2.))
-                            .flex_shrink_0()
-                            .bg(hex(0xa855f7)), // PURPLE
+                        div().w(px(2.)).flex_shrink_0().bg(hex(0xa855f7)), // PURPLE
                     )
                     .child(
                         div()
@@ -599,7 +625,8 @@ fn render_input_bar(
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                                this.chat_prefs.source = this.chat_prefs.source.cycle();
+                                                this.chat_prefs.source =
+                                                    this.chat_prefs.source.cycle();
                                                 this.save_chat_prefs();
                                                 cx.notify();
                                             }),

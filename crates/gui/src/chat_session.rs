@@ -124,6 +124,29 @@ impl SessionStore {
         }
     }
 
+    /// 日付グループ単位でセッションを削除
+    pub fn delete_group(&mut self, label: &str) {
+        let now = unix_now();
+        let removed_active = self.active_id.is_some_and(|active_id| {
+            self.sessions.iter().any(|session| {
+                session.id == active_id && group_label_for(session.updated_at, now) == label
+            })
+        });
+
+        self.sessions
+            .retain(|session| group_label_for(session.updated_at, now) != label);
+
+        if self.sessions.is_empty() {
+            let session = ChatSession::new();
+            self.active_id = Some(session.id);
+            self.sessions.push(session);
+        } else if removed_active {
+            self.sessions
+                .sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+            self.active_id = Some(self.sessions[0].id);
+        }
+    }
+
     /// updated_at 降順でソート済みセッション一覧
     pub fn sorted_sessions(&self) -> Vec<&ChatSession> {
         let mut sorted: Vec<&ChatSession> = self.sessions.iter().collect();
@@ -134,21 +157,16 @@ impl SessionStore {
     /// 日付グループ分け (Today / Yesterday / Earlier)
     pub fn grouped_sessions(&self) -> Vec<(&'static str, Vec<&ChatSession>)> {
         let now = unix_now();
-        let today_start = now - (now % 86400);
-        let yesterday_start = today_start - 86400;
-
         let sorted = self.sorted_sessions();
         let mut today = Vec::new();
         let mut yesterday = Vec::new();
         let mut earlier = Vec::new();
 
         for s in sorted {
-            if s.updated_at >= today_start {
-                today.push(s);
-            } else if s.updated_at >= yesterday_start {
-                yesterday.push(s);
-            } else {
-                earlier.push(s);
+            match group_label_for(s.updated_at, now) {
+                "Today" => today.push(s),
+                "Yesterday" => yesterday.push(s),
+                _ => earlier.push(s),
             }
         }
 
@@ -209,6 +227,18 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+fn group_label_for(updated_at: i64, now: i64) -> &'static str {
+    let today_start = now - (now % 86400);
+    let yesterday_start = today_start - 86400;
+    if updated_at >= today_start {
+        "Today"
+    } else if updated_at >= yesterday_start {
+        "Yesterday"
+    } else {
+        "Earlier"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +289,47 @@ mod tests {
         let groups = store.grouped_sessions();
         assert!(!groups.is_empty());
         assert_eq!(groups[0].0, "Today");
+    }
+
+    #[test]
+    fn delete_group_removes_only_target_group_sessions() {
+        let now = unix_now();
+        let today = ChatSession {
+            id: 1,
+            title: "today".into(),
+            messages: vec![],
+            created_at: now,
+            updated_at: now,
+        };
+        let yesterday = ChatSession {
+            id: 2,
+            title: "yesterday".into(),
+            messages: vec![],
+            created_at: now - 86400,
+            updated_at: now - 86400,
+        };
+
+        let mut store = SessionStore {
+            sessions: vec![today, yesterday],
+            active_id: Some(1),
+        };
+
+        store.delete_group("Today");
+
+        assert_eq!(store.sessions.len(), 1);
+        assert_eq!(store.sessions[0].id, 2);
+        assert_eq!(store.active_id, Some(2));
+    }
+
+    #[test]
+    fn delete_group_creates_fallback_session_when_last_group_removed() {
+        let mut store = SessionStore::default();
+        let deleted_id = store.active_id.unwrap();
+
+        store.delete_group("Today");
+
+        assert_eq!(store.sessions.len(), 1);
+        assert_ne!(store.sessions[0].id, deleted_id);
+        assert_eq!(store.active_id, Some(store.sessions[0].id));
     }
 }

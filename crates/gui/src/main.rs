@@ -106,10 +106,51 @@ fn chat_history_for_api(messages: &[ChatMsg]) -> Vec<(String, String)> {
         .collect()
 }
 
+fn chat_runtime_identity_instruction(
+    chat_prefs: &model_prefs::ChatPrefs,
+    settings_model_paths: &[PathBuf],
+) -> String {
+    let runtime = match chat_prefs.source {
+        model_prefs::ChatInferenceSource::Api => {
+            let model = chat_prefs.api_model.trim();
+            if model.is_empty() {
+                "クラウド API のプロバイダ既定モデル".to_string()
+            } else {
+                format!("クラウド API の `{model}`")
+            }
+        }
+        model_prefs::ChatInferenceSource::Local => {
+            let model = chat_prefs.ollama_model.trim();
+            format!("Ollama の `{model}`")
+        }
+        model_prefs::ChatInferenceSource::LocalWeights => {
+            if settings_model_paths.is_empty() {
+                "ローカル GGUF/ONNX（モデル未登録）".to_string()
+            } else {
+                let index = chat_prefs
+                    .local_model_index
+                    .min(settings_model_paths.len().saturating_sub(1));
+                let name = settings_model_paths[index]
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("ローカルモデル");
+                format!("ローカル GGUF/ONNX の `{name}`")
+            }
+        }
+    };
+
+    format!(
+        "現在このチャットで実際に使っている推論先は {runtime} です。存在しない別モデル、隠れたマルチモデル切替、未設定のオーケストレーションを名乗ってはいけません。モデル名を聞かれたら、この設定に基づいて簡潔に答えてください。"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{chat_history_for_api, human_readable_size, ChatMsg, ModelFormat};
-    use std::path::Path;
+    use super::{
+        chat_history_for_api, chat_runtime_identity_instruction, human_readable_size, ChatMsg,
+        ModelFormat,
+    };
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn detects_model_format_from_extension_case_insensitively() {
@@ -140,6 +181,33 @@ mod tests {
         assert_eq!(human_readable_size(999), "999 B");
         assert_eq!(human_readable_size(1024), "1.0 KB");
         assert_eq!(human_readable_size(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn runtime_identity_instruction_mentions_selected_api_model() {
+        let chat = crate::model_prefs::ChatPrefs {
+            source: crate::model_prefs::ChatInferenceSource::Api,
+            api_model: "grok-4.20-0309-reasoning".into(),
+            ..Default::default()
+        };
+
+        let text = chat_runtime_identity_instruction(&chat, &[]);
+        assert!(text.contains("grok-4.20-0309-reasoning"));
+        assert!(text.contains("別モデル"));
+    }
+
+    #[test]
+    fn runtime_identity_instruction_mentions_selected_local_weights_model() {
+        let chat = crate::model_prefs::ChatPrefs {
+            source: crate::model_prefs::ChatInferenceSource::LocalWeights,
+            local_model_index: 0,
+            ..Default::default()
+        };
+        let models = vec![PathBuf::from("D:/models/gemma-4-q4.gguf")];
+
+        let text = chat_runtime_identity_instruction(&chat, &models);
+        assert!(text.contains("gemma-4-q4.gguf"));
+        assert!(text.contains("実際に使っている推論先"));
     }
 
     #[test]
@@ -652,6 +720,13 @@ impl AppView {
         cx.notify();
     }
 
+    fn chat_delete_section(&mut self, label: &'static str, cx: &mut Context<Self>) {
+        self.session_store.delete_group(label);
+        self.chat_pending = false;
+        chat_session::save_sessions(&self.session_store);
+        cx.notify();
+    }
+
     /// Chat のシステムメッセージを構築（作業ディレクトリ + ファイルツリー + 選択中ファイル内容）
     fn build_chat_system_message(&self, work_dir: &Path, cx: &mut Context<Self>) -> String {
         const MAX_FILE_BYTES: usize = 8 * 1024;
@@ -663,6 +738,10 @@ impl AppView {
              作業ディレクトリ: {}",
             self.workspace_root.display(),
             work_dir.display()
+        ));
+        parts.push(chat_runtime_identity_instruction(
+            &self.chat_prefs,
+            &self.settings_model_paths,
         ));
 
         // ワークスペースのファイルツリー（深さ2、最大50件）
