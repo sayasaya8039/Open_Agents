@@ -84,7 +84,7 @@ fn fetch_models_from_url(url: &str, api_key: &str) -> Result<Vec<String>, String
         .unwrap_or_default();
     models.sort();
     // 最大50件に制限（OpenRouter等は数千モデルあるため）
-    models.truncate(50);
+    models.truncate(30);
     Ok(models)
 }
 
@@ -187,14 +187,62 @@ pub const PROVIDER_ENDPOINTS: &[(&str, &str, &str)] = &[
     ("nebius",      "https://api.studio.nebius.ai/v1",   "deepseek-r1"),
 ];
 
+/// モデルIDからプロバイダを推定（grok-* → xai, deepseek-* → deepseek 等）
+fn guess_provider_from_model(model: &str) -> Option<&'static str> {
+    let m = model.to_lowercase();
+    if m.starts_with("gpt-") || m.starts_with("o3") || m.starts_with("o4") || m.starts_with("dall-e") || m.starts_with("text-") || m.starts_with("tts-") || m.starts_with("whisper") {
+        return Some("openai");
+    }
+    if m.starts_with("claude-") {
+        return Some("anthropic");
+    }
+    if m.starts_with("gemini-") {
+        return Some("google_gemini");
+    }
+    if m.starts_with("grok-") {
+        return Some("xai");
+    }
+    if m.starts_with("deepseek-") || m == "deepseek-chat" || m == "deepseek-reasoner" {
+        return Some("deepseek");
+    }
+    if m.starts_with("mistral-") || m.starts_with("codestral") || m.starts_with("open-mistral") {
+        return Some("mistral");
+    }
+    if m.starts_with("llama-") && (m.contains("instant") || m.contains("versatile")) {
+        return Some("groq");
+    }
+    if m.starts_with("command-") {
+        return Some("cohere");
+    }
+    if m.starts_with("sonar") {
+        return Some("perplexity");
+    }
+    if m.starts_with("moonshot-") {
+        return Some("moonshot");
+    }
+    // OpenRouter uses provider/model format
+    if m.contains('/') {
+        return Some("openrouter");
+    }
+    None
+}
+
 fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBackend, String> {
     let chat_model = chat.api_model.trim();
-    let provider_id = chat.api_provider.trim();
+    let mut provider_id = chat.api_provider.trim().to_string();
 
-    // 1. 明示的にプロバイダが指定されている場合、そのプロバイダを使う
+    // provider が空ならモデル名から推定
+    if provider_id.is_empty() && !chat_model.is_empty() {
+        if let Some(guessed) = guess_provider_from_model(chat_model) {
+            provider_id = guessed.to_string();
+            eprintln!("chat_client: api_provider 未設定 — モデル「{chat_model}」からプロバイダ「{guessed}」を推定");
+        }
+    }
+
+    // 1. 明示的または推定されたプロバイダを使う
     if !provider_id.is_empty() {
         if let Some(&(_, base_url, default_model)) = PROVIDER_ENDPOINTS.iter().find(|(id, _, _)| *id == provider_id) {
-            let key = api.get_str(provider_id);
+            let key = api.get_str(&provider_id);
             if !key.is_empty() {
                 let model = trimmed_or(chat_model, default_model);
                 return Ok(ChatBackend::OpenAiCompatible {
