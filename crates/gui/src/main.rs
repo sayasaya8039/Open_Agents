@@ -23,8 +23,7 @@ use std::path::{Path, PathBuf};
 
 use project_explorer::{
     absolute_path, default_expanded_set, default_sample_tree, expanded_first_level,
-    flatten_visible, path_to_segments, prune_expanded, read_tree_from_disk, unique_child_name,
-    TreeNode,
+    path_to_segments, prune_expanded, read_tree_from_disk, unique_child_name, TreeNode,
 };
 
 // ============================================================
@@ -741,34 +740,6 @@ impl AppView {
         cx.notify();
     }
 
-    /// Chat の作業ディレクトリ（エクスプローラ選択を最優先、なければエディタの開いているファイル、最後にワークスペースルート）
-    fn chat_working_directory(&self, cx: &mut Context<Self>) -> PathBuf {
-        let root = self
-            .workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| self.workspace_root.clone());
-
-        if let Some(segs) = &self.explorer_selection {
-            let abs = absolute_path(&self.workspace_root, segs);
-            if abs.is_dir() {
-                return abs.canonicalize().unwrap_or(abs);
-            }
-            if abs.is_file() {
-                return abs
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| root.clone());
-            }
-            if let Some(parent) = abs.parent() {
-                if !parent.as_os_str().is_empty() {
-                    return parent.to_path_buf();
-                }
-            }
-        }
-
-        root
-    }
-
     // ── llama-server プリウォーム（Chat画面切替時にバックグラウンド起動）──
 
     fn prewarm_llama_server(&mut self, cx: &mut Context<Self>) {
@@ -921,114 +892,18 @@ impl AppView {
         self.submit_chat_request(None, cx);
     }
 
-    /// Chat のシステムメッセージを構築（作業ディレクトリ + ファイルツリー + 選択中ファイル内容）
-    fn build_chat_system_message(&self, work_dir: &Path, cx: &mut Context<Self>) -> String {
-        const MAX_FILE_BYTES: usize = 8 * 1024;
-        let mut parts = Vec::new();
-
-        parts.push(format!(
-            "あなたはAIコーディングアシスタントです。ユーザーのプロジェクトファイルにアクセスできます。\n\
-             ワークスペース: {}\n\
-             作業ディレクトリ: {}",
-            self.workspace_root.display(),
-            work_dir.display()
-        ));
-        parts.push(chat_runtime_identity_instruction(
-            &self.chat_prefs,
-            &self.settings_model_paths,
-        ));
-
-        // ワークスペースのファイルツリー（深さ2、最大50件）
-        let tree_str = self.build_file_tree_summary();
-        if !tree_str.is_empty() {
-            parts.push(format!("プロジェクト構造:\n{tree_str}"));
-        }
-
-        // エクスプローラで選択中のファイル/フォルダ
-        if let Some(segs) = &self.explorer_selection {
-            let abs = absolute_path(&self.workspace_root, segs);
-            let rel = segs.join("/");
-            if abs.is_file() {
-                parts.push(format!("選択中のファイル: {rel}"));
-                if let Ok(content) = fs::read_to_string(&abs) {
-                    let truncated = if content.len() > MAX_FILE_BYTES {
-                        format!(
-                            "{}…（以下省略、全{}バイト）",
-                            &content[..MAX_FILE_BYTES],
-                            content.len()
-                        )
-                    } else {
-                        content
-                    };
-                    parts.push(format!("--- {rel} ---\n{truncated}\n--- ここまで ---"));
-                }
-            } else if abs.is_dir() {
-                parts.push(format!("選択中のフォルダ: {rel}"));
-                if let Ok(entries) = fs::read_dir(&abs) {
-                    let listing: Vec<String> = entries
-                        .filter_map(|e| e.ok())
-                        .take(30)
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() {
-                                format!("  {name}/")
-                            } else {
-                                format!("  {name}")
-                            }
-                        })
-                        .collect();
-                    if !listing.is_empty() {
-                        parts.push(format!("{rel}/ の内容:\n{}", listing.join("\n")));
-                    }
-                }
-            }
-        }
-
-        parts.join("\n\n")
-    }
-
-    /// ファイルツリーの概要（深さ2、最大50エントリ）
-    fn build_file_tree_summary(&self) -> String {
-        fn walk(dir: &Path, prefix: &str, depth: usize, lines: &mut Vec<String>, max: usize) {
-            if depth > 2 || lines.len() >= max {
-                return;
-            }
-            let Ok(entries) = fs::read_dir(dir) else {
-                return;
-            };
-            let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            entries.sort_by_key(|e| e.file_name());
-            for entry in entries {
-                if lines.len() >= max {
-                    lines.push(format!("{prefix}…"));
-                    return;
-                }
-                let name = entry.file_name().to_string_lossy().to_string();
-                // .git, target, node_modules 等をスキップ
-                if matches!(
-                    name.as_str(),
-                    ".git" | "target" | "node_modules" | ".zig-cache" | "__pycache__"
-                ) {
-                    continue;
-                }
-                let path = entry.path();
-                if path.is_dir() {
-                    lines.push(format!("{prefix}{name}/"));
-                    walk(&path, &format!("{prefix}  "), depth + 1, lines, max);
-                } else {
-                    lines.push(format!("{prefix}{name}"));
-                }
-            }
-        }
-        let mut lines = Vec::new();
-        walk(&self.workspace_root, "", 0, &mut lines, 50);
-        lines.join("\n")
+    /// Chat のシステムメッセージを構築
+    fn build_chat_system_message(&self) -> String {
+        [
+            "あなたはAIコーディングアシスタントです。".to_string(),
+            chat_runtime_identity_instruction(&self.chat_prefs, &self.settings_model_paths),
+        ]
+        .join("\n\n")
     }
 
     fn submit_chat_request(&mut self, new_user_text: Option<String>, cx: &mut Context<Self>) {
         let model_label = self.chat_message_model_label();
-        let work_dir = self.chat_working_directory(cx);
-        let system_msg = self.build_chat_system_message(&work_dir, cx);
+        let system_msg = self.build_chat_system_message();
 
         let session_messages = self
             .session_store
