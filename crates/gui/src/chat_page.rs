@@ -759,17 +759,30 @@ fn suggestion_chip(label: &str) -> impl IntoElement {
 
 fn metric_labels(metrics: &crate::chat_session::ChatMsgMetrics) -> Vec<String> {
     let mut labels = Vec::new();
-    if let Some(tokens_per_second) = metrics.tokens_per_second {
-        labels.push(format!("↯ {:.2} トークン/秒", tokens_per_second));
+    let token_count = metrics.completion_tokens.or(metrics.total_tokens);
+    if let Some(token_count) = token_count {
+        labels.push(format!("トークン数: {token_count} トークン"));
     }
-    if let Some(token_count) = metrics.completion_tokens.or(metrics.total_tokens) {
-        labels.push(format!("◎ {token_count} トークン"));
+    if let Some(tokens_per_second) =
+        metrics
+            .tokens_per_second
+            .or_else(|| match (token_count, metrics.elapsed_ms) {
+                (Some(tokens), Some(elapsed_ms)) if elapsed_ms > 0 => {
+                    Some(tokens as f64 / (elapsed_ms as f64 / 1000.0))
+                }
+                _ => None,
+            })
+    {
+        labels.push(format!(
+            "トークン毎秒: {:.2} トークン/秒",
+            tokens_per_second
+        ));
     }
     if let Some(elapsed_ms) = metrics.elapsed_ms {
-        labels.push(format!("◷ {}", format_elapsed_ms(elapsed_ms)));
+        labels.push(format!("応答時間: {}", format_elapsed_ms(elapsed_ms)));
     }
     if let Some(stop_reason) = &metrics.stop_reason {
-        labels.push(format!("■ 停止理由: {stop_reason}"));
+        labels.push(format!("停止理由: {stop_reason}"));
     }
     labels
 }
@@ -861,9 +874,21 @@ mod tests {
             stop_reason: Some("EOSトークン検出".into()),
             ..Default::default()
         });
-        assert_eq!(labels[0], "↯ 77.24 トークン/秒");
-        assert_eq!(labels[1], "◎ 66 トークン");
-        assert_eq!(labels[2], "◷ 0.43s");
-        assert_eq!(labels[3], "■ 停止理由: EOSトークン検出");
+        assert_eq!(labels[0], "トークン数: 66 トークン");
+        assert_eq!(labels[1], "トークン毎秒: 77.24 トークン/秒");
+        assert_eq!(labels[2], "応答時間: 0.43s");
+        assert_eq!(labels[3], "停止理由: EOSトークン検出");
+    }
+
+    #[test]
+    fn metric_labels_derive_tokens_per_second_from_elapsed_time() {
+        let labels = metric_labels(&crate::chat_session::ChatMsgMetrics {
+            completion_tokens: Some(40),
+            elapsed_ms: Some(500),
+            ..Default::default()
+        });
+        assert_eq!(labels[0], "トークン数: 40 トークン");
+        assert_eq!(labels[1], "トークン毎秒: 80.00 トークン/秒");
+        assert_eq!(labels[2], "応答時間: 0.50s");
     }
 }
