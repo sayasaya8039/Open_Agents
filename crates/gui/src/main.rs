@@ -217,16 +217,19 @@ mod tests {
                 role: "assistant".into(),
                 content: "こんにちは！Open Agents AIコーディングアシスタントです。".into(),
                 thinking: None,
+                metrics: None,
             },
             ChatMsg {
                 role: "user".into(),
                 content: "こんにちは".into(),
                 thinking: None,
+                metrics: None,
             },
             ChatMsg {
                 role: "assistant".into(),
                 content: "こんにちは！".into(),
                 thinking: None,
+                metrics: None,
             },
         ];
 
@@ -382,7 +385,7 @@ impl ModelFormat {
     }
 }
 
-use chat_session::ChatMsg;
+use chat_session::{ChatMsg, ChatMsgMetrics};
 
 enum ChatStreamEvent {
     ContentDelta(String),
@@ -391,8 +394,21 @@ enum ChatStreamEvent {
     Error(String),
 }
 
+fn merge_metrics(
+    existing: Option<ChatMsgMetrics>,
+    incoming: Option<ChatMsgMetrics>,
+) -> Option<ChatMsgMetrics> {
+    incoming.or(existing)
+}
+
+fn apply_chat_completion_result(msg: &mut ChatMsg, response: chat_client::ChatCompletionResult) {
+    msg.content = response.content;
+    msg.metrics = merge_metrics(msg.metrics.take(), response.metrics);
+}
+
 fn apply_local_chat_response(msg: &mut ChatMsg, response: llama_cpp_chat::LlamaCppChatResponse) {
     msg.thinking = response.thinking;
+    msg.metrics = merge_metrics(msg.metrics.take(), response.metrics);
     if response.content.is_empty() {
         if msg.thinking.is_some() {
             msg.content =
@@ -707,6 +723,35 @@ impl AppView {
         cx.notify();
     }
 
+    fn chat_message_model_label(&self) -> String {
+        match self.chat_prefs.source {
+            model_prefs::ChatInferenceSource::Api => {
+                let model = self.chat_prefs.api_model.trim();
+                if model.is_empty() {
+                    "cloud-api".to_string()
+                } else {
+                    model.to_string()
+                }
+            }
+            model_prefs::ChatInferenceSource::Local => self.chat_prefs.ollama_model.trim().into(),
+            model_prefs::ChatInferenceSource::LocalWeights => {
+                if self.settings_model_paths.is_empty() {
+                    "local-gguf".to_string()
+                } else {
+                    let index = self
+                        .chat_prefs
+                        .local_model_index
+                        .min(self.settings_model_paths.len() - 1);
+                    self.settings_model_paths[index]
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("local-gguf")
+                        .to_string()
+                }
+            }
+        }
+    }
+
     fn chat_new_session(&mut self, cx: &mut Context<Self>) {
         self.session_store.new_session();
         self.chat_pending = false;
@@ -725,6 +770,52 @@ impl AppView {
         self.chat_pending = false;
         chat_session::save_sessions(&self.session_store);
         cx.notify();
+    }
+
+    fn chat_copy_message(&mut self, content: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(content));
+    }
+
+    fn chat_delete_message(&mut self, message_index: usize, cx: &mut Context<Self>) {
+        if let Some(session) = self.session_store.active_mut() {
+            if message_index < session.messages.len() {
+                session.messages.remove(message_index);
+                session.touch();
+                chat_session::save_sessions(&self.session_store);
+                cx.notify();
+            }
+        }
+    }
+
+    fn chat_regenerate_last_reply(&mut self, cx: &mut Context<Self>) {
+        if self.chat_pending {
+            return;
+        }
+        let can_regenerate = self
+            .session_store
+            .active()
+            .and_then(|session| {
+                let last = session.messages.last()?;
+                if last.role != "assistant" {
+                    return None;
+                }
+                session
+                    .messages
+                    .iter()
+                    .rev()
+                    .skip(1)
+                    .find(|message| message.role == "user")
+                    .map(|_| ())
+            })
+            .is_some();
+        if !can_regenerate {
+            return;
+        }
+        if let Some(session) = self.session_store.active_mut() {
+            let _ = session.messages.pop();
+            session.touch();
+        }
+        self.submit_chat_request(None, cx);
     }
 
     /// Chat のシステムメッセージを構築（作業ディレクトリ + ファイルツリー + 選択中ファイル内容）
@@ -831,16 +922,8 @@ impl AppView {
         lines.join("\n")
     }
 
-    /// Chat: Enter / 送信ボタンから呼ばれ、外部 API または Ollama で応答を取得する。
-    fn on_chat_submitted(&mut self, cx: &mut Context<Self>) {
-        if self.chat_pending {
-            return;
-        }
-        let text = self.chat_composer.read(cx).text().trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-
+    fn submit_chat_request(&mut self, new_user_text: Option<String>, cx: &mut Context<Self>) {
+        let model_label = self.chat_message_model_label();
         let work_dir = self.chat_working_directory(cx);
         let system_msg = self.build_chat_system_message(&work_dir, cx);
 
@@ -849,22 +932,25 @@ impl AppView {
             .active()
             .map(|s| &s.messages[..])
             .unwrap_or(&[]);
-        let api_messages: Vec<(String, String)> = std::iter::once(("system".into(), system_msg))
-            .chain(chat_history_for_api(session_messages).into_iter())
-            .chain(std::iter::once(("user".into(), text.clone())))
-            .collect();
-
-        self.chat_composer.update(cx, |c, ecx| c.clear(ecx));
+        let mut api_messages: Vec<(String, String)> =
+            std::iter::once(("system".into(), system_msg))
+                .chain(chat_history_for_api(session_messages).into_iter())
+                .collect();
+        if let Some(text) = &new_user_text {
+            api_messages.push(("user".into(), text.clone()));
+        }
 
         if let Some(session) = self.session_store.active_mut() {
-            session.messages.push(ChatMsg {
-                role: "user".into(),
-                content: text,
-                thinking: None,
-            });
-            // 最初のユーザーメッセージでタイトル自動生成
-            if session.messages.iter().filter(|m| m.role == "user").count() == 1 {
-                session.auto_title();
+            if let Some(text) = new_user_text {
+                session.messages.push(ChatMsg {
+                    role: "user".into(),
+                    content: text,
+                    thinking: None,
+                    metrics: None,
+                });
+                if session.messages.iter().filter(|m| m.role == "user").count() == 1 {
+                    session.auto_title();
+                }
             }
             let placeholder: String = match self.chat_prefs.source {
                 model_prefs::ChatInferenceSource::LocalWeights => {
@@ -896,6 +982,10 @@ impl AppView {
                 role: "assistant".into(),
                 content: placeholder,
                 thinking: None,
+                metrics: Some(ChatMsgMetrics {
+                    model_label: Some(model_label),
+                    ..ChatMsgMetrics::default()
+                }),
             });
             session.touch();
         }
@@ -1039,17 +1129,18 @@ impl AppView {
             Ok(backend) => {
                 let hw = hardware_params.clone();
                 cx.spawn(async move |this, cx| {
-                    let result: Result<String, String> = smol::unblock(move || {
-                        chat_client::complete_chat_blocking(
-                            &backend,
-                            &api_messages,
-                            temperature,
-                            max_tokens,
-                            context_length,
-                            &hw,
-                        )
-                    })
-                    .await;
+                    let result: Result<chat_client::ChatCompletionResult, String> =
+                        smol::unblock(move || {
+                            chat_client::complete_chat_blocking(
+                                &backend,
+                                &api_messages,
+                                temperature,
+                                max_tokens,
+                                context_length,
+                                &hw,
+                            )
+                        })
+                        .await;
 
                     let _ = cx.update(|app| {
                         let _ = this.update(app, |this: &mut AppView, cx| {
@@ -1060,10 +1151,10 @@ impl AppView {
                                 .and_then(|s| s.messages.last_mut())
                             {
                                 if last.role == "assistant" {
-                                    last.content = match result {
-                                        Ok(reply) => reply,
-                                        Err(e) => format!("エラー: {e}"),
-                                    };
+                                    match result {
+                                        Ok(reply) => apply_chat_completion_result(last, reply),
+                                        Err(e) => last.content = format!("エラー: {e}"),
+                                    }
                                 }
                             }
                             chat_session::save_sessions(&this.session_store);
@@ -1089,6 +1180,19 @@ impl AppView {
                 cx.notify();
             }
         }
+    }
+
+    /// Chat: Enter / 送信ボタンから呼ばれ、外部 API または Ollama で応答を取得する。
+    fn on_chat_submitted(&mut self, cx: &mut Context<Self>) {
+        if self.chat_pending {
+            return;
+        }
+        let text = self.chat_composer.read(cx).text().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.chat_composer.update(cx, |c, ecx| c.clear(ecx));
+        self.submit_chat_request(Some(text), cx);
     }
 }
 

@@ -236,7 +236,6 @@ fn render_chat_main(
 ) -> impl IntoElement {
     let messages: &[ChatMsg] = store.active().map(|s| s.messages.as_slice()).unwrap_or(&[]);
     let show_suggestions = messages.len() <= 1;
-    let model_status_text: SharedString = model_status.to_string().into();
 
     // パフォーマンス: 末尾 MAX_VISIBLE_MESSAGES 件のみ描画
     let total = messages.len();
@@ -251,75 +250,40 @@ fn render_chat_main(
         .min_h(px(0.))
         .min_w(px(0.))
         .overflow_hidden()
-        // ── ヘッダー ──
+        // ── ミニヘッダー ──
         .child(
             div()
                 .flex_shrink_0()
-                .bg(hex(PANEL_BG))
-                .border_b_1()
-                .border_color(hex(BORDER))
+                .px(px(24.))
+                .pt(px(18.))
+                .pb(px(8.))
                 .flex()
-                .flex_col()
+                .justify_end()
                 .child(
                     div()
-                        .h(px(44.))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px(px(16.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .w(px(22.))
-                                        .h(px(22.))
-                                        .rounded(px(6.))
-                                        .bg(hex(ACCENT_ORANGE))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_size(px(11.))
-                                        .text_color(hex(0xFFFFFF))
-                                        .child("✦"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(hex(TEXT_PRIMARY))
-                                        .child("Open Agents"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(hex(TEXT_SECONDARY))
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                        this.chat_show_thinking = !this.chat_show_thinking;
-                                        this.chat_scroll.scroll_to_bottom();
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(if chat_show_thinking {
-                                    "思考を非表示"
-                                } else {
-                                    "思考を表示"
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .px(px(16.))
-                        .pb(px(6.))
+                        .px(px(10.))
+                        .py(px(4.))
+                        .rounded(px(999.))
+                        .bg(hex(PANEL_BG))
+                        .border_1()
+                        .border_color(hex(BORDER))
                         .text_size(px(10.))
                         .text_color(hex(TEXT_MUTED))
-                        .child(model_status_text),
+                        .cursor_pointer()
+                        .hover(|d| d.bg(hex(HOVER_BG)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.chat_show_thinking = !this.chat_show_thinking;
+                                this.chat_scroll.scroll_to_bottom();
+                                cx.notify();
+                            }),
+                        )
+                        .child(if chat_show_thinking {
+                            "思考: 表示"
+                        } else {
+                            "思考: 非表示"
+                        }),
                 ),
         )
         // ── メッセージエリア ──
@@ -332,11 +296,11 @@ fn render_chat_main(
                 .track_scroll(scroll_handle)
                 .child(
                     div()
-                        .max_w(px(720.))
+                        .max_w(px(860.))
                         .mx_auto()
-                        .px(px(24.))
-                        .pt(px(24.))
-                        .pb(px(200.))
+                        .px(px(32.))
+                        .pt(px(8.))
+                        .pb(px(180.))
                         .flex()
                         .flex_col()
                         // 提案チップ
@@ -398,13 +362,18 @@ fn render_chat_main(
                             )
                         })
                         // メッセージ一覧
-                        .child(
-                            div().flex().flex_col().gap(px(24.)).children(
-                                visible
-                                    .iter()
-                                    .map(|msg| render_message(msg, chat_show_thinking)),
-                            ),
-                        )
+                        .child(div().flex().flex_col().gap(px(24.)).children(
+                            visible.iter().enumerate().map(|(index, msg)| {
+                                render_message(
+                                    msg,
+                                    skip + index,
+                                    total,
+                                    chat_show_thinking,
+                                    chat_pending,
+                                    cx,
+                                )
+                            }),
+                        ))
                         // 入力バーに隠れないためのスペーサー
                         .child(div().h(px(160.)).flex_shrink_0()),
                 ),
@@ -421,10 +390,24 @@ fn render_chat_main(
 
 // ── メッセージバブル ──
 
-fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
+fn render_message(
+    msg: &ChatMsg,
+    message_index: usize,
+    total_messages: usize,
+    show_thinking: bool,
+    chat_pending: bool,
+    cx: &mut Context<crate::AppView>,
+) -> impl IntoElement {
     let is_user = msg.role == "user";
+    let is_last_message = message_index + 1 == total_messages;
     // SharedString 化（clone 排除: &str → SharedString は参照コピー相当）
     let content: SharedString = msg.content.clone().into();
+    let model_label: Option<SharedString> = msg
+        .metrics
+        .as_ref()
+        .and_then(|metrics| metrics.model_label.clone())
+        .map(Into::into);
+    let metric_labels = msg.metrics.as_ref().map(metric_labels).unwrap_or_default();
 
     let mut block = div()
         .w_full()
@@ -432,6 +415,17 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(px(10.))
+        .when(!is_user, |d| {
+            d.when_some(model_label.clone(), |d, model_label| {
+                d.child(
+                    div()
+                        .ml(px(30.))
+                        .text_size(px(11.))
+                        .text_color(hex(TEXT_MUTED))
+                        .child(model_label),
+                )
+            })
+        })
         .child(
             div()
                 .flex()
@@ -501,16 +495,64 @@ fn render_message(msg: &ChatMsg, show_thinking: bool) -> impl IntoElement {
         }
     }
 
-    block.child(
+    block = block.child(
         div()
             .ml(px(30.))
             .w_full()
             .min_w(px(0.))
-            .text_size(px(13.))
+            .text_size(px(14.))
             .text_color(hex(TEXT_PRIMARY))
             .whitespace_normal()
             .child(content),
-    )
+    );
+
+    if !is_user && !metric_labels.is_empty() {
+        block = block.child(
+            div()
+                .ml(px(30.))
+                .mt(px(2.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .flex_wrap()
+                .children(metric_labels.into_iter().map(render_metric_chip)),
+        );
+    }
+
+    if !is_user {
+        let can_regenerate = is_last_message && !chat_pending;
+        let copy_text = msg.content.clone();
+        block = block.child(
+            div()
+                .ml(px(30.))
+                .mt(px(2.))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(render_action_button(
+                    "⧉",
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.chat_copy_message(copy_text.clone(), cx);
+                    }),
+                ))
+                .child(render_action_button(
+                    "🗑",
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.chat_delete_message(message_index, cx);
+                    }),
+                ))
+                .when(can_regenerate, |d| {
+                    d.child(render_action_button(
+                        "↻",
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            this.chat_regenerate_last_reply(cx);
+                        }),
+                    ))
+                }),
+        );
+    }
+
+    block
 }
 
 // ── 入力バー ──
@@ -715,6 +757,59 @@ fn suggestion_chip(label: &str) -> impl IntoElement {
 
 // ── ヘルパー ──
 
+fn metric_labels(metrics: &crate::chat_session::ChatMsgMetrics) -> Vec<String> {
+    let mut labels = Vec::new();
+    if let Some(tokens_per_second) = metrics.tokens_per_second {
+        labels.push(format!("↯ {:.2} トークン/秒", tokens_per_second));
+    }
+    if let Some(token_count) = metrics.completion_tokens.or(metrics.total_tokens) {
+        labels.push(format!("◎ {token_count} トークン"));
+    }
+    if let Some(elapsed_ms) = metrics.elapsed_ms {
+        labels.push(format!("◷ {}", format_elapsed_ms(elapsed_ms)));
+    }
+    if let Some(stop_reason) = &metrics.stop_reason {
+        labels.push(format!("■ 停止理由: {stop_reason}"));
+    }
+    labels
+}
+
+fn render_metric_chip(label: String) -> impl IntoElement {
+    div()
+        .px(px(10.))
+        .py(px(4.))
+        .bg(hex(PANEL_BG))
+        .border_1()
+        .border_color(hex(BORDER))
+        .rounded(px(999.))
+        .text_size(px(10.))
+        .text_color(hex(TEXT_SECONDARY))
+        .child(label)
+}
+
+fn render_action_button(
+    icon: &'static str,
+    listener: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .w(px(24.))
+        .h(px(24.))
+        .rounded(px(999.))
+        .text_size(px(13.))
+        .text_color(hex(TEXT_MUTED))
+        .cursor_pointer()
+        .hover(|d| d.bg(hex(HOVER_BG)).text_color(hex(TEXT_PRIMARY)))
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, listener)
+        .child(icon)
+}
+
+fn format_elapsed_ms(elapsed_ms: u64) -> String {
+    format!("{:.2}s", elapsed_ms as f64 / 1000.0)
+}
+
 fn shorten_model_name(status: &str) -> String {
     // "Chat: クラウド API（gpt-4o-mini）" → "gpt-4o-mini"
     // "Chat: GGUF/ONNX [1/2] model.gguf" → "model.gguf"
@@ -755,5 +850,20 @@ mod tests {
     fn shorten_ollama_model() {
         let s = "Chat: Ollama（llama3.2）";
         assert_eq!(shorten_model_name(s), "llama3.2");
+    }
+
+    #[test]
+    fn metric_labels_render_expected_order() {
+        let labels = metric_labels(&crate::chat_session::ChatMsgMetrics {
+            completion_tokens: Some(66),
+            tokens_per_second: Some(77.24),
+            elapsed_ms: Some(430),
+            stop_reason: Some("EOSトークン検出".into()),
+            ..Default::default()
+        });
+        assert_eq!(labels[0], "↯ 77.24 トークン/秒");
+        assert_eq!(labels[1], "◎ 66 トークン");
+        assert_eq!(labels[2], "◷ 0.43s");
+        assert_eq!(labels[3], "■ 停止理由: EOSトークン検出");
     }
 }

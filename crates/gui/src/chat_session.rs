@@ -14,6 +14,26 @@ pub struct ChatMsg {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<ChatMsgMetrics>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ChatMsgMetrics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens_per_second: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
 }
 
 /// 1つのチャットセッション
@@ -36,6 +56,7 @@ impl ChatSession {
                 role: "assistant".into(),
                 content: "こんにちは！Open Agents AIコーディングアシスタントです。コードの作成、編集、リファクタ��ングなど、お手伝いします。".into(),
                 thinking: None,
+                metrics: None,
             }],
             created_at: now,
             updated_at: now,
@@ -257,6 +278,7 @@ mod tests {
             role: "user".into(),
             content: "Rustでファイル読み込みのコードを書いて".into(),
             thinking: None,
+            metrics: None,
         });
         s.auto_title();
         assert!(s.title.contains("Rust"));

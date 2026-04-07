@@ -3,8 +3,10 @@
 //! API キーは `api_keys.json`（`ApiKeyPrefs`）から解決する。
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::api_key_prefs::ApiKeyPrefs;
+use crate::chat_session::ChatMsgMetrics;
 use crate::llama_cpp_chat;
 use crate::model_prefs::{ChatInferenceSource, ChatPrefs, HardwareParams};
 use serde_json::{json, Value};
@@ -135,6 +137,12 @@ pub enum ChatBackend {
     LlamaCppLocal {
         path: PathBuf,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatCompletionResult {
+    pub content: String,
+    pub metrics: Option<ChatMsgMetrics>,
 }
 
 fn trimmed_or(s: &str, default: &str) -> String {
@@ -409,13 +417,14 @@ pub fn complete_chat_blocking(
     max_tokens: i32,
     context_length: i32,
     hardware: &HardwareParams,
-) -> Result<String, String> {
+) -> Result<ChatCompletionResult, String> {
     match backend {
         ChatBackend::OpenAiCompatible {
             base_url,
             api_key,
             model,
         } => {
+            let started = Instant::now();
             let base = base_url.trim_end_matches('/');
             let url = if base.ends_with("/v1")
                 || base.ends_with("/v1beta/openai")
@@ -459,9 +468,10 @@ pub fn complete_chat_blocking(
             }
             let v: Value =
                 serde_json::from_str(&text).map_err(|e| format!("JSON 解析: {e} ({text})"))?;
-            extract_openai_message_content(&v)
+            extract_openai_chat_result(&v, model, started.elapsed())
         }
         ChatBackend::Ollama { base_url, model } => {
+            let started = Instant::now();
             let url = format!("{}/api/chat", base_url);
             let ollama_msgs: Vec<Value> = messages
                 .iter()
@@ -489,10 +499,8 @@ pub fn complete_chat_blocking(
                 return Err(format!("Ollama HTTP {status}: {text}"));
             }
             let v: Value = serde_json::from_str(&text).map_err(|e| format!("JSON 解析: {e}"))?;
-            v.pointer("/message/content")
-                .and_then(|x| x.as_str())
-                .map(|s| s.to_string())
-                .ok_or_else(|| format!("想定外の Ollama 応答: {text}"))
+            extract_ollama_chat_result(&v, model, started.elapsed())
+                .map_err(|err| format!("想定外の Ollama 応答: {err}; {text}"))
         }
         ChatBackend::LlamaCppLocal { path } => llama_cpp_chat::complete_llama_cpp_chat_blocking(
             path,
@@ -502,7 +510,10 @@ pub fn complete_chat_blocking(
             context_length,
             hardware,
         )
-        .map(|response| response.content),
+        .map(|response| ChatCompletionResult {
+            content: response.content,
+            metrics: response.metrics,
+        }),
     }
 }
 
@@ -524,12 +535,117 @@ fn extract_openai_message_content(v: &Value) -> Result<String, String> {
         })
 }
 
+fn extract_openai_chat_result(
+    v: &Value,
+    model: &str,
+    elapsed: Duration,
+) -> Result<ChatCompletionResult, String> {
+    let content = extract_openai_message_content(v)?;
+    let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+    let prompt_tokens = value_to_u32(v.pointer("/usage/prompt_tokens"));
+    let completion_tokens = value_to_u32(v.pointer("/usage/completion_tokens"));
+    let total_tokens = value_to_u32(v.pointer("/usage/total_tokens"));
+    let stop_reason = v
+        .pointer("/choices/0/finish_reason")
+        .and_then(|value| value.as_str())
+        .map(normalize_stop_reason);
+    let tokens_per_second = tokens_per_second(completion_tokens, elapsed_ms);
+
+    Ok(ChatCompletionResult {
+        content,
+        metrics: Some(ChatMsgMetrics {
+            model_label: Some(model.to_string()),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            tokens_per_second,
+            elapsed_ms: Some(elapsed_ms),
+            stop_reason,
+        }),
+    })
+}
+
+fn extract_ollama_chat_result(
+    v: &Value,
+    model: &str,
+    elapsed: Duration,
+) -> Result<ChatCompletionResult, String> {
+    let content = v
+        .pointer("/message/content")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "missing message.content".to_string())?;
+    let prompt_tokens = value_to_u32(v.pointer("/prompt_eval_count"));
+    let completion_tokens = value_to_u32(v.pointer("/eval_count"));
+    let total_tokens = match (prompt_tokens, completion_tokens) {
+        (Some(prompt), Some(completion)) => prompt.checked_add(completion),
+        _ => None,
+    };
+    let elapsed_ms = duration_ns_to_ms(v.pointer("/total_duration"))
+        .unwrap_or_else(|| elapsed.as_millis().min(u128::from(u64::MAX)) as u64);
+    let eval_ms = duration_ns_to_ms(v.pointer("/eval_duration"));
+    let tokens_per_second = match (completion_tokens, eval_ms) {
+        (Some(tokens), Some(ms)) if ms > 0 => Some(tokens as f64 / (ms as f64 / 1000.0)),
+        _ => tokens_per_second(completion_tokens, elapsed_ms),
+    };
+    let stop_reason = v
+        .pointer("/done_reason")
+        .and_then(|value| value.as_str())
+        .map(normalize_stop_reason);
+
+    Ok(ChatCompletionResult {
+        content,
+        metrics: Some(ChatMsgMetrics {
+            model_label: Some(model.to_string()),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            tokens_per_second,
+            elapsed_ms: Some(elapsed_ms),
+            stop_reason,
+        }),
+    })
+}
+
+fn value_to_u32(value: Option<&Value>) -> Option<u32> {
+    value
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+fn duration_ns_to_ms(value: Option<&Value>) -> Option<u64> {
+    value
+        .and_then(|value| value.as_u64())
+        .map(|value| value / 1_000_000)
+}
+
+fn tokens_per_second(tokens: Option<u32>, elapsed_ms: u64) -> Option<f64> {
+    match (tokens, elapsed_ms) {
+        (Some(tokens), elapsed_ms) if elapsed_ms > 0 => {
+            Some(tokens as f64 / (elapsed_ms as f64 / 1000.0))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_stop_reason(reason: &str) -> String {
+    match reason.trim().to_ascii_lowercase().as_str() {
+        "stop" => "EOSトークン検出".to_string(),
+        "length" => "最大トークン到達".to_string(),
+        "tool_calls" => "ツール呼び出し".to_string(),
+        "content_filter" => "コンテンツフィルタ".to_string(),
+        other if other.is_empty() => "完了".to_string(),
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_model_path(name: &str) -> PathBuf {
@@ -612,6 +728,65 @@ mod tests {
             ChatBackend::Ollama { model, .. } => assert_eq!(model, "llama3.2"),
             _ => panic!("expected ollama"),
         }
+    }
+
+    #[test]
+    fn openai_response_extracts_metrics_and_stop_reason() {
+        let value: Value = serde_json::from_str(
+            r#"{
+                "choices":[{"message":{"content":"こんにちは"},"finish_reason":"stop"}],
+                "usage":{"prompt_tokens":12,"completion_tokens":66,"total_tokens":78}
+            }"#,
+        )
+        .unwrap();
+
+        let result = extract_openai_chat_result(
+            &value,
+            "grok-4.20-0309-reasoning",
+            Duration::from_millis(430),
+        )
+        .expect("result");
+
+        assert_eq!(result.content, "こんにちは");
+        let metrics = result.metrics.expect("metrics");
+        assert_eq!(
+            metrics.model_label.as_deref(),
+            Some("grok-4.20-0309-reasoning")
+        );
+        assert_eq!(metrics.prompt_tokens, Some(12));
+        assert_eq!(metrics.completion_tokens, Some(66));
+        assert_eq!(metrics.total_tokens, Some(78));
+        assert_eq!(metrics.stop_reason.as_deref(), Some("EOSトークン検出"));
+        assert_eq!(metrics.elapsed_ms, Some(430));
+        assert!(metrics.tokens_per_second.unwrap_or_default() > 100.0);
+    }
+
+    #[test]
+    fn ollama_response_extracts_eval_metrics() {
+        let value: Value = serde_json::from_str(
+            r#"{
+                "message":{"content":"了解です"},
+                "prompt_eval_count":42,
+                "eval_count":66,
+                "total_duration":430000000,
+                "eval_duration":300000000,
+                "done_reason":"stop"
+            }"#,
+        )
+        .unwrap();
+
+        let result =
+            extract_ollama_chat_result(&value, "gemma-4-e4b-it", Duration::from_millis(430))
+                .expect("result");
+
+        assert_eq!(result.content, "了解です");
+        let metrics = result.metrics.expect("metrics");
+        assert_eq!(metrics.model_label.as_deref(), Some("gemma-4-e4b-it"));
+        assert_eq!(metrics.prompt_tokens, Some(42));
+        assert_eq!(metrics.completion_tokens, Some(66));
+        assert_eq!(metrics.stop_reason.as_deref(), Some("EOSトークン検出"));
+        assert_eq!(metrics.elapsed_ms, Some(430));
+        assert!(metrics.tokens_per_second.unwrap_or_default() > 200.0);
     }
 
     #[test]

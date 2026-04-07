@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::{llama_cpp_runtime, model_prefs};
+use crate::{chat_session::ChatMsgMetrics, llama_cpp_runtime, model_prefs};
 
 // Windows Job Object: 親プロセス終了時に全子プロセスを自動終了
 #[cfg(windows)]
@@ -118,6 +118,7 @@ impl Drop for CachedServer {
 pub struct LlamaCppChatResponse {
     pub content: String,
     pub thinking: Option<String>,
+    pub metrics: Option<ChatMsgMetrics>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +159,7 @@ pub fn complete_llama_cpp_chat_blocking(
     hardware: &model_prefs::HardwareParams,
 ) -> Result<LlamaCppChatResponse, String> {
     let (base_url, model_id) = ensure_server(model_path, context_length, hardware)?;
+    let started = Instant::now();
     let max_tokens = normalize_max_tokens(max_tokens);
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, false, max_tokens);
@@ -179,7 +181,7 @@ pub fn complete_llama_cpp_chat_blocking(
     if status >= 400 {
         return Err(format!("llama.cpp HTTP {status}: {text}"));
     }
-    extract_openai_message(&text)
+    extract_openai_message(&text, model_label_from_path(model_path), started.elapsed())
 }
 
 pub fn stream_llama_cpp_chat_blocking<F, G>(
@@ -197,6 +199,7 @@ where
     G: FnMut(&str),
 {
     let (base_url, model_id) = ensure_server(model_path, context_length, hardware)?;
+    let started = Instant::now();
     let max_tokens = normalize_max_tokens(max_tokens);
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, true, max_tokens);
@@ -220,7 +223,13 @@ where
         return Err(format!("llama.cpp HTTP {status}: {text}"));
     }
     let reader = resp.into_reader();
-    read_streaming_response(reader, &mut on_content_delta, &mut on_thinking_delta)
+    read_streaming_response(
+        reader,
+        model_label_from_path(model_path),
+        || started.elapsed(),
+        &mut on_content_delta,
+        &mut on_thinking_delta,
+    )
 }
 
 pub fn server_ready_for(
@@ -369,7 +378,11 @@ fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
         .collect()
 }
 
-fn extract_openai_message(text: &str) -> Result<LlamaCppChatResponse, String> {
+fn extract_openai_message(
+    text: &str,
+    model_label: String,
+    elapsed: Duration,
+) -> Result<LlamaCppChatResponse, String> {
     let v: Value = serde_json::from_str(text)
         .map_err(|e| format!("llama.cpp JSON 解析に失敗しました: {e} ({text})"))?;
     let content = v
@@ -392,11 +405,33 @@ fn extract_openai_message(text: &str) -> Result<LlamaCppChatResponse, String> {
             "choices[0].message.content / reasoning_content がありません: {text}"
         ));
     }
-    Ok(LlamaCppChatResponse { content, thinking })
+    let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+    let prompt_tokens = value_to_u32(v.pointer("/usage/prompt_tokens"));
+    let completion_tokens = value_to_u32(v.pointer("/usage/completion_tokens"));
+    let total_tokens = value_to_u32(v.pointer("/usage/total_tokens"));
+    let stop_reason = v
+        .pointer("/choices/0/finish_reason")
+        .and_then(|value| value.as_str())
+        .map(normalize_stop_reason);
+    Ok(LlamaCppChatResponse {
+        content,
+        thinking,
+        metrics: Some(ChatMsgMetrics {
+            model_label: Some(model_label),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            tokens_per_second: tokens_per_second(completion_tokens, elapsed_ms),
+            elapsed_ms: Some(elapsed_ms),
+            stop_reason,
+        }),
+    })
 }
 
 fn read_streaming_response<R, F, G>(
     reader: R,
+    model_label: String,
+    elapsed: impl FnOnce() -> Duration,
     on_content_delta: &mut F,
     on_thinking_delta: &mut G,
 ) -> Result<LlamaCppChatResponse, String>
@@ -409,6 +444,10 @@ where
     let mut thinking = String::new();
     let mut saw_done = false;
     let mut saw_any_chunk = false;
+    let mut prompt_tokens = None;
+    let mut completion_tokens = None;
+    let mut total_tokens = None;
+    let mut stop_reason = None;
     let mut buf = BufReader::new(reader);
     let mut line = String::new();
 
@@ -446,21 +485,40 @@ where
             thinking.push_str(delta);
             on_thinking_delta(delta);
         }
+        prompt_tokens = prompt_tokens.or(chunk.prompt_tokens);
+        completion_tokens = completion_tokens.or(chunk.completion_tokens);
+        total_tokens = total_tokens.or(chunk.total_tokens);
+        stop_reason = stop_reason.or(chunk.stop_reason.map(normalize_stop_reason));
     }
 
     if !saw_done && !saw_any_chunk {
         return Err("llama.cpp ストリームから本文を受け取れませんでした".to_string());
     }
 
+    let elapsed_ms = elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
     Ok(LlamaCppChatResponse {
         content: out,
         thinking: (!thinking.is_empty()).then_some(thinking),
+        metrics: Some(ChatMsgMetrics {
+            model_label: Some(model_label),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            tokens_per_second: tokens_per_second(completion_tokens, elapsed_ms),
+            elapsed_ms: Some(elapsed_ms),
+            stop_reason,
+        }),
     })
 }
 
 struct StreamChunk<'a> {
     content: Option<&'a str>,
     thinking: Option<&'a str>,
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+    stop_reason: Option<&'a str>,
 }
 
 fn extract_stream_chunk(value: &Value) -> StreamChunk<'_> {
@@ -481,6 +539,46 @@ fn extract_stream_chunk(value: &Value) -> StreamChunk<'_> {
                     .pointer("/choices/0/message/reasoning_content")
                     .and_then(|x| x.as_str())
             }),
+        prompt_tokens: value_to_u32(value.pointer("/usage/prompt_tokens")),
+        completion_tokens: value_to_u32(value.pointer("/usage/completion_tokens")),
+        total_tokens: value_to_u32(value.pointer("/usage/total_tokens")),
+        stop_reason: value
+            .pointer("/choices/0/finish_reason")
+            .and_then(|x| x.as_str()),
+    }
+}
+
+fn model_label_from_path(model_path: &Path) -> String {
+    model_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("ローカルモデル")
+        .to_string()
+}
+
+fn value_to_u32(value: Option<&Value>) -> Option<u32> {
+    value
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+fn tokens_per_second(tokens: Option<u32>, elapsed_ms: u64) -> Option<f64> {
+    match (tokens, elapsed_ms) {
+        (Some(tokens), elapsed_ms) if elapsed_ms > 0 => {
+            Some(tokens as f64 / (elapsed_ms as f64 / 1000.0))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_stop_reason(reason: &str) -> String {
+    match reason.trim().to_ascii_lowercase().as_str() {
+        "stop" => "EOSトークン検出".to_string(),
+        "length" => "最大トークン到達".to_string(),
+        "tool_calls" => "ツール呼び出し".to_string(),
+        "content_filter" => "コンテンツフィルタ".to_string(),
+        other if other.is_empty() => "完了".to_string(),
+        other => other.to_string(),
     }
 }
 
