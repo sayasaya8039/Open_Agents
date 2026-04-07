@@ -13,6 +13,7 @@ mod model_prefs;
 #[cfg(any(test, feature = "test-support"))]
 mod native_chat;
 mod project_explorer;
+mod session_title_editor;
 mod workspace_prefs;
 
 use gpui::prelude::FluentBuilder;
@@ -21,6 +22,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use project_explorer::{
     absolute_path, default_expanded_set, default_sample_tree, expanded_first_level,
@@ -586,6 +588,12 @@ struct AppView {
     chat_scroll: ScrollHandle,
     /// Chat API リクエスト送信中（再送信ガード）
     chat_pending: bool,
+    /// 三点メニューを開いているセッション
+    open_session_menu_id: Option<u64>,
+    /// セッション名変更中の対象セッション
+    renaming_session_id: Option<u64>,
+    /// セッション名変更用エディタ
+    session_title_editor: Option<Entity<session_title_editor::SessionTitleEditor>>,
     /// backend ごとの同梱 llama.cpp runtime 状態
     llama_cpp_runtime_statuses: Vec<llama_cpp_runtime::BundledLlamaRuntimeStatus>,
     /// GitHub Releases の更新通知
@@ -830,6 +838,7 @@ impl AppView {
     fn chat_new_session(&mut self, cx: &mut Context<Self>) {
         self.session_store.new_session();
         self.chat_pending = false;
+        self.clear_session_sidebar_state();
         chat_session::save_sessions(&self.session_store);
         cx.notify();
     }
@@ -837,14 +846,132 @@ impl AppView {
     fn chat_switch_session(&mut self, id: u64, cx: &mut Context<Self>) {
         self.session_store.switch_to(id);
         self.chat_pending = false;
+        self.clear_session_sidebar_state();
         cx.notify();
     }
 
     fn chat_delete_section(&mut self, label: &'static str, cx: &mut Context<Self>) {
         self.session_store.delete_group(label);
         self.chat_pending = false;
+        self.clear_session_sidebar_state();
         chat_session::save_sessions(&self.session_store);
         cx.notify();
+    }
+
+    fn clear_session_sidebar_state(&mut self) {
+        self.open_session_menu_id = None;
+        self.renaming_session_id = None;
+        self.session_title_editor = None;
+    }
+
+    fn chat_toggle_session_menu(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.open_session_menu_id = match self.open_session_menu_id {
+            Some(current) if current == id => None,
+            _ => Some(id),
+        };
+        if self.renaming_session_id != Some(id) {
+            self.renaming_session_id = None;
+            self.session_title_editor = None;
+        }
+        cx.notify();
+    }
+
+    fn chat_begin_session_rename(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self
+            .session_store
+            .sessions
+            .iter()
+            .find(|session| session.id == id)
+        else {
+            return;
+        };
+        let editor =
+            cx.new(|ecx| session_title_editor::SessionTitleEditor::new(ecx, session.title.clone()));
+        cx.subscribe(
+            &editor,
+            |this: &mut AppView, _, _: &session_title_editor::SubmitRenameEvent, cx| {
+                this.chat_commit_session_rename(cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &editor,
+            |this: &mut AppView, _, _: &session_title_editor::CancelRenameEvent, cx| {
+                this.chat_cancel_session_rename(cx);
+            },
+        )
+        .detach();
+        self.open_session_menu_id = None;
+        self.renaming_session_id = Some(id);
+        self.session_title_editor = Some(editor.clone());
+        editor.read(cx).focus(window);
+        cx.notify();
+    }
+
+    fn chat_commit_session_rename(&mut self, cx: &mut Context<Self>) {
+        let (Some(id), Some(editor)) =
+            (self.renaming_session_id, self.session_title_editor.clone())
+        else {
+            return;
+        };
+        let new_title = editor.read(cx).text().to_string();
+        if self.session_store.rename_session(id, &new_title) {
+            chat_session::save_sessions(&self.session_store);
+            self.clear_session_sidebar_state();
+            cx.notify();
+        }
+    }
+
+    fn chat_cancel_session_rename(&mut self, cx: &mut Context<Self>) {
+        self.clear_session_sidebar_state();
+        cx.notify();
+    }
+
+    fn chat_duplicate_session(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.session_store.duplicate_session(id).is_some() {
+            self.chat_pending = false;
+            self.clear_session_sidebar_state();
+            chat_session::save_sessions(&self.session_store);
+            cx.notify();
+        }
+    }
+
+    fn chat_delete_session(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.session_store.delete_session(id);
+        self.chat_pending = false;
+        self.clear_session_sidebar_state();
+        chat_session::save_sessions(&self.session_store);
+        cx.notify();
+    }
+
+    fn chat_export_session(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(json) = self.session_store.export_session_json(id) else {
+            return;
+        };
+        let start_dir = chat_session::sessions_file_path()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let default_name = format!("session-{id}.json");
+        let receiver = cx.prompt_for_new_path(&start_dir, Some(default_name.as_str()));
+        cx.spawn(async move |_app, _cx| {
+            if let Ok(Ok(Some(path))) = receiver.await {
+                let _ = smol::unblock(move || fs::write(path, json)).await;
+            }
+        })
+        .detach();
+    }
+
+    fn chat_show_session_file_in_explorer(&mut self) {
+        let path = chat_session::sessions_file_path();
+        #[cfg(windows)]
+        let _ = Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn();
+        #[cfg(not(windows))]
+        let _ = Command::new("xdg-open")
+            .arg(path.parent().unwrap_or_else(|| Path::new(".")))
+            .spawn();
     }
 
     fn chat_copy_message(&mut self, content: String, cx: &mut Context<Self>) {
@@ -1195,6 +1322,9 @@ impl Render for AppView {
                     self.chat_show_thinking,
                     &model_status,
                     is_local_weights,
+                    self.open_session_menu_id,
+                    self.renaming_session_id,
+                    self.session_title_editor.clone(),
                     self.chat_composer.clone(),
                     &self.chat_scroll,
                     cx,
@@ -3580,6 +3710,7 @@ fn main() {
         // キーバインド登録
         editor::actions::register_keybindings(cx);
         chat_composer::register_keybindings(cx);
+        session_title_editor::register_keybindings(cx);
         install_chat_submit_fallback(cx);
 
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
@@ -3644,6 +3775,9 @@ fn main() {
                         chat_composer,
                         chat_scroll: ScrollHandle::new(),
                         chat_pending: false,
+                        open_session_menu_id: None,
+                        renaming_session_id: None,
+                        session_title_editor: None,
                         llama_cpp_runtime_statuses,
                         llama_cpp_update_notice: None,
                     };

@@ -29,6 +29,9 @@ pub fn render_chat_page(
     chat_show_thinking: bool,
     model_status: &str,
     is_local_weights: bool,
+    open_session_menu_id: Option<u64>,
+    renaming_session_id: Option<u64>,
+    session_title_editor: Option<Entity<crate::session_title_editor::SessionTitleEditor>>,
     composer: Entity<crate::chat_composer::ChatComposer>,
     scroll_handle: &ScrollHandle,
     cx: &mut Context<crate::AppView>,
@@ -41,7 +44,14 @@ pub fn render_chat_page(
         .overflow_hidden()
         .bg(hex(BG))
         // 左: セッションサイドバー
-        .child(render_session_sidebar(store, chat_pending, cx))
+        .child(render_session_sidebar(
+            store,
+            chat_pending,
+            open_session_menu_id,
+            renaming_session_id,
+            session_title_editor,
+            cx,
+        ))
         .child(div().w(px(1.)).h_full().bg(hex(BORDER)))
         // 右: メインチャット
         .child(render_chat_main(
@@ -61,6 +71,9 @@ pub fn render_chat_page(
 fn render_session_sidebar(
     store: &SessionStore,
     chat_pending: bool,
+    open_session_menu_id: Option<u64>,
+    renaming_session_id: Option<u64>,
+    session_title_editor: Option<Entity<crate::session_title_editor::SessionTitleEditor>>,
     cx: &mut Context<crate::AppView>,
 ) -> impl IntoElement {
     let groups = store.grouped_sessions();
@@ -155,37 +168,198 @@ fn render_session_sidebar(
                         .children(sessions.into_iter().map(|session| {
                             let id = session.id;
                             let is_active = active_id == Some(id);
+                            let is_menu_open = open_session_menu_id == Some(id);
+                            let is_renaming = renaming_session_id == Some(id);
                             let title: SharedString = session.title.clone().into();
+                            let editor = session_title_editor.clone();
                             div()
-                                .px(px(8.))
-                                .py(px(6.))
-                                .rounded(px(6.))
-                                .text_size(px(12.))
-                                .text_color(if is_active {
-                                    hex(TEXT_PRIMARY)
-                                } else {
-                                    hex(TEXT_SECONDARY)
-                                })
-                                .when(is_active, |d| d.bg(hex(HOVER_BG)))
-                                .hover(|d| d.bg(hex(HOVER_BG)))
-                                .cursor_pointer()
-                                .overflow_hidden()
                                 .flex()
-                                .items_center()
+                                .flex_col()
+                                .gap(px(4.))
                                 .child(
                                     div()
-                                        .flex_1()
-                                        .min_w(px(0.))
+                                        .px(px(8.))
+                                        .py(px(6.))
+                                        .rounded(px(6.))
+                                        .text_size(px(12.))
+                                        .text_color(if is_active {
+                                            hex(TEXT_PRIMARY)
+                                        } else {
+                                            hex(TEXT_SECONDARY)
+                                        })
+                                        .when(is_active, |d| d.bg(hex(HOVER_BG)))
+                                        .hover(|d| d.bg(hex(HOVER_BG)))
                                         .overflow_hidden()
-                                        .whitespace_nowrap()
-                                        .child(title),
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.))
+                                                .when(is_renaming, |d| {
+                                                    d.when_some(editor.clone(), |d, editor| {
+                                                        d.child(editor)
+                                                    })
+                                                })
+                                                .when(!is_renaming, |d| {
+                                                    d.child(
+                                                        div()
+                                                            .w_full()
+                                                            .min_w(px(0.))
+                                                            .overflow_hidden()
+                                                            .whitespace_nowrap()
+                                                            .cursor_pointer()
+                                                            .child(title)
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                                                    this.chat_switch_session(id, cx);
+                                                                }),
+                                                            ),
+                                                    )
+                                                }),
+                                        )
+                                        .when(is_renaming, |d| {
+                                            d.child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(4.))
+                                                    .child(
+                                                        div()
+                                                            .px(px(8.))
+                                                            .py(px(4.))
+                                                            .rounded(px(6.))
+                                                            .bg(hex(ACCENT_BLUE))
+                                                            .text_size(px(11.))
+                                                            .text_color(hex(0xFFFFFF))
+                                                            .cursor_pointer()
+                                                            .child("保存")
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                                                    window.prevent_default();
+                                                                    cx.stop_propagation();
+                                                                    this.chat_commit_session_rename(cx);
+                                                                }),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .px(px(8.))
+                                                            .py(px(4.))
+                                                            .rounded(px(6.))
+                                                            .bg(hex(PANEL_BG))
+                                                            .border_1()
+                                                            .border_color(hex(BORDER))
+                                                            .text_size(px(11.))
+                                                            .text_color(hex(TEXT_MUTED))
+                                                            .cursor_pointer()
+                                                            .hover(|d| d.bg(hex(HOVER_BG)))
+                                                            .child("取消")
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                                                    window.prevent_default();
+                                                                    cx.stop_propagation();
+                                                                    this.chat_cancel_session_rename(cx);
+                                                                }),
+                                                            ),
+                                                    ),
+                                            )
+                                        })
+                                        .when(!is_renaming && !chat_pending, |d| {
+                                            d.child(
+                                                div()
+                                                    .w(px(22.))
+                                                    .h(px(22.))
+                                                    .rounded(px(6.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_size(px(14.))
+                                                    .text_color(hex(TEXT_MUTED))
+                                                    .cursor_pointer()
+                                                    .hover(|d| d.bg(hex(PANEL_BG)).text_color(hex(TEXT_PRIMARY)))
+                                                    .child("⋯")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                                            window.prevent_default();
+                                                            cx.stop_propagation();
+                                                            this.chat_toggle_session_menu(id, cx);
+                                                        }),
+                                                    ),
+                                            )
+                                        }),
                                 )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                        this.chat_switch_session(id, cx);
-                                    }),
-                                )
+                                .when(is_menu_open && !chat_pending && !is_renaming, |d| {
+                                    d.child(
+                                        div()
+                                            .ml(px(16.))
+                                            .rounded(px(8.))
+                                            .border_1()
+                                            .border_color(hex(BORDER))
+                                            .bg(hex(PANEL_BG))
+                                            .overflow_hidden()
+                                            .child(
+                                                session_menu_item("名前変更", false)
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                                            window.prevent_default();
+                                                            cx.stop_propagation();
+                                                            this.chat_begin_session_rename(id, window, cx);
+                                                        }),
+                                                    ),
+                                            )
+                                            .child(
+                                                session_menu_item("複製", false)
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                                            window.prevent_default();
+                                                            cx.stop_propagation();
+                                                            this.chat_duplicate_session(id, cx);
+                                                        }),
+                                                    ),
+                                            )
+                                            .child(
+                                                session_menu_item("エクスポート", false)
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                                            window.prevent_default();
+                                                            cx.stop_propagation();
+                                                            this.chat_export_session(id, cx);
+                                                        }),
+                                                    ),
+                                            )
+                                            .child(
+                                                session_menu_item("エクスプローラーで表示", false)
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                                            window.prevent_default();
+                                                            cx.stop_propagation();
+                                                            this.chat_show_session_file_in_explorer();
+                                                        }),
+                                                    ),
+                                            )
+                                            .child(
+                                                session_menu_item("削除", true)
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                                            window.prevent_default();
+                                                            cx.stop_propagation();
+                                                            this.chat_delete_session(id, cx);
+                                                        }),
+                                                    ),
+                                            ),
+                                    )
+                                })
                                 .into_any_element()
                         }))
                         .into_any_element()
@@ -221,6 +395,22 @@ fn render_session_sidebar(
                         ),
                 ),
         )
+}
+
+fn session_menu_item(label: &'static str, destructive: bool) -> Div {
+    div()
+        .w_full()
+        .px(px(10.))
+        .py(px(8.))
+        .text_size(px(11.))
+        .text_color(if destructive {
+            hex(ACCENT_ORANGE)
+        } else {
+            hex(TEXT_PRIMARY)
+        })
+        .cursor_pointer()
+        .hover(|d| d.bg(hex(HOVER_BG)))
+        .child(label)
 }
 
 // ── メインチャットエリア ──

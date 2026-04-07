@@ -123,6 +123,41 @@ impl SessionStore {
         id
     }
 
+    /// セッション名を更新
+    pub fn rename_session(&mut self, id: u64, title: impl AsRef<str>) -> bool {
+        let title = title.as_ref().trim();
+        if title.is_empty() {
+            return false;
+        }
+        let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) else {
+            return false;
+        };
+        session.title = title.to_string();
+        session.touch();
+        true
+    }
+
+    /// セッションを複製してアクティブにする
+    pub fn duplicate_session(&mut self, id: u64) -> Option<u64> {
+        let source = self
+            .sessions
+            .iter()
+            .find(|session| session.id == id)?
+            .clone();
+        let now = unix_now();
+        let duplicate_id = self.next_session_id();
+        let duplicate = ChatSession {
+            id: duplicate_id,
+            title: format!("{} のコピー", source.title),
+            messages: source.messages,
+            created_at: now,
+            updated_at: now,
+        };
+        self.sessions.push(duplicate);
+        self.active_id = Some(duplicate_id);
+        Some(duplicate_id)
+    }
+
     /// セッションを切り替え
     pub fn switch_to(&mut self, id: u64) -> bool {
         if self.sessions.iter().any(|s| s.id == id) {
@@ -203,6 +238,19 @@ impl SessionStore {
         }
         groups
     }
+
+    pub fn export_session_json(&self, id: u64) -> Option<String> {
+        let session = self.sessions.iter().find(|session| session.id == id)?;
+        serde_json::to_string_pretty(session).ok()
+    }
+
+    fn next_session_id(&self) -> u64 {
+        let mut candidate = unix_now() as u64;
+        while self.sessions.iter().any(|session| session.id == candidate) {
+            candidate += 1;
+        }
+        candidate
+    }
 }
 
 // ── 永続化 ──
@@ -212,6 +260,10 @@ fn sessions_file() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("open_agents_gui")
         .join("chat_sessions.json")
+}
+
+pub fn sessions_file_path() -> PathBuf {
+    sessions_file()
 }
 
 pub fn load_sessions() -> SessionStore {
@@ -303,6 +355,41 @@ mod tests {
         store.delete_session(id);
         assert_eq!(store.sessions.len(), 1);
         assert_ne!(store.active_id, Some(id));
+    }
+
+    #[test]
+    fn rename_session_updates_title_and_rejects_blank_names() {
+        let mut store = SessionStore::default();
+        let id = store.active_id.unwrap();
+        assert!(store.rename_session(id, "  新しいタイトル  "));
+        assert_eq!(store.active().unwrap().title, "新しいタイトル");
+        assert!(!store.rename_session(id, "   "));
+        assert_eq!(store.active().unwrap().title, "新しいタイトル");
+    }
+
+    #[test]
+    fn duplicate_session_clones_messages_and_activates_copy() {
+        let mut store = SessionStore::default();
+        let id = store.active_id.unwrap();
+        let original = store.active().unwrap().clone();
+
+        let duplicate_id = store.duplicate_session(id).expect("session duplicated");
+        let duplicate = store.active().expect("duplicate active");
+
+        assert_eq!(store.active_id, Some(duplicate_id));
+        assert_ne!(duplicate.id, original.id);
+        assert_eq!(duplicate.messages.len(), original.messages.len());
+        assert_eq!(duplicate.messages[0].content, original.messages[0].content);
+        assert!(duplicate.title.ends_with("のコピー"));
+    }
+
+    #[test]
+    fn export_session_json_contains_selected_session_title() {
+        let store = SessionStore::default();
+        let id = store.active_id.unwrap();
+        let exported = store.export_session_json(id).expect("session exported");
+        assert!(exported.contains("\"title\""));
+        assert!(exported.contains("新しい会話"));
     }
 
     #[test]
