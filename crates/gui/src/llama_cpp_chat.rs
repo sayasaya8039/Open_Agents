@@ -163,13 +163,7 @@ pub fn complete_llama_cpp_chat_blocking(
     let max_tokens = normalize_max_tokens(max_tokens);
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, false, max_tokens);
-    let body = json!({
-        "model": model_id,
-        "messages": messages_to_openai_json(messages),
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": false,
-    });
+    let body = chat_completion_request_body(&model_id, messages, temperature, max_tokens, false);
     let resp = ureq::post(&url)
         .set("Content-Type", "application/json")
         .send_json(body)
@@ -203,13 +197,7 @@ where
     let max_tokens = normalize_max_tokens(max_tokens);
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, true, max_tokens);
-    let body = json!({
-        "model": model_id,
-        "messages": messages_to_openai_json(messages),
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": true,
-    });
+    let body = chat_completion_request_body(&model_id, messages, temperature, max_tokens, true);
     let resp = ureq::post(&url)
         .set("Content-Type", "application/json")
         .set("Accept", "text/event-stream")
@@ -376,6 +364,28 @@ fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+fn chat_completion_request_body(
+    model_id: &str,
+    messages: &[(String, String)],
+    temperature: f32,
+    max_tokens: i32,
+    stream: bool,
+) -> Value {
+    let mut body = json!({
+        "model": model_id,
+        "messages": messages_to_openai_json(messages),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": stream,
+    });
+
+    if stream {
+        body["stream_options"] = json!({ "include_usage": true });
+    }
+
+    body
 }
 
 fn extract_openai_message(
@@ -1403,6 +1413,32 @@ mod tests {
         let chunk = extract_stream_chunk(&value);
         assert_eq!(chunk.content, None);
         assert_eq!(chunk.thinking, Some("考"));
+    }
+
+    #[test]
+    fn streaming_request_body_requests_usage_metrics() {
+        let body = chat_completion_request_body(
+            "gemma",
+            &[("user".into(), "こんにちは".into())],
+            0.7,
+            512,
+            true,
+        );
+        assert_eq!(body["stream"], Value::Bool(true));
+        assert_eq!(body["stream_options"]["include_usage"], Value::Bool(true));
+    }
+
+    #[test]
+    fn non_stream_request_body_omits_stream_options() {
+        let body = chat_completion_request_body(
+            "gemma",
+            &[("user".into(), "こんにちは".into())],
+            0.7,
+            512,
+            false,
+        );
+        assert_eq!(body["stream"], Value::Bool(false));
+        assert!(body.get("stream_options").is_none());
     }
 
     #[test]
