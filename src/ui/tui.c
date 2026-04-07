@@ -595,7 +595,7 @@ oag_tui_t* oag_tui_create(oag_tui_config_t config) {
     // Welcome message
     strcpy(t->chat[0].role, "assistant");
     t->chat[0].text = strdup(
-        "Open_Agents v0.2.0 へようこそ！\n"
+        "Open_Agents v0.3.5 へようこそ！\n"
         "Tab: エディタ/チャット切替\n"
         "Ctrl+Q: 終了"
     );

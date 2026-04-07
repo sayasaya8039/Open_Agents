@@ -103,7 +103,7 @@ pub enum LlamaRuntimePreset {
     HighPerformance4090,
     /// Vulkan 版で NVIDIA + Intel GPU の混成を試す実験モード
     ExperimentalHybrid4090Arc,
-    /// OpenVINO / NPU 優先の省電力モード
+    /// CPU runtime 優先の省電力モード（旧 NPU preset 互換）
     IntelNpuEfficient,
 }
 
@@ -118,7 +118,7 @@ impl LlamaRuntimePreset {
         match self {
             Self::HighPerformance4090 => "4090 最優先",
             Self::ExperimentalHybrid4090Arc => "4090 + Arc 実験",
-            Self::IntelNpuEfficient => "Intel NPU 省電力",
+            Self::IntelNpuEfficient => "Intel NPU / CPU 省電力",
         }
     }
 
@@ -126,7 +126,7 @@ impl LlamaRuntimePreset {
         match self {
             Self::HighPerformance4090 => "CUDA 単独で速度を優先",
             Self::ExperimentalHybrid4090Arc => "Vulkan で NVIDIA + Intel GPU の混成を試す",
-            Self::IntelNpuEfficient => "OpenVINO / NPU 優先の省電力モード",
+            Self::IntelNpuEfficient => "CPU runtime を使う省電力モード",
         }
     }
 

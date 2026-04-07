@@ -93,7 +93,6 @@ const MIN_CONTEXT_LENGTH: i32 = 512;
 const GEMMA4_MIN_CONTEXT_LENGTH: i32 = 8192;
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
-const GGML_SUPPORTED_TENSOR_TYPE_COUNT: u32 = 41;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -348,7 +347,11 @@ pub fn ensure_server(
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                failures.push(format!("{}: {}", plan.summary, error));
+                failures.push(format!(
+                    "{}: {}",
+                    plan.summary,
+                    normalize_runtime_launch_error(&plan.runtime, &normalized_path, &error)
+                ));
             }
         }
     }
@@ -631,10 +634,12 @@ fn candidate_launch_plans(
         model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
             build_hybrid_vulkan_plans(&hw)
         }
-        model_prefs::LlamaRuntimePreset::IntelNpuEfficient => Err(
-            "Intel NPU 省電力モードは OpenVINO runtime が未同梱のため、現バージョンでは利用できません。"
-                .to_string(),
-        ),
+        model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
+            let runtime = llama_cpp_runtime::load_bundled_runtime_for_backend(
+                llama_cpp_runtime::BundledLlamaBackend::Cpu,
+            )?;
+            Ok(vec![build_cpu_single_plan(runtime, &hw)])
+        }
     }
 }
 
@@ -680,6 +685,13 @@ fn build_hybrid_vulkan_plans(
         Err(error) => errors.push(error),
     }
 
+    match llama_cpp_runtime::load_bundled_runtime_for_backend(
+        llama_cpp_runtime::BundledLlamaBackend::Cpu,
+    ) {
+        Ok(runtime) => plans.push(build_cpu_single_plan(runtime, hardware)),
+        Err(error) => errors.push(error),
+    }
+
     if plans.is_empty() {
         return Err(errors.join("\n"));
     }
@@ -700,6 +712,13 @@ fn build_cuda_single_plan(
 ) -> LaunchPlan {
     let summary = format!("{} 単独", runtime.backend.label());
     build_launch_plan(runtime, None, None, hardware, summary)
+}
+
+fn build_cpu_single_plan(
+    runtime: llama_cpp_runtime::BundledLlamaRuntime,
+    hardware: &model_prefs::HardwareParams,
+) -> LaunchPlan {
+    build_launch_plan(runtime, None, None, hardware, "CPU 単独".to_string())
 }
 
 fn build_vulkan_single_plan(
@@ -738,11 +757,7 @@ fn build_launch_plan(
     summary: String,
 ) -> LaunchPlan {
     let hw = launch_hardware_params(hardware);
-    let n_gpu_layers = if hw.gpu_acceleration {
-        hw.gpu_layers.max(0)
-    } else {
-        0
-    };
+    let n_gpu_layers = plan_gpu_layers(&runtime.backend, &hw);
     let fingerprint = format!(
         "{}|{}|{}|{}|{}",
         runtime.backend.label(),
@@ -758,6 +773,20 @@ fn build_launch_plan(
         env: Vec::new(),
         summary,
         fingerprint,
+    }
+}
+
+fn plan_gpu_layers(
+    backend: &llama_cpp_runtime::BundledLlamaBackend,
+    hardware: &model_prefs::HardwareParams,
+) -> i32 {
+    if matches!(backend, llama_cpp_runtime::BundledLlamaBackend::Cpu) {
+        return 0;
+    }
+    if hardware.gpu_acceleration {
+        hardware.gpu_layers.max(0)
+    } else {
+        0
     }
 }
 
@@ -865,11 +894,7 @@ fn llama_server_args(
     let hw = launch_hardware_params(hardware);
     let threads = effective_cpu_threads(&hw);
     // GUI の GPU ON/OFF・レイヤー数を常に CLI で固定し、LLAMA_ARG_N_GPU_LAYERS 等の環境変数に負けないようにする。
-    let n_gpu_layers = if hw.gpu_acceleration {
-        hw.gpu_layers.max(0)
-    } else {
-        0
-    };
+    let n_gpu_layers = plan_gpu_layers(&plan.runtime.backend, &hw);
 
     let mut args = vec![
         OsString::from("--model"),
@@ -1145,43 +1170,17 @@ fn read_gguf_architecture(path: &Path) -> Result<Option<String>, String> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct UnsupportedTensorType {
+struct GgufTensorType {
     tensor_name: String,
     type_id: u32,
 }
 
 fn validate_gguf_tensor_types(path: &Path) -> Result<(), String> {
-    let unsupported = scan_gguf_unsupported_tensor_types(path)?;
-    if unsupported.is_empty() {
-        return Ok(());
-    }
-
-    let first = &unsupported[0];
-    let examples = unsupported
-        .iter()
-        .take(3)
-        .map(|tensor| format!("{} (type={})", tensor.tensor_name, tensor.type_id))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Err(format!(
-        "この GGUF は現在の Open Agents 同梱 llama.cpp runtime で未対応の tensor type を含んでいるため読み込めません。\n\
-モデル: {}\n\
-最初の未対応 tensor: {} (type={})\n\
-未対応 tensor 数: {}\n\
-例: {}\n\
-現在対応している tensor type は 0..{} 未満です。\n\
-配布元で llama.cpp 互換 GGUF を確認するか、対応済み量子化の GGUF を使用してください。",
-        path.display(),
-        first.tensor_name,
-        first.type_id,
-        unsupported.len(),
-        examples,
-        GGML_SUPPORTED_TENSOR_TYPE_COUNT,
-    ))
+    let _ = scan_gguf_tensor_types(path)?;
+    Ok(())
 }
 
-fn scan_gguf_unsupported_tensor_types(path: &Path) -> Result<Vec<UnsupportedTensorType>, String> {
+fn scan_gguf_tensor_types(path: &Path) -> Result<Vec<GgufTensorType>, String> {
     let file = fs::File::open(path)
         .map_err(|e| format!("GGUF を開けませんでした ({}): {e}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -1206,7 +1205,7 @@ fn scan_gguf_unsupported_tensor_types(path: &Path) -> Result<Vec<UnsupportedTens
         skip_gguf_value(&mut reader, value_type)?;
     }
 
-    let mut unsupported = Vec::new();
+    let mut tensors = Vec::new();
     for _ in 0..n_tensors {
         let tensor_name = read_gguf_string(&mut reader)?;
         let n_dim = read_gguf_u32(&mut reader)?;
@@ -1215,15 +1214,36 @@ fn scan_gguf_unsupported_tensor_types(path: &Path) -> Result<Vec<UnsupportedTens
         }
         let type_id = read_gguf_u32(&mut reader)?;
         let _offset = read_gguf_u64(&mut reader)?;
-        if type_id >= GGML_SUPPORTED_TENSOR_TYPE_COUNT {
-            unsupported.push(UnsupportedTensorType {
-                tensor_name,
-                type_id,
-            });
-        }
+        tensors.push(GgufTensorType {
+            tensor_name,
+            type_id,
+        });
     }
 
-    Ok(unsupported)
+    Ok(tensors)
+}
+
+fn normalize_runtime_launch_error(
+    runtime: &llama_cpp_runtime::BundledLlamaRuntime,
+    model_path: &Path,
+    error: &str,
+) -> String {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("tensor type")
+        || lower.contains("unsupported tensor")
+        || lower.contains("unknown tensor")
+        || lower.contains("q1_0")
+        || lower.contains("q1_0_g128")
+        || lower.contains("tq1_0")
+    {
+        return format!(
+            "{} runtime でこの GGUF を読み込めませんでした。未知または backend 非対応の量子化を含んでいる可能性があります。\nモデル: {}\n詳細:\n{}",
+            runtime.backend.label(),
+            model_path.display(),
+            error
+        );
+    }
+    error.to_string()
 }
 
 fn read_gguf_u32<R: Read>(reader: &mut R) -> Result<u32, String> {
@@ -1399,23 +1419,29 @@ mod tests {
     }
 
     #[test]
-    fn scan_detects_unsupported_tensor_types() {
-        let path = temp_gguf_path("unsupported_tensor");
+    fn scan_reads_tensor_types_without_blocking_unknown_ids() {
+        let path = temp_gguf_path("tensor_scan");
         write_gguf_with_tensor_type(&path, "llama", "output.weight", 41);
-        let unsupported = scan_gguf_unsupported_tensor_types(&path).unwrap();
-        assert_eq!(unsupported.len(), 1);
-        assert_eq!(unsupported[0].tensor_name, "output.weight");
-        assert_eq!(unsupported[0].type_id, 41);
+        let tensors = scan_gguf_tensor_types(&path).unwrap();
+        assert_eq!(tensors.len(), 1);
+        assert_eq!(tensors[0].tensor_name, "output.weight");
+        assert_eq!(tensors[0].type_id, 41);
         let _ = fs::remove_file(path);
     }
 
     #[test]
-    fn validate_reports_friendly_error_for_unsupported_tensor_types() {
-        let path = temp_gguf_path("validate_unsupported");
+    fn validate_accepts_higher_tensor_ids() {
+        let path = temp_gguf_path("validate_tensor");
         write_gguf_with_tensor_type(&path, "llama", "output.weight", 41);
-        let error = validate_gguf_tensor_types(&path).unwrap_err();
-        assert!(error.contains("未対応の tensor type"));
-        assert!(error.contains("output.weight"));
+        validate_gguf_tensor_types(&path).unwrap();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn validate_allows_unknown_tensor_types_for_runtime_probe() {
+        let path = temp_gguf_path("prism_q1");
+        write_gguf_with_tensor_type(&path, "llama", "output.weight", 42);
+        validate_gguf_tensor_types(&path).unwrap();
         let _ = fs::remove_file(path);
     }
 
@@ -1482,6 +1508,47 @@ mod tests {
             Some("Vulkan0,Vulkan1".to_string())
         );
         assert_eq!(arg_after(&args, "--split-mode"), Some("layer".to_string()));
+    }
+
+    #[test]
+    fn cpu_runtime_plan_forces_zero_gpu_layers() {
+        let mut hw = model_prefs::HardwareParams::default();
+        hw.llama_runtime_preset = model_prefs::LlamaRuntimePreset::IntelNpuEfficient;
+        hw.gpu_acceleration = true;
+        hw.gpu_layers = 99;
+        let plan = build_launch_plan(
+            llama_cpp_runtime::BundledLlamaRuntime {
+                backend: llama_cpp_runtime::BundledLlamaBackend::Cpu,
+                dir: PathBuf::from("C:/runtime/cpu"),
+                binary_path: PathBuf::from("C:/runtime/cpu/llama-server.exe"),
+                manifest: llama_cpp_runtime::BundledLlamaManifest {
+                    llama_cpp_tag: "prism-b8201-ba7e817".into(),
+                    llama_server_version: "prism-b8201-ba7e817".into(),
+                    platform: "windows-x64-cpu".into(),
+                    asset_name: "llama-prism-b8201-ba7e817-bin-win-cpu-x64.zip".into(),
+                    source_release_url: "https://example.com".into(),
+                    llama_server_sha256: "abc".into(),
+                },
+            },
+            None,
+            None,
+            &hw,
+            "CPU 単独".into(),
+        );
+        let args = llama_server_args(Path::new("C:/models/m.gguf"), 8080, 4096, &hw, &plan);
+        assert_eq!(arg_after(&args, "--n-gpu-layers"), Some("0".to_string()));
+    }
+
+    #[test]
+    fn normalize_runtime_launch_error_highlights_tensor_mismatch() {
+        let runtime = test_launch_plan().runtime;
+        let error = normalize_runtime_launch_error(
+            &runtime,
+            Path::new("C:/models/bonsai.gguf"),
+            "unknown tensor type Q1_0",
+        );
+        assert!(error.contains("未知または backend 非対応の量子化"));
+        assert!(error.contains("bonsai.gguf"));
     }
 
     fn arg_after(args: &[OsString], flag: &str) -> Option<String> {

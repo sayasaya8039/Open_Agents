@@ -9,17 +9,17 @@ use serde::Deserialize;
 pub enum BundledLlamaBackend {
     Cuda,
     Vulkan,
-    OpenVino,
+    Cpu,
 }
 
 impl BundledLlamaBackend {
-    pub const ALL: [Self; 3] = [Self::Cuda, Self::Vulkan, Self::OpenVino];
+    pub const ALL: [Self; 3] = [Self::Cuda, Self::Vulkan, Self::Cpu];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Cuda => "CUDA",
             Self::Vulkan => "Vulkan",
-            Self::OpenVino => "OpenVINO",
+            Self::Cpu => "CPU",
         }
     }
 
@@ -27,7 +27,7 @@ impl BundledLlamaBackend {
         match self {
             Self::Cuda => "cuda",
             Self::Vulkan => "vulkan",
-            Self::OpenVino => "openvino",
+            Self::Cpu => "cpu",
         }
     }
 
@@ -315,6 +315,13 @@ mod tests {
         let dirs = bundled_runtime_search_dirs_for_backend(BundledLlamaBackend::Vulkan);
         assert!(!dirs.is_empty());
         assert!(dirs.iter().any(|dir| dir.ends_with("vulkan")));
+    }
+
+    #[test]
+    fn cpu_backend_search_dirs_only_use_cpu_subdirectory() {
+        let dirs = bundled_runtime_search_dirs_for_backend(BundledLlamaBackend::Cpu);
+        assert!(!dirs.is_empty());
+        assert!(dirs.iter().all(|dir| dir.ends_with("cpu")));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-#![recursion_limit = "1024"]
+#![recursion_limit = "4096"]
 
 mod api_key_prefs;
 mod chat_client;
@@ -2050,7 +2050,7 @@ impl AppView {
                 llama_cpp_runtime::BundledLlamaBackend::Vulkan
             }
             model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
-                llama_cpp_runtime::BundledLlamaBackend::OpenVino
+                llama_cpp_runtime::BundledLlamaBackend::Cpu
             }
         }
     }
@@ -2083,7 +2083,7 @@ impl AppView {
                 llama_cpp_runtime::BundledLlamaBackend::Vulkan
             }
             model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
-                llama_cpp_runtime::BundledLlamaBackend::OpenVino
+                llama_cpp_runtime::BundledLlamaBackend::Cpu
             }
         };
         self.runtime_status_for_backend(backend)
@@ -2205,6 +2205,13 @@ impl AppView {
                                     "llama-server 更新あり: {} → {}",
                                     notice.current_tag, notice.latest_tag
                                 )),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(hex(TEXT_MUTED))
+                                .whitespace_normal()
+                                .child("比較先: ggml-org/llama.cpp（同梱 runtime は Prism 互換構成）"),
                         )
                         .child(
                             div()
