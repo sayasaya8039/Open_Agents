@@ -147,8 +147,8 @@ fn chat_runtime_identity_instruction(
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_history_for_api, chat_runtime_identity_instruction, human_readable_size, ChatMsg,
-        ModelFormat,
+        apply_local_stream_completion, chat_history_for_api, chat_runtime_identity_instruction,
+        human_readable_size, ChatMsg, ChatMsgMetrics, ModelFormat,
     };
     use std::path::{Path, PathBuf};
 
@@ -237,6 +237,76 @@ mod tests {
         assert_eq!(api_history.len(), 2);
         assert_eq!(api_history[0].0, "user");
         assert_eq!(api_history[0].1, "こんにちは");
+    }
+
+    #[test]
+    fn stream_completion_keeps_streamed_text_and_merges_metrics() {
+        let mut msg = ChatMsg {
+            role: "assistant".into(),
+            content: "生成済み本文".into(),
+            thinking: Some("生成済み思考".into()),
+            metrics: Some(ChatMsgMetrics {
+                model_label: Some("gemma-4-e4b-it".into()),
+                ..Default::default()
+            }),
+        };
+
+        apply_local_stream_completion(
+            &mut msg,
+            crate::llama_cpp_chat::LlamaCppChatResponse {
+                content: "最終本文".into(),
+                thinking: Some("最終思考".into()),
+                metrics: Some(ChatMsgMetrics {
+                    completion_tokens: Some(66),
+                    tokens_per_second: Some(77.24),
+                    elapsed_ms: Some(430),
+                    stop_reason: Some("EOSトークン検出".into()),
+                    ..Default::default()
+                }),
+            },
+            true,
+            true,
+        );
+
+        assert_eq!(msg.content, "生成済み本文");
+        assert_eq!(msg.thinking.as_deref(), Some("生成済み思考"));
+        let metrics = msg.metrics.expect("metrics should be merged");
+        assert_eq!(metrics.model_label.as_deref(), Some("gemma-4-e4b-it"));
+        assert_eq!(metrics.completion_tokens, Some(66));
+        assert_eq!(metrics.stop_reason.as_deref(), Some("EOSトークン検出"));
+        assert_eq!(metrics.elapsed_ms, Some(430));
+        assert_eq!(metrics.tokens_per_second, Some(77.24));
+    }
+
+    #[test]
+    fn stream_completion_falls_back_to_final_response_when_no_deltas_arrived() {
+        let mut msg = ChatMsg {
+            role: "assistant".into(),
+            content: String::new(),
+            thinking: None,
+            metrics: None,
+        };
+
+        apply_local_stream_completion(
+            &mut msg,
+            crate::llama_cpp_chat::LlamaCppChatResponse {
+                content: "最終本文".into(),
+                thinking: Some("最終思考".into()),
+                metrics: Some(ChatMsgMetrics {
+                    completion_tokens: Some(12),
+                    elapsed_ms: Some(250),
+                    ..Default::default()
+                }),
+            },
+            false,
+            false,
+        );
+
+        assert_eq!(msg.content, "最終本文");
+        assert_eq!(msg.thinking.as_deref(), Some("最終思考"));
+        let metrics = msg.metrics.expect("metrics should be present");
+        assert_eq!(metrics.completion_tokens, Some(12));
+        assert_eq!(metrics.elapsed_ms, Some(250));
     }
 
     #[cfg(feature = "test-support")]
@@ -419,6 +489,39 @@ fn apply_local_chat_response(msg: &mut ChatMsg, response: llama_cpp_chat::LlamaC
         }
     } else {
         msg.content = response.content;
+    }
+}
+
+fn apply_local_stream_completion(
+    msg: &mut ChatMsg,
+    response: llama_cpp_chat::LlamaCppChatResponse,
+    saw_content_delta: bool,
+    saw_thinking_delta: bool,
+) {
+    let llama_cpp_chat::LlamaCppChatResponse {
+        content,
+        thinking,
+        metrics,
+    } = response;
+
+    msg.metrics = merge_metrics(msg.metrics.take(), metrics);
+
+    if !saw_thinking_delta {
+        msg.thinking = thinking;
+    }
+
+    if !saw_content_delta {
+        if content.is_empty() {
+            if msg.thinking.is_some() {
+                msg.content =
+                    "（思考トークンのみ受信しました。最大トークン数を増やすと回答本文まで届く場合があります）"
+                        .into();
+            } else {
+                msg.content.clear();
+            }
+        } else {
+            msg.content = content;
+        }
     }
 }
 
@@ -1064,9 +1167,12 @@ impl AppView {
                                             }
                                             ChatStreamEvent::Complete(reply) => {
                                                 this.chat_pending = false;
-                                                if !saw_content_delta || !saw_thinking_delta {
-                                                    apply_local_chat_response(last, reply);
-                                                }
+                                                apply_local_stream_completion(
+                                                    last,
+                                                    reply,
+                                                    saw_content_delta,
+                                                    saw_thinking_delta,
+                                                );
                                                 chat_session::save_sessions(&this.session_store);
                                             }
                                             ChatStreamEvent::Error(err) => {
