@@ -712,15 +712,11 @@ impl AppView {
         }
 
         // エクスプローラ未選択時、ワークスペースルートの主要ファイルを自動検出
+        // CLAUDE.md / AGENTS.md / SKILL.md はエージェント向け運用文書なので、
+        // デフォルト注入するとモデル自己紹介を誤誘導しやすい。必要な場合は
+        // エクスプローラで明示的に選択されたときだけ文脈に含める。
         if self.explorer_selection.is_none() {
-            for name in &[
-                "CLAUDE.md",
-                "AGENTS.md",
-                "SKILL.md",
-                "README.md",
-                "Cargo.toml",
-                "package.json",
-            ] {
+            for name in &["README.md", "Cargo.toml", "package.json"] {
                 let path = self.workspace_root.join(name);
                 if path.is_file() {
                     if let Ok(content) = fs::read_to_string(&path) {
