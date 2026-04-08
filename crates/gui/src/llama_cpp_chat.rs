@@ -645,7 +645,31 @@ fn candidate_launch_plans(
     let mut plans = Vec::new();
     let mut errors = Vec::new();
     match hw.llama_runtime_preset {
-        model_prefs::LlamaRuntimePreset::HighPerformance4090 => {
+        model_prefs::LlamaRuntimePreset::Auto => {
+            // GPU 自動検出: CUDA → Vulkan → CPU の順に利用可能な runtime を探す
+            append_backend_runtimes(
+                llama_cpp_runtime::BundledLlamaBackend::Cuda,
+                &mut plans,
+                &mut errors,
+                &hw,
+                build_cuda_single_plan,
+            );
+            append_backend_runtimes(
+                llama_cpp_runtime::BundledLlamaBackend::Vulkan,
+                &mut plans,
+                &mut errors,
+                &hw,
+                build_vulkan_auto_plan,
+            );
+            append_backend_runtimes(
+                llama_cpp_runtime::BundledLlamaBackend::Cpu,
+                &mut plans,
+                &mut errors,
+                &hw,
+                build_cpu_single_plan,
+            );
+        }
+        model_prefs::LlamaRuntimePreset::NvidiaCuda => {
             append_backend_runtimes(
                 llama_cpp_runtime::BundledLlamaBackend::Cuda,
                 &mut plans,
@@ -661,10 +685,10 @@ fn candidate_launch_plans(
                 build_cpu_single_plan,
             );
         }
-        model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
+        model_prefs::LlamaRuntimePreset::VulkanHybrid => {
             return build_hybrid_vulkan_plans(&hw);
         }
-        model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
+        model_prefs::LlamaRuntimePreset::CpuOnly => {
             append_backend_runtimes(
                 llama_cpp_runtime::BundledLlamaBackend::Cpu,
                 &mut plans,
@@ -793,6 +817,14 @@ fn build_cpu_single_plan(
     hardware: &model_prefs::HardwareParams,
 ) -> LaunchPlan {
     let summary = format!("CPU 単独 ({})", runtime_source_label(&runtime));
+    build_launch_plan(runtime, None, None, hardware, summary)
+}
+
+fn build_vulkan_auto_plan(
+    runtime: llama_cpp_runtime::BundledLlamaRuntime,
+    hardware: &model_prefs::HardwareParams,
+) -> LaunchPlan {
+    let summary = format!("Vulkan 自動 ({})", runtime_source_label(&runtime));
     build_launch_plan(runtime, None, None, hardware, summary)
 }
 

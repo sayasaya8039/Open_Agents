@@ -598,6 +598,8 @@ struct AppView {
     llama_cpp_runtime_statuses: Vec<llama_cpp_runtime::BundledLlamaRuntimeStatus>,
     /// GitHub Releases の更新通知
     llama_cpp_update_notice: Option<llama_cpp_runtime::LlamaCppUpdateNotice>,
+    /// GPU 自動検出結果のサマリ（設定画面で表示）
+    gpu_profile_summary: String,
 }
 
 impl AppView {
@@ -2173,13 +2175,26 @@ impl AppView {
 
     fn selected_runtime_backend(&self) -> llama_cpp_runtime::BundledLlamaBackend {
         match self.hardware_params.llama_runtime_preset {
-            model_prefs::LlamaRuntimePreset::HighPerformance4090 => {
+            model_prefs::LlamaRuntimePreset::Auto => {
+                // Auto: GPU プロファイルの resolved_preset に従う
+                let profile = model_prefs::detect_gpu_profile();
+                match profile.resolved_preset {
+                    model_prefs::LlamaRuntimePreset::NvidiaCuda => {
+                        llama_cpp_runtime::BundledLlamaBackend::Cuda
+                    }
+                    model_prefs::LlamaRuntimePreset::VulkanHybrid => {
+                        llama_cpp_runtime::BundledLlamaBackend::Vulkan
+                    }
+                    _ => llama_cpp_runtime::BundledLlamaBackend::Cpu,
+                }
+            }
+            model_prefs::LlamaRuntimePreset::NvidiaCuda => {
                 llama_cpp_runtime::BundledLlamaBackend::Cuda
             }
-            model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
+            model_prefs::LlamaRuntimePreset::VulkanHybrid => {
                 llama_cpp_runtime::BundledLlamaBackend::Vulkan
             }
-            model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
+            model_prefs::LlamaRuntimePreset::CpuOnly => {
                 llama_cpp_runtime::BundledLlamaBackend::Cpu
             }
         }
@@ -2205,20 +2220,21 @@ impl AppView {
     }
 
     fn runtime_preset_is_available(&self, preset: model_prefs::LlamaRuntimePreset) -> bool {
-        let backend = match preset {
-            model_prefs::LlamaRuntimePreset::HighPerformance4090 => {
-                llama_cpp_runtime::BundledLlamaBackend::Cuda
-            }
-            model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
-                llama_cpp_runtime::BundledLlamaBackend::Vulkan
-            }
-            model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
-                llama_cpp_runtime::BundledLlamaBackend::Cpu
-            }
-        };
-        self.runtime_status_for_backend(backend)
-            .and_then(|status| status.manifest.as_ref())
-            .is_some()
+        match preset {
+            model_prefs::LlamaRuntimePreset::Auto => true, // Auto は常に利用可能
+            model_prefs::LlamaRuntimePreset::NvidiaCuda => self
+                .runtime_status_for_backend(llama_cpp_runtime::BundledLlamaBackend::Cuda)
+                .and_then(|status| status.manifest.as_ref())
+                .is_some(),
+            model_prefs::LlamaRuntimePreset::VulkanHybrid => self
+                .runtime_status_for_backend(llama_cpp_runtime::BundledLlamaBackend::Vulkan)
+                .and_then(|status| status.manifest.as_ref())
+                .is_some(),
+            model_prefs::LlamaRuntimePreset::CpuOnly => self
+                .runtime_status_for_backend(llama_cpp_runtime::BundledLlamaBackend::Cpu)
+                .and_then(|status| status.manifest.as_ref())
+                .is_some(),
+        }
     }
 
     fn llama_cpp_bundle_status_line(&self) -> String {
@@ -2877,14 +2893,31 @@ impl AppView {
     fn settings_runtime_preset_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.hardware_params.llama_runtime_preset;
         let options = model_prefs::LlamaRuntimePreset::ALL;
+        let gpu_summary: SharedString = if self.gpu_profile_summary.is_empty() {
+            "GPU 検出中…".into()
+        } else {
+            format!("検出: {}", self.gpu_profile_summary).into()
+        };
         div()
             .flex()
             .flex_col()
             .gap(px(10.))
             .child(self.settings_labeled_block(
                 "実行モード",
-                "llama.cpp runtime の起動方針をプリセットで切り替えます。4090 + Arc は実験機能で、利用可能な runtime が無いモードは選択できません。",
+                "起動時に GPU を自動検出し、最適な runtime を選択します。手動で固定することもできます。",
             ))
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(6.))
+                    .rounded(px(6.))
+                    .bg(hex(PANEL_BG))
+                    .border_1()
+                    .border_color(hex(BORDER))
+                    .text_size(px(11.))
+                    .text_color(hex(TEXT_SECONDARY))
+                    .child(gpu_summary),
+            )
             .child(
                 div().flex().flex_col().gap(px(8.)).children(options.into_iter().map(|preset| {
                     let is_selected = preset == selected;
@@ -3780,8 +3813,20 @@ fn main() {
                         session_title_editor: None,
                         llama_cpp_runtime_statuses,
                         llama_cpp_update_notice: None,
+                        gpu_profile_summary: String::new(),
                     };
                     llama_cpp_chat::cleanup_orphan_servers();
+                    // GPU 自動検出 & 最適化（Auto モード時）
+                    {
+                        let profile = model_prefs::detect_gpu_profile();
+                        app.gpu_profile_summary = profile.summary.clone();
+                        if app.hardware_params.llama_runtime_preset
+                            == model_prefs::LlamaRuntimePreset::Auto
+                        {
+                            model_prefs::apply_gpu_profile(&mut app.hardware_params, &profile);
+                            app.persist_local_llm_prefs();
+                        }
+                    }
                     app.start_llama_cpp_update_check(cx);
                     app.prewarm_llama_server(cx);
                     app

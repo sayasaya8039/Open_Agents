@@ -104,41 +104,316 @@ impl KvCacheType {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LlamaRuntimePreset {
-    /// CUDA 版を使う通常モード
+    /// 起動時に GPU を自動検出し、最適な runtime を選択する（推奨）
     #[default]
-    HighPerformance4090,
-    /// Vulkan 版で NVIDIA + Intel GPU の混成を試す実験モード
-    ExperimentalHybrid4090Arc,
-    /// CPU runtime 優先の省電力モード（旧 NPU preset 互換）
-    IntelNpuEfficient,
+    Auto,
+    /// CUDA 版を使う通常モード（NVIDIA GPU 向け）
+    #[serde(alias = "high_performance_4090")]
+    NvidiaCuda,
+    /// Vulkan 版で複数 GPU の混成を試す実験モード
+    #[serde(alias = "experimental_hybrid_4090_arc")]
+    VulkanHybrid,
+    /// CPU runtime 優先の省電力モード（GPU なし / NPU 環境向け）
+    #[serde(alias = "intel_npu_efficient")]
+    CpuOnly,
 }
 
 impl LlamaRuntimePreset {
-    pub const ALL: [Self; 3] = [
-        Self::HighPerformance4090,
-        Self::ExperimentalHybrid4090Arc,
-        Self::IntelNpuEfficient,
+    pub const ALL: [Self; 4] = [
+        Self::Auto,
+        Self::NvidiaCuda,
+        Self::VulkanHybrid,
+        Self::CpuOnly,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::HighPerformance4090 => "4090 最優先",
-            Self::ExperimentalHybrid4090Arc => "4090 + Arc 実験",
-            Self::IntelNpuEfficient => "Intel NPU / CPU 省電力",
+            Self::Auto => "自動検出（推奨）",
+            Self::NvidiaCuda => "NVIDIA CUDA",
+            Self::VulkanHybrid => "Vulkan 混成（実験）",
+            Self::CpuOnly => "CPU のみ",
         }
     }
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Self::HighPerformance4090 => "CUDA 単独で速度を優先",
-            Self::ExperimentalHybrid4090Arc => "Vulkan で NVIDIA + Intel GPU の混成を試す",
-            Self::IntelNpuEfficient => "CPU runtime を使う省電力モード",
+            Self::Auto => "起動時に GPU を検出して最適な設定を自動適用",
+            Self::NvidiaCuda => "CUDA 単独で速度を優先（NVIDIA GPU 必須）",
+            Self::VulkanHybrid => "Vulkan で複数 GPU の混成を試す",
+            Self::CpuOnly => "GPU を使わず CPU のみで推論する省電力モード",
         }
     }
 
     pub fn is_experimental(self) -> bool {
-        matches!(self, Self::ExperimentalHybrid4090Arc)
+        matches!(self, Self::VulkanHybrid)
     }
+}
+
+// ── GPU 自動検出プロファイル ──
+
+/// 検出された GPU のベンダー
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuVendor {
+    Nvidia,
+    Amd,
+    Intel,
+    Unknown,
+}
+
+/// 検出された GPU 情報（DXGI 由来）
+#[derive(Clone, Debug)]
+pub struct DetectedGpu {
+    pub name: String,
+    pub vendor: GpuVendor,
+    pub vram_bytes: u64,
+    pub is_discrete: bool,
+}
+
+impl DetectedGpu {
+    pub fn vram_gb(&self) -> f64 {
+        self.vram_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+    }
+}
+
+/// GPU 検出結果に基づく最適化プロファイル
+#[derive(Clone, Debug)]
+pub struct GpuProfile {
+    pub gpus: Vec<DetectedGpu>,
+    pub best_gpu: Option<DetectedGpu>,
+    pub resolved_preset: LlamaRuntimePreset,
+    pub recommended_gpu_layers: i32,
+    pub recommended_threads: i32,
+    pub recommended_batch_size: i32,
+    pub summary: String,
+}
+
+/// DXGI で GPU を列挙し、最適なハードウェア設定を決定する
+#[cfg(windows)]
+pub fn detect_gpu_profile() -> GpuProfile {
+    // DXGI COM 経由で GPU 列挙
+    let gpus = enumerate_dxgi_gpus();
+    build_profile_from_gpus(gpus)
+}
+
+#[cfg(not(windows))]
+pub fn detect_gpu_profile() -> GpuProfile {
+    build_profile_from_gpus(Vec::new())
+}
+
+fn build_profile_from_gpus(gpus: Vec<DetectedGpu>) -> GpuProfile {
+    let cpu_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8) as i32;
+
+    // ベスト GPU を選択（VRAM 最大の discrete GPU、なければ integrated）
+    let best_gpu = gpus
+        .iter()
+        .filter(|g| g.is_discrete)
+        .max_by_key(|g| g.vram_bytes)
+        .or_else(|| gpus.iter().max_by_key(|g| g.vram_bytes))
+        .cloned();
+
+    let (resolved_preset, gpu_layers, threads, batch_size, summary) = match &best_gpu {
+        Some(gpu) if gpu.vendor == GpuVendor::Nvidia => {
+            let vram_gb = gpu.vram_gb();
+            // VRAM 量に応じてレイヤー数を調整
+            let layers = if vram_gb >= 20.0 { 99 }      // RTX 4090 / 3090 (24GB)
+                else if vram_gb >= 10.0 { 60 }           // RTX 4080 / 3070 Ti (12-16GB)
+                else if vram_gb >= 6.0 { 35 }            // RTX 3060 / 4060 (8GB)
+                else { 20 };                              // GTX 1660 / low-end (4-6GB)
+            let batch = if vram_gb >= 16.0 { 1024 } else { 512 };
+            let threads = (cpu_count / 2).max(4).min(16);
+            (
+                LlamaRuntimePreset::NvidiaCuda,
+                layers,
+                threads,
+                batch,
+                format!("{} ({:.0}GB VRAM) — CUDA, {} layers", gpu.name, vram_gb, layers),
+            )
+        }
+        Some(gpu) if gpu.vendor == GpuVendor::Amd => {
+            let vram_gb = gpu.vram_gb();
+            // AMD は Vulkan 経由（DirectML は llama-server 非対応のため）
+            let layers = if vram_gb >= 12.0 { 50 }
+                else if vram_gb >= 8.0 { 35 }
+                else { 20 };
+            let batch = 512;
+            let threads = (cpu_count / 2).max(4).min(16);
+            (
+                LlamaRuntimePreset::VulkanHybrid,
+                layers,
+                threads,
+                batch,
+                format!("{} ({:.0}GB VRAM) — Vulkan, {} layers", gpu.name, vram_gb, layers),
+            )
+        }
+        Some(gpu) if gpu.vendor == GpuVendor::Intel && gpu.is_discrete => {
+            let vram_gb = gpu.vram_gb();
+            let layers = if vram_gb >= 12.0 { 40 } else { 25 };
+            let batch = 512;
+            let threads = (cpu_count / 2).max(4).min(16);
+            (
+                LlamaRuntimePreset::VulkanHybrid,
+                layers,
+                threads,
+                batch,
+                format!("{} ({:.0}GB VRAM) — Vulkan, {} layers", gpu.name, vram_gb, layers),
+            )
+        }
+        _ => {
+            // GPU なしまたは integrated のみ → CPU モード
+            let threads = cpu_count.max(4).min(16);
+            let batch = 512;
+            (
+                LlamaRuntimePreset::CpuOnly,
+                0,
+                threads,
+                batch,
+                "GPU 未検出 — CPU のみ".to_string(),
+            )
+        }
+    };
+
+    GpuProfile {
+        gpus,
+        best_gpu,
+        resolved_preset,
+        recommended_gpu_layers: gpu_layers,
+        recommended_threads: threads,
+        recommended_batch_size: batch_size,
+        summary,
+    }
+}
+
+/// DXGI で GPU を列挙する（Windows 専用）
+#[cfg(windows)]
+fn enumerate_dxgi_gpus() -> Vec<DetectedGpu> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    #[link(name = "dxgi")]
+    extern "system" {
+        fn CreateDXGIFactory1(riid: *const [u8; 16], factory: *mut *mut u8) -> i32;
+    }
+
+    // IDXGIFactory1 の IID: {770aae78-f26f-4dba-a829-253c83d1b387}
+    const IID_IDXGI_FACTORY1: [u8; 16] = [
+        0x78, 0xae, 0x0a, 0x77, 0x6f, 0xf2, 0xba, 0x4d,
+        0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87,
+    ];
+
+    let mut factory: *mut u8 = std::ptr::null_mut();
+    let hr = unsafe { CreateDXGIFactory1(&IID_IDXGI_FACTORY1, &mut factory) };
+    if hr < 0 || factory.is_null() {
+        eprintln!("[GPU Detect] DXGI Factory 作成失敗 (hr={hr:#x})");
+        return Vec::new();
+    }
+
+    // COM vtable: IUnknown(3) + IDXGIObject(4) + IDXGIFactory(4) + IDXGIFactory1(1)
+    // EnumAdapters1 は IDXGIFactory1 の最初のメソッド = vtable[12]
+    let vtable = unsafe { *(factory as *const *const usize) };
+
+    let mut gpus = Vec::new();
+
+    for i in 0u32.. {
+        let mut adapter: *mut u8 = std::ptr::null_mut();
+        let enum_fn: extern "system" fn(*mut u8, u32, *mut *mut u8) -> i32 =
+            unsafe { std::mem::transmute(*vtable.add(12)) };
+        let hr = enum_fn(factory, i, &mut adapter);
+        if hr < 0 || adapter.is_null() {
+            break;
+        }
+
+        // IDXGIAdapter1::GetDesc1 は vtable[10] (IUnknown(3) + IDXGIObject(4) + IDXGIAdapter(3))
+        // DXGI_ADAPTER_DESC1: Description[128 wchar] + VendorId + DeviceId + SubSysId + Revision
+        //   + DedicatedVideoMemory + DedicatedSystemMemory + SharedSystemMemory + AdapterLuid + Flags
+        #[repr(C)]
+        struct DxgiAdapterDesc1 {
+            description: [u16; 128],
+            vendor_id: u32,
+            device_id: u32,
+            sub_sys_id: u32,
+            revision: u32,
+            dedicated_video_memory: usize,
+            dedicated_system_memory: usize,
+            shared_system_memory: usize,
+            adapter_luid_low: u32,
+            adapter_luid_high: i32,
+            flags: u32,
+        }
+
+        let adapter_vtable = unsafe { *(adapter as *const *const usize) };
+        let get_desc1: extern "system" fn(*mut u8, *mut DxgiAdapterDesc1) -> i32 =
+            unsafe { std::mem::transmute(*adapter_vtable.add(10)) };
+
+        let mut desc = unsafe { std::mem::zeroed::<DxgiAdapterDesc1>() };
+        let hr = get_desc1(adapter, &mut desc);
+
+        // Release adapter
+        let release: extern "system" fn(*mut u8) -> u32 =
+            unsafe { std::mem::transmute(*adapter_vtable.add(2)) };
+        release(adapter);
+
+        if hr < 0 {
+            continue;
+        }
+
+        // ソフトウェアアダプタはスキップ
+        const DXGI_ADAPTER_FLAG_SOFTWARE: u32 = 2;
+        if desc.flags & DXGI_ADAPTER_FLAG_SOFTWARE != 0 {
+            continue;
+        }
+
+        let name_len = desc.description.iter().position(|&c| c == 0).unwrap_or(128);
+        let name = OsString::from_wide(&desc.description[..name_len])
+            .to_string_lossy()
+            .to_string();
+
+        // Virtual / Basic Render をスキップ
+        if name.contains("Microsoft Basic") || name.contains("Virtual") || name.contains("Parsec") {
+            continue;
+        }
+
+        let vram_bytes = desc.dedicated_video_memory as u64;
+        let vendor = match desc.vendor_id {
+            0x10DE => GpuVendor::Nvidia,
+            0x1002 => GpuVendor::Amd,
+            0x8086 => GpuVendor::Intel,
+            _ => GpuVendor::Unknown,
+        };
+        let is_discrete = match vendor {
+            GpuVendor::Intel => vram_bytes >= 2 * 1024 * 1024 * 1024, // Intel Arc
+            _ => vram_bytes >= 1024 * 1024 * 1024,
+        };
+
+        gpus.push(DetectedGpu {
+            name,
+            vendor,
+            vram_bytes,
+            is_discrete,
+        });
+    }
+
+    // Release factory
+    let factory_vtable = unsafe { *(factory as *const *const usize) };
+    let release: extern "system" fn(*mut u8) -> u32 =
+        unsafe { std::mem::transmute(*factory_vtable.add(2)) };
+    release(factory);
+
+    gpus
+}
+
+/// GpuProfile に基づいて HardwareParams を自動調整する（Auto モード時のみ）
+pub fn apply_gpu_profile(hw: &mut HardwareParams, profile: &GpuProfile) {
+    hw.gpu_layers = profile.recommended_gpu_layers;
+    hw.n_threads = profile.recommended_threads;
+    hw.batch_size = profile.recommended_batch_size;
+    if profile.recommended_gpu_layers > 0 {
+        hw.gpu_acceleration = true;
+    } else {
+        hw.gpu_acceleration = false;
+    }
+    eprintln!("[GPU Auto] {}", profile.summary);
 }
 
 /// 電源モード（ラップトップ特有: TGP 最大化のための設定）
