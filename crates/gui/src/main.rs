@@ -466,6 +466,508 @@ enum ChatStreamEvent {
     Error(String),
 }
 
+// ── ReAct (Reasoning + Acting) ループ実行 ──
+
+/// ReAct のシステムプロンプト — ツール呼び出し形式を LLM に教える
+const REACT_SYSTEM_SUFFIX: &str = r#"
+
+## ReAct ツール使用ルール
+
+あなたは以下のツールを使えます。ツールを使いたい場合は、必ず以下の形式で出力してください：
+
+Thought: [今何を考えているか、次に何をすべきか]
+Action: [ツール名]
+Action Input: [ツールへの入力]
+
+ツールの結果は Observation: として返されます。それを見て次の Thought を続けてください。
+最終的な回答が得られたら、以下の形式で終了してください：
+
+Thought: 十分な情報が得られたので最終回答をまとめます。
+Final Answer: [最終回答]
+
+### 利用可能なツール
+
+1. **web_search** — ウェブ検索。キーワードを入力すると検索結果を返します。
+   例: Action: web_search / Action Input: Rust async runtime comparison 2024
+
+2. **calculate** — 数式を計算します。四則演算、累乗、括弧が使えます。
+   例: Action: calculate / Action Input: (1024 * 1024 * 8) / 1000000
+
+3. **datetime** — 現在の日付と時刻を返します。入力不要。
+   例: Action: datetime / Action Input: now
+
+重要: Action を使わず直接回答できる場合は Final Answer: で回答してください。"#;
+
+/// ReAct ループを実行
+fn run_react_loop(
+    path: &std::path::Path,
+    api_messages: &[(String, String)],
+    temperature: f32,
+    max_tokens: i32,
+    context_length: i32,
+    hardware: &model_prefs::HardwareParams,
+    max_steps: usize,
+    tx: &smol::channel::Sender<ChatStreamEvent>,
+) {
+    let started = std::time::Instant::now();
+
+    // システムメッセージに ReAct 指示を追加
+    let mut messages: Vec<(String, String)> = api_messages.to_vec();
+    if let Some((_, sys)) = messages.iter_mut().find(|(r, _)| r == "system") {
+        sys.push_str(REACT_SYSTEM_SUFFIX);
+    }
+
+    let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(
+        "🔄 **ReAct**: Reasoning + Acting ループを開始…\n\n".into(),
+    ));
+
+    let mut trace = String::new(); // thinking に格納する全トレース
+    let mut step = 0;
+
+    loop {
+        if step >= max_steps {
+            let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(format!(
+                "\n⚠ 最大ステップ数 ({max_steps}) に到達。最終回答を強制生成します…\n\n"
+            )));
+            // 最終回答を強制
+            messages.push((
+                "user".into(),
+                "最大ステップ数に達しました。これまでの情報をもとに Final Answer: を出力してください。".into(),
+            ));
+            break;
+        }
+
+        // LLM 呼び出し
+        let result = llama_cpp_chat::complete_llama_cpp_chat_blocking(
+            path,
+            &messages,
+            temperature,
+            max_tokens,
+            context_length,
+            hardware,
+        );
+
+        let reply_text = match result {
+            Ok(reply) => reply.content,
+            Err(e) => {
+                let _ = tx.send_blocking(ChatStreamEvent::Error(format!(
+                    "ReAct ステップ {} 失敗: {e}",
+                    step + 1
+                )));
+                return;
+            }
+        };
+
+        trace.push_str(&format!("--- Step {} ---\n{}\n\n", step + 1, reply_text));
+
+        // Final Answer を検出
+        if let Some(final_answer) = extract_final_answer(&reply_text) {
+            let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            let mut metrics = ChatMsgMetrics::default();
+            metrics.elapsed_ms = Some(elapsed_ms);
+            metrics.stop_reason = Some(format!("ReAct {} ステップ", step + 1));
+
+            let _ = tx.send_blocking(ChatStreamEvent::Complete(
+                llama_cpp_chat::LlamaCppChatResponse {
+                    content: format!(
+                        "{final_answer}\n\n---\n*🔄 ReAct: {} ステップで到達*",
+                        step + 1
+                    ),
+                    thinking: Some(trace),
+                    metrics: Some(metrics),
+                },
+            ));
+            return;
+        }
+
+        // Action を検出してツール実行
+        if let Some((action, input)) = extract_action(&reply_text) {
+            step += 1;
+            let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(format!(
+                "**Step {step}**: `{action}({input})` を実行中…\n"
+            )));
+
+            let observation = execute_react_tool(&action, &input);
+
+            let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(format!(
+                "→ 結果取得完了\n"
+            )));
+
+            trace.push_str(&format!("Observation: {}\n\n", observation));
+
+            // LLM の出力 + Observation を会話に追加
+            messages.push(("assistant".into(), reply_text));
+            messages.push((
+                "user".into(),
+                format!("Observation: {observation}\n\n上記の結果を踏まえて、次の Thought を続けてください。最終回答が出せるなら Final Answer: で回答してください。"),
+            ));
+        } else {
+            // Action も Final Answer もない → 直接回答として扱う
+            let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            let mut metrics = ChatMsgMetrics::default();
+            metrics.elapsed_ms = Some(elapsed_ms);
+            metrics.stop_reason = Some("ReAct 直接回答".into());
+
+            let _ = tx.send_blocking(ChatStreamEvent::Complete(
+                llama_cpp_chat::LlamaCppChatResponse {
+                    content: format!(
+                        "{reply_text}\n\n---\n*🔄 ReAct: ツール不使用で直接回答*"
+                    ),
+                    thinking: if trace.is_empty() { None } else { Some(trace) },
+                    metrics: Some(metrics),
+                },
+            ));
+            return;
+        }
+    }
+
+    // 最大ステップ後の最終回答
+    let result = llama_cpp_chat::complete_llama_cpp_chat_blocking(
+        path,
+        &messages,
+        temperature,
+        max_tokens,
+        context_length,
+        hardware,
+    );
+
+    let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    match result {
+        Ok(reply) => {
+            let content = extract_final_answer(&reply.content)
+                .unwrap_or_else(|| reply.content.clone());
+            let mut metrics = reply.metrics.unwrap_or_default();
+            metrics.elapsed_ms = Some(elapsed_ms);
+            metrics.stop_reason = Some(format!("ReAct {max_steps} ステップ上限"));
+
+            let _ = tx.send_blocking(ChatStreamEvent::Complete(
+                llama_cpp_chat::LlamaCppChatResponse {
+                    content: format!(
+                        "{content}\n\n---\n*🔄 ReAct: {max_steps} ステップで到達（上限）*"
+                    ),
+                    thinking: Some(trace),
+                    metrics: Some(metrics),
+                },
+            ));
+        }
+        Err(e) => {
+            let _ = tx.send_blocking(ChatStreamEvent::Error(format!(
+                "ReAct 最終回答生成失敗: {e}"
+            )));
+        }
+    }
+}
+
+/// LLM 出力から "Final Answer: ..." を抽出
+fn extract_final_answer(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Final Answer:") {
+            // Final Answer: 以降の全テキスト（複数行も含む）
+            let pos = text.find("Final Answer:").unwrap();
+            let answer = text[pos + "Final Answer:".len()..].trim();
+            return Some(answer.to_string());
+        }
+    }
+    None
+}
+
+/// LLM 出力から "Action: xxx / Action Input: yyy" を抽出
+fn extract_action(text: &str) -> Option<(String, String)> {
+    let mut action = None;
+    let mut input = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Action:") {
+            action = Some(rest.trim().to_string());
+        }
+        if let Some(rest) = trimmed.strip_prefix("Action Input:") {
+            input = Some(rest.trim().to_string());
+        }
+    }
+    match (action, input) {
+        (Some(a), Some(i)) => Some((a, i)),
+        (Some(a), None) => Some((a, String::new())),
+        _ => None,
+    }
+}
+
+/// ReAct ツールを実行して Observation を返す
+fn execute_react_tool(action: &str, input: &str) -> String {
+    let action_lower = action.trim().to_lowercase();
+    match action_lower.as_str() {
+        "web_search" | "search" => react_tool_web_search(input),
+        "calculate" | "calc" | "math" => react_tool_calculate(input),
+        "datetime" | "date" | "time" | "now" => react_tool_datetime(),
+        _ => format!("未知のツール `{action}` です。利用可能: web_search, calculate, datetime"),
+    }
+}
+
+/// ウェブ検索ツール — DuckDuckGo Lite HTML を取得してテキスト抽出
+fn react_tool_web_search(query: &str) -> String {
+    if query.trim().is_empty() {
+        return "検索クエリが空です。".to_string();
+    }
+    let encoded = query
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c.to_string()
+            } else if c == ' ' {
+                "+".to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect::<String>();
+    let url = format!("https://lite.duckduckgo.com/lite/?q={encoded}");
+    match ureq::get(&url)
+        .set("User-Agent", "Open Agents ReAct/1.0")
+        .timeout(std::time::Duration::from_secs(10))
+        .call()
+    {
+        Ok(resp) => {
+            let text = resp.into_string().unwrap_or_default();
+            // HTML からテキストを雑に抽出（結果スニペット部分）
+            let snippets = extract_search_snippets(&text);
+            if snippets.is_empty() {
+                format!("検索結果が見つかりませんでした。クエリ: {query}")
+            } else {
+                snippets.join("\n\n")
+            }
+        }
+        Err(e) => format!("検索失敗: {e}"),
+    }
+}
+
+/// DuckDuckGo Lite HTML から検索結果スニペットを抽出（最大 5 件）
+fn extract_search_snippets(html: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    // DuckDuckGo Lite の結果は <td class="result-snippet"> に入る
+    for segment in html.split("result-snippet") {
+        if results.len() >= 5 {
+            break;
+        }
+        if let Some(start) = segment.find('>') {
+            let text_part = &segment[start + 1..];
+            if let Some(end) = text_part.find("</td>").or(text_part.find("</span>")) {
+                let raw = &text_part[..end];
+                let cleaned = strip_html_tags(raw).trim().to_string();
+                if cleaned.len() > 20 {
+                    results.push(cleaned);
+                }
+            }
+        }
+    }
+    // フォールバック: <a> タグのテキストも取得
+    if results.is_empty() {
+        for segment in html.split("result-link") {
+            if results.len() >= 5 {
+                break;
+            }
+            if let Some(start) = segment.find('>') {
+                let text_part = &segment[start + 1..];
+                if let Some(end) = text_part.find("</a>") {
+                    let cleaned = strip_html_tags(&text_part[..end]).trim().to_string();
+                    if cleaned.len() > 10 {
+                        results.push(cleaned);
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+/// HTML タグを雑に除去
+fn strip_html_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(c);
+        }
+    }
+    // HTML エンティティの基本変換
+    out.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+}
+
+/// 計算ツール — 簡易数式評価
+fn react_tool_calculate(expr: &str) -> String {
+    if expr.trim().is_empty() {
+        return "数式が空です。".to_string();
+    }
+    match eval_simple_math(expr.trim()) {
+        Some(result) => format!("{expr} = {result}"),
+        None => format!("計算できませんでした: {expr} （四則演算・括弧・累乗のみ対応）"),
+    }
+}
+
+/// 簡易数式パーサ（四則演算 + 括弧 + ** 累乗）
+fn eval_simple_math(expr: &str) -> Option<f64> {
+    let tokens = tokenize_math(expr)?;
+    let mut pos = 0;
+    let result = parse_expr(&tokens, &mut pos)?;
+    if pos == tokens.len() {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+enum MathToken {
+    Num(f64),
+    Op(char),
+    LParen,
+    RParen,
+}
+
+fn tokenize_math(expr: &str) -> Option<Vec<MathToken>> {
+    let mut tokens = Vec::new();
+    let mut chars = expr.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+        } else if c.is_ascii_digit() || c == '.' {
+            let mut num_str = String::new();
+            while let Some(&c) = chars.peek() {
+                if c.is_ascii_digit() || c == '.' {
+                    num_str.push(c);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(MathToken::Num(num_str.parse().ok()?));
+        } else if c == '(' {
+            tokens.push(MathToken::LParen);
+            chars.next();
+        } else if c == ')' {
+            tokens.push(MathToken::RParen);
+            chars.next();
+        } else if "+-*/%^".contains(c) {
+            if c == '*' && chars.clone().nth(1) == Some('*') {
+                chars.next();
+                chars.next();
+                tokens.push(MathToken::Op('^'));
+            } else {
+                tokens.push(MathToken::Op(c));
+                chars.next();
+            }
+        } else {
+            return None;
+        }
+    }
+    Some(tokens)
+}
+
+fn parse_expr(tokens: &[MathToken], pos: &mut usize) -> Option<f64> {
+    let mut left = parse_term(tokens, pos)?;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            MathToken::Op('+') => { *pos += 1; left += parse_term(tokens, pos)?; }
+            MathToken::Op('-') => { *pos += 1; left -= parse_term(tokens, pos)?; }
+            _ => break,
+        }
+    }
+    Some(left)
+}
+
+fn parse_term(tokens: &[MathToken], pos: &mut usize) -> Option<f64> {
+    let mut left = parse_power(tokens, pos)?;
+    while *pos < tokens.len() {
+        match &tokens[*pos] {
+            MathToken::Op('*') => { *pos += 1; left *= parse_power(tokens, pos)?; }
+            MathToken::Op('/') => { *pos += 1; let r = parse_power(tokens, pos)?; left /= r; }
+            MathToken::Op('%') => { *pos += 1; let r = parse_power(tokens, pos)?; left %= r; }
+            _ => break,
+        }
+    }
+    Some(left)
+}
+
+fn parse_power(tokens: &[MathToken], pos: &mut usize) -> Option<f64> {
+    let base = parse_atom(tokens, pos)?;
+    if *pos < tokens.len() && matches!(&tokens[*pos], MathToken::Op('^')) {
+        *pos += 1;
+        let exp = parse_power(tokens, pos)?;
+        Some(base.powf(exp))
+    } else {
+        Some(base)
+    }
+}
+
+fn parse_atom(tokens: &[MathToken], pos: &mut usize) -> Option<f64> {
+    if *pos >= tokens.len() {
+        return None;
+    }
+    match &tokens[*pos] {
+        MathToken::Num(n) => { let v = *n; *pos += 1; Some(v) }
+        MathToken::LParen => {
+            *pos += 1;
+            let v = parse_expr(tokens, pos)?;
+            if *pos < tokens.len() && matches!(&tokens[*pos], MathToken::RParen) {
+                *pos += 1;
+            }
+            Some(v)
+        }
+        MathToken::Op('-') => {
+            *pos += 1;
+            let v = parse_atom(tokens, pos)?;
+            Some(-v)
+        }
+        _ => None,
+    }
+}
+
+/// 日時ツール
+fn react_tool_datetime() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    // UTC → JST (+9h)
+    let jst_secs = secs + 9 * 3600;
+    let days = jst_secs / 86400;
+    let time_of_day = jst_secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // 簡易日付計算 (2000-01-01 = day 10957 from epoch)
+    let (year, month, day) = days_to_date(days as i64);
+    let weekday = ["木", "金", "土", "日", "月", "火", "水"][(days % 7) as usize];
+
+    format!(
+        "{year}年{month}月{day}日（{weekday}）{hours:02}:{minutes:02}:{seconds:02} JST"
+    )
+}
+
+fn days_to_date(mut days: i64) -> (i64, u32, u32) {
+    // Algorithm from Howard Hinnant
+    days += 719468;
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = (days - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
 // ── Tree-of-Thoughts (ToT) 3フェーズ実行 ──
 
 /// ToT プロンプト: Phase 1 — 複数の思考経路を生成
@@ -1404,8 +1906,80 @@ impl AppView {
         let streaming_enabled = self.ai_prefs.streaming_responses;
         let self_consistency = self.ai_prefs.self_consistency;
         let tot_mode = self.ai_prefs.tot_mode;
+        let react_mode = self.ai_prefs.react_mode;
 
         match chat_client::resolve_chat_backend(&api_keys, &chat_prefs, &local_model_paths) {
+            // ReAct: Reasoning + Acting ループ（ローカル GGUF 専用）
+            Ok(chat_client::ChatBackend::LlamaCppLocal { path }) if react_mode.is_enabled() => {
+                let max_steps = react_mode.max_steps();
+                let hw = hardware_params.clone();
+                let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
+                std::thread::spawn(move || {
+                    run_react_loop(
+                        &path,
+                        &api_messages,
+                        temperature,
+                        max_tokens,
+                        context_length,
+                        &hw,
+                        max_steps,
+                        &tx,
+                    );
+                });
+
+                cx.spawn(async move |this, cx| {
+                    let mut saw_content_delta = false;
+                    while let Ok(event) = rx.recv().await {
+                        let done = matches!(
+                            event,
+                            ChatStreamEvent::Complete(_) | ChatStreamEvent::Error(_)
+                        );
+                        let _ = cx.update(|app| {
+                            let _ = this.update(app, |this: &mut AppView, cx| {
+                                if let Some(last) = this
+                                    .session_store
+                                    .active_mut()
+                                    .and_then(|s| s.messages.last_mut())
+                                {
+                                    if last.role == "assistant" {
+                                        match event {
+                                            ChatStreamEvent::ContentDelta(delta) => {
+                                                if !saw_content_delta {
+                                                    last.content.clear();
+                                                    saw_content_delta = true;
+                                                }
+                                                last.content.push_str(&delta);
+                                            }
+                                            ChatStreamEvent::Complete(reply) => {
+                                                this.chat_pending = false;
+                                                last.content = reply.content;
+                                                last.thinking = reply.thinking;
+                                                last.metrics = merge_metrics(
+                                                    last.metrics.take(),
+                                                    reply.metrics,
+                                                );
+                                                chat_session::save_sessions(&this.session_store);
+                                            }
+                                            ChatStreamEvent::Error(err) => {
+                                                this.chat_pending = false;
+                                                last.content = format!("エラー: {err}");
+                                                chat_session::save_sessions(&this.session_store);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                this.chat_scroll.scroll_to_bottom();
+                                cx.notify();
+                            });
+                        });
+                        if done {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
             // Tree-of-Thoughts: 複数思考経路を探索・評価・合成（ローカル GGUF 専用）
             Ok(chat_client::ChatBackend::LlamaCppLocal { path }) if tot_mode.is_enabled() => {
                 let branches = tot_mode.branch_count();
@@ -2823,6 +3397,92 @@ impl AppView {
                                 MouseButton::Left,
                                 cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                                     this.ai_prefs.cot_mode = mode;
+                                    this.persist_local_llm_prefs();
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(hex(TEXT_PRIMARY))
+                                            .child(mode.label()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(9.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .child(mode.subtitle()),
+                                    ),
+                            )
+                    })),
+            )
+    }
+
+    fn settings_react_mode_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.ai_prefs.react_mode;
+        let modes = [
+            model_prefs::ReActMode::Off,
+            model_prefs::ReActMode::Steps3,
+            model_prefs::ReActMode::Steps5,
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child("ReAct（検索・計算ツール）"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .whitespace_normal()
+                            .child(
+                                "LLM が自律的にウェブ検索・計算・日時取得を使いながら推論。ローカル GGUF 専用。",
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .children(modes.into_iter().map(|mode| {
+                        let is_selected = mode == current;
+                        div()
+                            .flex_1()
+                            .px(px(8.))
+                            .py(px(6.))
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(if is_selected {
+                                hex(ACCENT_BLUE)
+                            } else {
+                                hex(CONTROL_BORDER)
+                            })
+                            .bg(if is_selected {
+                                hex_a(ACCENT_BLUE, 0.18)
+                            } else {
+                                hex(CONTROL_BG)
+                            })
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.ai_prefs.react_mode = mode;
                                     this.persist_local_llm_prefs();
                                     cx.notify();
                                 }),
@@ -4273,6 +4933,7 @@ impl AppView {
                                             .child(self.settings_cot_mode_row(cx))
                                             .child(self.settings_self_consistency_row(cx))
                                             .child(self.settings_tot_mode_row(cx))
+                                            .child(self.settings_react_mode_row(cx))
                                             .child(self.settings_chat_inference_block(cx)),
                                     ),
                             )

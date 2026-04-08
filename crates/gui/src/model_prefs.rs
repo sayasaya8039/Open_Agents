@@ -654,6 +654,9 @@ pub struct AiPrefs {
     /// Tree-of-Thoughts: 複数の思考経路を探索して最良を合成
     #[serde(default)]
     pub tot_mode: ToTMode,
+    /// ReAct: Reasoning + Acting（考えながらツールを使うループ推論）
+    #[serde(default)]
+    pub react_mode: ReActMode,
 }
 
 /// Tree-of-Thoughts (ToT) 推論モード
@@ -694,6 +697,52 @@ impl ToTMode {
             Self::Off => 0,
             Self::Branch2 => 2,
             Self::Branch3 => 3,
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
+/// ReAct (Reasoning + Acting) モード
+///
+/// LLM が「Thought → Action → Observation」のループを繰り返し、
+/// ツール（検索・計算・日時取得）を自律的に使いながら最終回答に到達する。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReActMode {
+    /// 無効
+    #[default]
+    Off,
+    /// 最大 3 ステップ（高速）
+    Steps3,
+    /// 最大 5 ステップ（標準）
+    Steps5,
+}
+
+impl ReActMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "無効",
+            Self::Steps3 => "最大3ステップ",
+            Self::Steps5 => "最大5ステップ",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::Off => "ツール不使用の通常推論",
+            Self::Steps3 => "検索・計算を最大3回使って回答",
+            Self::Steps5 => "検索・計算を最大5回使って回答",
+        }
+    }
+
+    pub fn max_steps(self) -> usize {
+        match self {
+            Self::Off => 0,
+            Self::Steps3 => 3,
+            Self::Steps5 => 5,
         }
     }
 
@@ -758,6 +807,7 @@ impl Default for AiPrefs {
             cot_mode: CoTMode::default(),
             self_consistency: SelfConsistencyMode::default(),
             tot_mode: ToTMode::default(),
+            react_mode: ReActMode::default(),
         }
     }
 }
