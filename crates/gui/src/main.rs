@@ -466,6 +466,101 @@ enum ChatStreamEvent {
     Error(String),
 }
 
+/// Self-Consistency 多数決: 回答を正規化してグループ化し、最多得票を返す
+/// 戻り値: (最良回答, メトリクス, 得票数, 総投票数)
+fn majority_vote_select(
+    responses: &[(String, Option<ChatMsgMetrics>)],
+) -> (String, Option<ChatMsgMetrics>, usize, usize) {
+    if responses.is_empty() {
+        return (String::new(), None, 0, 0);
+    }
+    if responses.len() == 1 {
+        return (
+            responses[0].0.clone(),
+            responses[0].1.clone(),
+            1,
+            1,
+        );
+    }
+
+    // 各回答の「結論部分」を抽出して比較（最終段落 or 最後の文）
+    let normalized: Vec<String> = responses
+        .iter()
+        .map(|(content, _)| normalize_for_vote(content))
+        .collect();
+
+    // 各回答ペアの類似度を計算し、最も他の回答と一致する回答を選択
+    let mut best_idx = 0;
+    let mut best_score = 0usize;
+    for i in 0..normalized.len() {
+        let mut score = 0;
+        for j in 0..normalized.len() {
+            if i != j && answers_are_similar(&normalized[i], &normalized[j]) {
+                score += 1;
+            }
+        }
+        if score > best_score {
+            best_score = score;
+            best_idx = i;
+        }
+    }
+
+    (
+        responses[best_idx].0.clone(),
+        responses[best_idx].1.clone(),
+        best_score + 1, // 自分自身を含む
+        responses.len(),
+    )
+}
+
+/// 回答を正規化: 空白・改行を統一、マークダウン装飾を除去して比較用テキストにする
+fn normalize_for_vote(content: &str) -> String {
+    // 最終結論を抽出: 「結論」「まとめ」「答え」等のキーワード以降を優先
+    let conclusion_markers = ["## 結論", "## まとめ", "**結論", "**まとめ", "答え:", "結論:"];
+    for marker in conclusion_markers {
+        if let Some(pos) = content.to_lowercase().find(&marker.to_lowercase()) {
+            let tail = &content[pos..];
+            return normalize_text(tail);
+        }
+    }
+    // 最終段落を使う（最後の2重改行以降）
+    if let Some(pos) = content.rfind("\n\n") {
+        let tail = content[pos..].trim();
+        if tail.len() > 10 {
+            return normalize_text(tail);
+        }
+    }
+    normalize_text(content)
+}
+
+fn normalize_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '*' | '#' | '`' | '>' | '-'))
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// 2つの正規化済み回答が「同じ結論」かを判定（Jaccard 類似度 > 0.4）
+fn answers_are_similar(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let words_a: std::collections::HashSet<&str> = a.split_whitespace().collect();
+    let words_b: std::collections::HashSet<&str> = b.split_whitespace().collect();
+    if words_a.is_empty() || words_b.is_empty() {
+        return false;
+    }
+    let intersection = words_a.intersection(&words_b).count();
+    let union = words_a.union(&words_b).count();
+    if union == 0 {
+        return false;
+    }
+    (intersection as f64 / union as f64) > 0.4
+}
+
 fn merge_metrics(
     existing: Option<ChatMsgMetrics>,
     incoming: Option<ChatMsgMetrics>,
@@ -1110,8 +1205,124 @@ impl AppView {
         let context_length = self.model_params.context_length;
         let hardware_params = self.hardware_params.clone();
         let streaming_enabled = self.ai_prefs.streaming_responses;
+        let self_consistency = self.ai_prefs.self_consistency;
 
         match chat_client::resolve_chat_backend(&api_keys, &chat_prefs, &local_model_paths) {
+            // Self-Consistency: 複数回推論して多数決（ストリーミング無効で実行）
+            Ok(chat_client::ChatBackend::LlamaCppLocal { path })
+                if self_consistency.is_enabled() =>
+            {
+                let vote_count = self_consistency.vote_count();
+                let hw = hardware_params.clone();
+                let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
+                std::thread::spawn(move || {
+                    let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(format!(
+                        "Self-Consistency: {vote_count} 回の推論を実行中…\n\n"
+                    )));
+                    let mut responses: Vec<(String, Option<ChatMsgMetrics>)> = Vec::new();
+                    for i in 0..vote_count {
+                        // 各試行で少し温度を変えてサンプリング多様性を確保
+                        let temp = temperature + (i as f32) * 0.05;
+                        let result = llama_cpp_chat::complete_llama_cpp_chat_blocking(
+                            &path,
+                            &api_messages,
+                            temp.min(2.0),
+                            max_tokens,
+                            context_length,
+                            &hw,
+                        );
+                        match result {
+                            Ok(reply) => {
+                                let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(
+                                    format!("✓ 投票 {}/{vote_count} 完了\n", i + 1),
+                                ));
+                                responses.push((reply.content, reply.metrics));
+                            }
+                            Err(e) => {
+                                let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(
+                                    format!("✗ 投票 {}/{vote_count} エラー: {e}\n", i + 1),
+                                ));
+                            }
+                        }
+                    }
+                    if responses.is_empty() {
+                        let _ = tx.send_blocking(ChatStreamEvent::Error(
+                            "Self-Consistency: すべての推論が失敗しました".to_string(),
+                        ));
+                        return;
+                    }
+                    // 多数決: 各回答を正規化してグループ化し、最多得票の回答を採用
+                    let (best_content, best_metrics, votes, total) =
+                        majority_vote_select(&responses);
+                    let mut final_reply = llama_cpp_chat::LlamaCppChatResponse {
+                        content: format!(
+                            "{best_content}\n\n---\n*Self-Consistency: {votes}/{total} 票で採用*"
+                        ),
+                        thinking: None,
+                        metrics: best_metrics,
+                    };
+                    // メトリクスに投票情報を追記
+                    if let Some(ref mut m) = final_reply.metrics {
+                        m.stop_reason = Some(format!(
+                            "Self-Consistency {votes}/{total} 票"
+                        ));
+                    }
+                    let _ = tx.send_blocking(ChatStreamEvent::Complete(final_reply));
+                });
+
+                cx.spawn(async move |this, cx| {
+                    let mut saw_content_delta = false;
+                    while let Ok(event) = rx.recv().await {
+                        let done = matches!(
+                            event,
+                            ChatStreamEvent::Complete(_) | ChatStreamEvent::Error(_)
+                        );
+                        let _ = cx.update(|app| {
+                            let _ = this.update(app, |this: &mut AppView, cx| {
+                                if let Some(last) = this
+                                    .session_store
+                                    .active_mut()
+                                    .and_then(|s| s.messages.last_mut())
+                                {
+                                    if last.role == "assistant" {
+                                        match event {
+                                            ChatStreamEvent::ContentDelta(delta) => {
+                                                if !saw_content_delta {
+                                                    last.content.clear();
+                                                    saw_content_delta = true;
+                                                }
+                                                last.content.push_str(&delta);
+                                            }
+                                            ChatStreamEvent::Complete(reply) => {
+                                                this.chat_pending = false;
+                                                last.content = reply.content;
+                                                last.thinking = reply.thinking;
+                                                last.metrics = merge_metrics(
+                                                    last.metrics.take(),
+                                                    reply.metrics,
+                                                );
+                                                chat_session::save_sessions(&this.session_store);
+                                            }
+                                            ChatStreamEvent::Error(err) => {
+                                                this.chat_pending = false;
+                                                last.content = format!("エラー: {err}");
+                                                chat_session::save_sessions(&this.session_store);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                this.chat_scroll.scroll_to_bottom();
+                                cx.notify();
+                            });
+                        });
+                        if done {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
             Ok(chat_client::ChatBackend::LlamaCppLocal { path }) if streaming_enabled => {
                 let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
                 std::thread::spawn(move || {
@@ -2343,6 +2554,92 @@ impl AppView {
                                 MouseButton::Left,
                                 cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                                     this.ai_prefs.cot_mode = mode;
+                                    this.persist_local_llm_prefs();
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(hex(TEXT_PRIMARY))
+                                            .child(mode.label()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(9.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .child(mode.subtitle()),
+                                    ),
+                            )
+                    })),
+            )
+    }
+
+    fn settings_self_consistency_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.ai_prefs.self_consistency;
+        let modes = [
+            model_prefs::SelfConsistencyMode::Off,
+            model_prefs::SelfConsistencyMode::Vote3,
+            model_prefs::SelfConsistencyMode::Vote5,
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child("Self-Consistency（多数決）"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .whitespace_normal()
+                            .child(
+                                "同じ質問を複数回推論し、最も一致する回答を採用。ローカル GGUF 専用。推論時間は投票数倍になります。",
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .children(modes.into_iter().map(|mode| {
+                        let is_selected = mode == current;
+                        div()
+                            .flex_1()
+                            .px(px(8.))
+                            .py(px(6.))
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(if is_selected {
+                                hex(ACCENT_BLUE)
+                            } else {
+                                hex(CONTROL_BORDER)
+                            })
+                            .bg(if is_selected {
+                                hex_a(ACCENT_BLUE, 0.18)
+                            } else {
+                                hex(CONTROL_BG)
+                            })
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.ai_prefs.self_consistency = mode;
                                     this.persist_local_llm_prefs();
                                     cx.notify();
                                 }),
@@ -3619,6 +3916,7 @@ impl AppView {
                                                 "応答をリアルタイムで表示",
                                             ))
                                             .child(self.settings_cot_mode_row(cx))
+                                            .child(self.settings_self_consistency_row(cx))
                                             .child(self.settings_chat_inference_block(cx)),
                                     ),
                             )

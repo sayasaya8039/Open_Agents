@@ -648,6 +648,52 @@ pub struct AiPrefs {
     /// Chain-of-Thought 推論モード（ローカル LLM の推論品質を向上）
     #[serde(default)]
     pub cot_mode: CoTMode,
+    /// Self-Consistency: 同じ質問を複数回投げて多数決で最良回答を採用
+    #[serde(default)]
+    pub self_consistency: SelfConsistencyMode,
+}
+
+/// Self-Consistency 多数決モード
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SelfConsistencyMode {
+    /// 無効（1回の推論で回答）
+    #[default]
+    Off,
+    /// 3回推論して多数決
+    Vote3,
+    /// 5回推論して多数決
+    Vote5,
+}
+
+impl SelfConsistencyMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "無効",
+            Self::Vote3 => "3回投票",
+            Self::Vote5 => "5回投票",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::Off => "1回の推論で回答（高速）",
+            Self::Vote3 => "3回推論して最も一致する回答を採用",
+            Self::Vote5 => "5回推論して最も一致する回答を採用（高品質）",
+        }
+    }
+
+    pub fn vote_count(self) -> usize {
+        match self {
+            Self::Off => 1,
+            Self::Vote3 => 3,
+            Self::Vote5 => 5,
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
 }
 
 const fn default_true() -> bool {
@@ -661,6 +707,7 @@ impl Default for AiPrefs {
             code_suggestions: true,
             streaming_responses: true,
             cot_mode: CoTMode::default(),
+            self_consistency: SelfConsistencyMode::default(),
         }
     }
 }
