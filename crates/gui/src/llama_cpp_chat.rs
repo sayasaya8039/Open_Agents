@@ -88,8 +88,10 @@ fn assign_child_to_job(child: &Child) {
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_LOG_BYTES: usize = 32 * 1024;
-const DEFAULT_CONTEXT_LENGTH: i32 = 4096;
+const DEFAULT_CONTEXT_LENGTH: i32 = model_prefs::LOCAL_CONTEXT_LENGTH_DEFAULT;
 const MIN_CONTEXT_LENGTH: i32 = 512;
+/// Gemma 4 は sliding window attention (4096) + global attention を使うため最低 8192 が必要。
+/// llama.cpp main ビルドで日々改善中 — 最新版を推奨。
 const GEMMA4_MIN_CONTEXT_LENGTH: i32 = 8192;
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
@@ -371,6 +373,21 @@ fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
         .collect()
 }
 
+/// ローカル GGUF 推論で使う stop シーケンス。
+/// モデルの EOS トークンに加え、よくある生成暴走パターンを検出して早期停止する。
+const LOCAL_STOP_SEQUENCES: &[&str] = &[
+    "<|im_end|>",
+    "<|eot_id|>",
+    "<end_of_turn>",
+    "<|end|>",
+    "</s>",
+    "<|endoftext|>",
+    "### Human:",
+    "### User:",
+    "\nUser:",
+    "\nHuman:",
+];
+
 fn chat_completion_request_body(
     model_id: &str,
     messages: &[(String, String)],
@@ -384,6 +401,7 @@ fn chat_completion_request_body(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": stream,
+        "stop": LOCAL_STOP_SEQUENCES,
     });
 
     if stream {
@@ -950,9 +968,22 @@ fn detect_vendor(name: &str) -> DeviceVendor {
 
 fn effective_cpu_threads(hardware: &model_prefs::HardwareParams) -> usize {
     let h = launch_hardware_params(hardware);
-    let want = h.n_threads.max(1) as usize;
     let cap = available_thread_count();
+    let want = match h.power_mode {
+        // MaxPerformance: 全コア使用（AC接続 + 冷却強化前提で TGP 最大化）
+        model_prefs::PowerMode::MaxPerformance => cap,
+        model_prefs::PowerMode::Balanced => h.n_threads.max(1) as usize,
+    };
     want.min(cap).max(1)
+}
+
+fn effective_batch_size(hardware: &model_prefs::HardwareParams) -> i32 {
+    let h = launch_hardware_params(hardware);
+    match h.power_mode {
+        // MaxPerformance: バッチサイズを 2048 に拡大（プロンプト処理高速化）
+        model_prefs::PowerMode::MaxPerformance => 2048,
+        model_prefs::PowerMode::Balanced => h.batch_size,
+    }
 }
 
 fn llama_server_args(
@@ -964,8 +995,14 @@ fn llama_server_args(
 ) -> Vec<OsString> {
     let hw = launch_hardware_params(hardware);
     let threads = effective_cpu_threads(&hw);
+    let batch = effective_batch_size(&hw);
     // GUI の GPU ON/OFF・レイヤー数を常に CLI で固定し、LLAMA_ARG_N_GPU_LAYERS 等の環境変数に負けないようにする。
     let n_gpu_layers = plan_gpu_layers(&plan.runtime.backend, &hw);
+    // MaxPerformance 時は ubatch も拡大
+    let ubatch = match hw.power_mode {
+        model_prefs::PowerMode::MaxPerformance => "1024",
+        model_prefs::PowerMode::Balanced => "512",
+    };
 
     let mut args = vec![
         OsString::from("--model"),
@@ -979,7 +1016,7 @@ fn llama_server_args(
         OsString::from("--threads"),
         OsString::from(threads.to_string()),
         OsString::from("--batch-size"),
-        OsString::from(hw.batch_size.to_string()),
+        OsString::from(batch.to_string()),
         OsString::from("--n-gpu-layers"),
         OsString::from(n_gpu_layers.to_string()),
         OsString::from("--jinja"),
@@ -988,7 +1025,7 @@ fn llama_server_args(
         OsString::from("on"),
         // ubatch-size: prompt 処理加速
         OsString::from("--ubatch-size"),
-        OsString::from("512"),
+        OsString::from(ubatch),
     ];
 
     // TurboQuant KVキャッシュ圧縮: turbo3 で 4.9x 圧縮 (K は q8_0 で品質維持、V は turbo3 で圧縮)

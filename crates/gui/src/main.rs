@@ -1875,7 +1875,7 @@ impl AppView {
             }
             ModelParamAdjustKind::ContextLength => {
                 let v = self.model_params.context_length + steps * 512;
-                self.model_params.context_length = v.clamp(512, 32768);
+                self.model_params.context_length = v.clamp(512, model_prefs::LOCAL_CONTEXT_LENGTH_CAP);
             }
         }
         self.model_params.clamp();

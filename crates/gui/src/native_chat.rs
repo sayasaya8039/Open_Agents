@@ -47,7 +47,7 @@ extern "C" {
 }
 
 const NATIVE_CONTEXT_LENGTH_MIN: i32 = 512;
-const NATIVE_CONTEXT_LENGTH_MAX: i32 = 8192;
+const NATIVE_CONTEXT_LENGTH_MAX: i32 = 16384;
 const LARGE_FULL_PRECISION_GGUF_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
 
@@ -177,8 +177,7 @@ fn skip_gguf_bytes<R: Read>(reader: &mut R, mut len: u64) -> Result<(), String> 
 
 fn read_gguf_string<R: Read>(reader: &mut R) -> Result<String, String> {
     let len = read_gguf_u64(reader)?;
-    let len_usize =
-        usize::try_from(len).map_err(|_| "GGUF 文字列長が大きすぎます".to_string())?;
+    let len_usize = usize::try_from(len).map_err(|_| "GGUF 文字列長が大きすぎます".to_string())?;
     let mut buf = vec![0u8; len_usize];
     reader
         .read_exact(&mut buf)
@@ -188,7 +187,9 @@ fn read_gguf_string<R: Read>(reader: &mut R) -> Result<String, String> {
 
 fn skip_gguf_value<R: Read>(reader: &mut R, value_type: GgufValueType) -> Result<(), String> {
     match value_type {
-        GgufValueType::Uint8 | GgufValueType::Int8 | GgufValueType::Bool => skip_gguf_bytes(reader, 1),
+        GgufValueType::Uint8 | GgufValueType::Int8 | GgufValueType::Bool => {
+            skip_gguf_bytes(reader, 1)
+        }
         GgufValueType::Uint16 | GgufValueType::Int16 => skip_gguf_bytes(reader, 2),
         GgufValueType::Uint32 | GgufValueType::Int32 | GgufValueType::Float32 => {
             skip_gguf_bytes(reader, 4)
@@ -252,16 +253,13 @@ fn validate_native_model_profile(path: &Path, size_bytes: u64) -> Result<(), Str
         if let Some(arch) = read_gguf_architecture(path)? {
             if arch.eq_ignore_ascii_case("gemma4") {
                 return Err(
-                    "選択中の GGUF は Gemma 4 (`general.architecture = gemma4`) です。現行のネイティブ推論コアは Gemma 4 のテンソル構成と attention レイアウトに未対応のため、Chat では読み込めません。Ollama 経由で使うか、Qwen / Llama 系 GGUF を選択してください。"
+                    "選択中の GGUF は Gemma 4 (`general.architecture = gemma4`) です。現行のネイティブ推論コアは Gemma 4 のテンソル構成と attention レイアウトに未対応のため、Chat では読み込めません。\n\n推奨: 推論先を「ローカル GGUF/ONNX」（llama-server 経由）に切り替えてください。llama.cpp の最新 main ビルドで Gemma 4 対応が日々改善されています。Settings → ハードウェア → llama.cpp 更新チェックで最新版に更新できます。\n\nまたは Ollama 経由で使うか、Qwen / Llama 系 GGUF を選択してください。"
                         .into(),
                 );
             }
         }
     }
-    if is_gguf
-        && size_bytes >= LARGE_FULL_PRECISION_GGUF_BYTES
-        && looks_full_precision_gguf(path)
-    {
+    if is_gguf && size_bytes >= LARGE_FULL_PRECISION_GGUF_BYTES && looks_full_precision_gguf(path) {
         return Err(
             "選択中の GGUF は BF16/F16/F32 系の大型フル精度モデルです。現行のネイティブ Chat 実装ではメモリ消費が大きすぎて応答不能になりやすいため、Q4_K_M / Q5_K_M などの量子化 GGUF を使うか、Ollama 側で推論してください。"
                 .into(),
@@ -271,8 +269,8 @@ fn validate_native_model_profile(path: &Path, size_bytes: u64) -> Result<(), Str
 }
 
 fn validate_native_model_path(path: &Path) -> Result<(), String> {
-    let metadata = fs::metadata(path)
-        .map_err(|e| format!("モデルファイルを確認できませんでした: {e}"))?;
+    let metadata =
+        fs::metadata(path).map_err(|e| format!("モデルファイルを確認できませんでした: {e}"))?;
     validate_native_model_profile(path, metadata.len())
 }
 
@@ -297,7 +295,8 @@ fn with_cached_inference<T>(
             .to_str()
             .ok_or_else(|| "モデルパスが UTF-8 ではありません".to_string())?;
         let path_c = cstring_chat(path_str)?;
-        let inf = unsafe { oag_inference_create_with_ctx(path_c.as_ptr(), context_length as c_int) };
+        let inf =
+            unsafe { oag_inference_create_with_ctx(path_c.as_ptr(), context_length as c_int) };
         if inf.is_null() {
             let detail = last_gguf_error_detail();
             if !detail.is_empty() {
@@ -438,15 +437,14 @@ mod tests {
     fn clamps_requested_native_context_length() {
         assert_eq!(clamp_native_context_length(0), 512);
         assert_eq!(clamp_native_context_length(4096), 4096);
-        assert_eq!(clamp_native_context_length(999_999), 8192);
+        assert_eq!(clamp_native_context_length(999_999), 16384);
     }
 
     #[test]
     fn rejects_large_bf16_gguf_with_actionable_message() {
         let path = temp_gguf_path("bf16");
         write_minimal_gguf(&path, "llama");
-        let err =
-            validate_native_model_profile(&path, 14 * 1024 * 1024 * 1024).unwrap_err();
+        let err = validate_native_model_profile(&path, 14 * 1024 * 1024 * 1024).unwrap_err();
         let _ = fs::remove_file(&path);
         assert!(
             err.contains("量子化"),
@@ -469,7 +467,10 @@ mod tests {
         write_minimal_gguf(&path, "gemma4");
         let err = validate_native_model_path(&path).unwrap_err();
         let _ = fs::remove_file(&path);
-        assert!(err.contains("Gemma 4"), "expected Gemma 4 guidance, got: {err}");
+        assert!(
+            err.contains("Gemma 4"),
+            "expected Gemma 4 guidance, got: {err}"
+        );
     }
 
     #[test]

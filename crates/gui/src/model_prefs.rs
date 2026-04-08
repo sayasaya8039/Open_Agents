@@ -23,6 +23,12 @@ pub struct ModelParams {
 pub const DEFAULT_MAX_OUTPUT_TOKENS: i32 = 4096;
 pub const LOCAL_GGUF_MAX_OUTPUT_TOKENS_CAP: i32 = 8192;
 
+/// ローカル GGUF 推論で推奨されるコンテキスト長上限（KV cache メモリ / レイテンシ最適化）
+/// 256K 対応モデルでも KV cache が VRAM を圧迫し推論速度が低下するため 16384 に制限する。
+pub const LOCAL_CONTEXT_LENGTH_CAP: i32 = 16384;
+/// ローカル推論のデフォルトコンテキスト長（8192 が速度と品質のバランス点）
+pub const LOCAL_CONTEXT_LENGTH_DEFAULT: i32 = 8192;
+
 pub fn effective_local_max_output_tokens(max_output_tokens: i32) -> i32 {
     if max_output_tokens <= 0 {
         return DEFAULT_MAX_OUTPUT_TOKENS;
@@ -35,7 +41,7 @@ impl Default for ModelParams {
         Self {
             temperature: 0.7,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-            context_length: 4096,
+            context_length: LOCAL_CONTEXT_LENGTH_DEFAULT,
         }
     }
 }
@@ -44,7 +50,7 @@ impl ModelParams {
     pub fn clamp(&mut self) {
         self.temperature = self.temperature.clamp(0.0, 2.0);
         self.max_output_tokens = self.max_output_tokens.clamp(256, 8192);
-        self.context_length = self.context_length.clamp(512, 32768);
+        self.context_length = self.context_length.clamp(512, LOCAL_CONTEXT_LENGTH_CAP);
     }
 
     pub fn sanitize(mut self) -> Self {
@@ -135,6 +141,27 @@ impl LlamaRuntimePreset {
     }
 }
 
+/// 電源モード（ラップトップ特有: TGP 最大化のための設定）
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerMode {
+    /// バランスモード（デフォルト: バッテリ寿命と性能のバランス）
+    #[default]
+    Balanced,
+    /// 最大性能モード（外部電源接続 + 冷却強化前提）
+    /// スレッド数・バッチサイズを最大化し、TGP をフルに活用する
+    MaxPerformance,
+}
+
+impl PowerMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Balanced => "バランス",
+            Self::MaxPerformance => "最大性能（AC接続推奨）",
+        }
+    }
+}
+
 /// ローカル推論のハードウェア関連（内蔵 llama-server 起動時の CLI にそのまま反映）
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -152,6 +179,9 @@ pub struct HardwareParams {
     pub batch_size: i32,
     /// KV キャッシュ量子化（TurboQuant 対応版で有効）
     pub kv_cache_type: KvCacheType,
+    /// 電源モード（MaxPerformance で全コア・大バッチを使用）
+    #[serde(default)]
+    pub power_mode: PowerMode,
 }
 
 impl Default for HardwareParams {
@@ -163,6 +193,7 @@ impl Default for HardwareParams {
             n_threads: 8,
             batch_size: 512,
             kv_cache_type: KvCacheType::Q8,
+            power_mode: PowerMode::default(),
         }
     }
 }
