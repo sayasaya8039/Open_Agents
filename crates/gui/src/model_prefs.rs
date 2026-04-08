@@ -596,6 +596,46 @@ impl AppearancePrefs {
     }
 }
 
+/// Chain-of-Thought (CoT) 推論モード
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CoTMode {
+    /// CoT 無効（通常応答）
+    Off,
+    /// 基本 CoT（ステップバイステップで考えてから回答）
+    #[default]
+    Basic,
+    /// 詳細 CoT（分解→仮説→検証→結論の4段階）
+    Detailed,
+}
+
+impl CoTMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "無効",
+            Self::Basic => "基本（推奨）",
+            Self::Detailed => "詳細（4段階推論）",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::Off => "CoT なし — 直接回答する",
+            Self::Basic => "ステップバイステップで考えてから回答する",
+            Self::Detailed => "分解→仮説→検証→結論の4段階で推論する",
+        }
+    }
+
+    /// システムプロンプトに注入する CoT 指示文を返す（Off なら空文字列）
+    pub fn system_instruction(self) -> &'static str {
+        match self {
+            Self::Off => "",
+            Self::Basic => "\n\n## 思考プロセス\n回答する際は、まずステップバイステップで考えを整理してから、最後に明確な結論をまとめてください。",
+            Self::Detailed => "\n\n## 思考プロセス（Chain-of-Thought）\n問題を解決する際は、必ず以下のステップで考えてください：\n1. **分解**: 問題を小さな部分に分解して理解する\n2. **推論**: 各ステップごとに論理的に考える\n3. **検証**: 仮説を立てて矛盾がないか検証する\n4. **結論**: 最終結論を明確に述べる\n\n考えをステップバイステップで出力してから、最後に答えをまとめてください。",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AiPrefs {
@@ -605,6 +645,9 @@ pub struct AiPrefs {
     pub code_suggestions: bool,
     #[serde(default = "default_true")]
     pub streaming_responses: bool,
+    /// Chain-of-Thought 推論モード（ローカル LLM の推論品質を向上）
+    #[serde(default)]
+    pub cot_mode: CoTMode,
 }
 
 const fn default_true() -> bool {
@@ -617,6 +660,7 @@ impl Default for AiPrefs {
             auto_complete: true,
             code_suggestions: true,
             streaming_responses: true,
+            cot_mode: CoTMode::default(),
         }
     }
 }

@@ -1022,13 +1022,14 @@ impl AppView {
         self.submit_chat_request(None, cx);
     }
 
-    /// Chat のシステムメッセージを構築
+    /// Chat のシステムメッセージを構築（CoT 指示を含む）
     fn build_chat_system_message(&self) -> String {
-        [
-            "あなたはAIコーディングアシスタントです。".to_string(),
+        let cot = self.ai_prefs.cot_mode.system_instruction();
+        format!(
+            "あなたはAIコーディングアシスタントです。\n\n{}{}",
             chat_runtime_identity_instruction(&self.chat_prefs, &self.settings_model_paths),
-        ]
-        .join("\n\n")
+            cot,
+        )
     }
 
     fn submit_chat_request(&mut self, new_user_text: Option<String>, cx: &mut Context<Self>) {
@@ -2282,6 +2283,92 @@ impl AppView {
         .detach();
     }
 
+    fn settings_cot_mode_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.ai_prefs.cot_mode;
+        let modes = [
+            model_prefs::CoTMode::Off,
+            model_prefs::CoTMode::Basic,
+            model_prefs::CoTMode::Detailed,
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child("Chain-of-Thought (CoT)"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .whitespace_normal()
+                            .child(
+                                "ローカル LLM の推論品質を向上させるステップバイステップ思考。Basic 推奨。",
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .children(modes.into_iter().map(|mode| {
+                        let is_selected = mode == current;
+                        div()
+                            .flex_1()
+                            .px(px(8.))
+                            .py(px(6.))
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(if is_selected {
+                                hex(ACCENT_BLUE)
+                            } else {
+                                hex(CONTROL_BORDER)
+                            })
+                            .bg(if is_selected {
+                                hex_a(ACCENT_BLUE, 0.18)
+                            } else {
+                                hex(CONTROL_BG)
+                            })
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.ai_prefs.cot_mode = mode;
+                                    this.persist_local_llm_prefs();
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(hex(TEXT_PRIMARY))
+                                            .child(mode.label()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(9.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .child(mode.subtitle()),
+                                    ),
+                            )
+                    })),
+            )
+    }
+
     fn settings_chat_inference_block(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let source_label = self.chat_prefs.source.label();
         let api_disp: SharedString = if self.chat_prefs.api_model.is_empty() {
@@ -3531,6 +3618,7 @@ impl AppView {
                                                 "ストリーミング応答",
                                                 "応答をリアルタイムで表示",
                                             ))
+                                            .child(self.settings_cot_mode_row(cx))
                                             .child(self.settings_chat_inference_block(cx)),
                                     ),
                             )
