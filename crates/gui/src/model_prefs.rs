@@ -651,6 +651,55 @@ pub struct AiPrefs {
     /// Self-Consistency: 同じ質問を複数回投げて多数決で最良回答を採用
     #[serde(default)]
     pub self_consistency: SelfConsistencyMode,
+    /// Tree-of-Thoughts: 複数の思考経路を探索して最良を合成
+    #[serde(default)]
+    pub tot_mode: ToTMode,
+}
+
+/// Tree-of-Thoughts (ToT) 推論モード
+///
+/// 1つの質問に対して複数の思考経路を生成・評価・合成するループ型推論。
+/// LLM を「思考者」「評価者」「合成者」として 3フェーズで呼び出す。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToTMode {
+    /// 無効
+    #[default]
+    Off,
+    /// 2経路探索 — 高速 ToT（分岐2 → 評価 → 合成）
+    Branch2,
+    /// 3経路探索 — 標準 ToT（分岐3 → 評価 → 合成）
+    Branch3,
+}
+
+impl ToTMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "無効",
+            Self::Branch2 => "2経路（高速）",
+            Self::Branch3 => "3経路（標準）",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::Off => "ToT なし — 通常の 1 経路推論",
+            Self::Branch2 => "2つの思考経路を探索して最良を合成",
+            Self::Branch3 => "3つの思考経路を探索して最良を合成",
+        }
+    }
+
+    pub fn branch_count(self) -> usize {
+        match self {
+            Self::Off => 0,
+            Self::Branch2 => 2,
+            Self::Branch3 => 3,
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
 }
 
 /// Self-Consistency 多数決モード
@@ -708,6 +757,7 @@ impl Default for AiPrefs {
             streaming_responses: true,
             cot_mode: CoTMode::default(),
             self_consistency: SelfConsistencyMode::default(),
+            tot_mode: ToTMode::default(),
         }
     }
 }

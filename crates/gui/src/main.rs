@@ -466,6 +466,203 @@ enum ChatStreamEvent {
     Error(String),
 }
 
+// ── Tree-of-Thoughts (ToT) 3フェーズ実行 ──
+
+/// ToT プロンプト: Phase 1 — 複数の思考経路を生成
+fn tot_branch_prompt(user_question: &str, branch_count: usize) -> String {
+    format!(
+        "以下の質問について、{branch_count}つの異なるアプローチで考えてください。\
+各アプローチは互いに独立した視点・手法で問題を解くものとします。\n\n\
+質問: {user_question}\n\n\
+各アプローチを「## アプローチ1」「## アプローチ2」…の形式で、\
+それぞれステップバイステップの思考過程とともに出力してください。"
+    )
+}
+
+/// ToT プロンプト: Phase 2 — 各経路を評価
+fn tot_evaluate_prompt(branches_text: &str) -> String {
+    format!(
+        "以下の複数のアプローチを評価してください。\n\n\
+{branches_text}\n\n\
+各アプローチについて以下の観点で 1〜5 のスコアをつけ、最も優れたアプローチを1つ選んでください：\n\
+- 正確性（論理的に正しいか）\n\
+- 完全性（問題の全側面をカバーしているか）\n\
+- 明快さ（説明がわかりやすいか）\n\n\
+評価結果を出力した後、最後に「最優秀: アプローチN」と明記してください。"
+    )
+}
+
+/// ToT プロンプト: Phase 3 — 最良経路を基に最終回答を合成
+fn tot_synthesize_prompt(user_question: &str, branches_text: &str, evaluation: &str) -> String {
+    format!(
+        "以下の質問に対して複数のアプローチとその評価結果があります。\n\n\
+質問: {user_question}\n\n\
+=== アプローチ一覧 ===\n{branches_text}\n\n\
+=== 評価結果 ===\n{evaluation}\n\n\
+評価結果で最も高く評価されたアプローチを基に、他のアプローチの良い点も取り入れて、\
+最終的な回答を作成してください。回答は明確で実用的なものにしてください。"
+    )
+}
+
+/// ToT を 3 フェーズで実行し、進捗を tx に送信
+fn run_tree_of_thoughts(
+    path: &std::path::Path,
+    api_messages: &[(String, String)],
+    temperature: f32,
+    max_tokens: i32,
+    context_length: i32,
+    hardware: &model_prefs::HardwareParams,
+    branch_count: usize,
+    tx: &smol::channel::Sender<ChatStreamEvent>,
+) {
+    // ユーザーの最後の質問を抽出
+    let user_question = api_messages
+        .iter()
+        .rev()
+        .find(|(role, _)| role == "user")
+        .map(|(_, content)| content.as_str())
+        .unwrap_or("（質問なし）");
+
+    let system_msg = api_messages
+        .iter()
+        .find(|(role, _)| role == "system")
+        .map(|(_, content)| content.as_str())
+        .unwrap_or("");
+
+    let started = std::time::Instant::now();
+
+    // ── Phase 1: 分岐 — 複数の思考経路を生成 ──
+    let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(format!(
+        "🌳 **Tree-of-Thoughts**: {branch_count} 経路を探索中…\n\n\
+**Phase 1/3**: 思考経路を生成中…\n"
+    )));
+
+    let branch_request = tot_branch_prompt(user_question, branch_count);
+    let branch_messages: Vec<(String, String)> = vec![
+        ("system".into(), system_msg.to_string()),
+        ("user".into(), branch_request),
+    ];
+
+    let branches_result = llama_cpp_chat::complete_llama_cpp_chat_blocking(
+        path,
+        &branch_messages,
+        temperature,
+        max_tokens,
+        context_length,
+        hardware,
+    );
+
+    let branches_text = match branches_result {
+        Ok(reply) => {
+            let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(
+                "✓ Phase 1 完了 — 思考経路を生成しました\n".into(),
+            ));
+            reply.content
+        }
+        Err(e) => {
+            let _ = tx.send_blocking(ChatStreamEvent::Error(format!(
+                "ToT Phase 1（分岐生成）失敗: {e}"
+            )));
+            return;
+        }
+    };
+
+    // ── Phase 2: 評価 — 各経路をスコアリング ──
+    let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(
+        "**Phase 2/3**: 各経路を評価中…\n".into(),
+    ));
+
+    let eval_request = tot_evaluate_prompt(&branches_text);
+    let eval_messages: Vec<(String, String)> = vec![
+        ("system".into(), system_msg.to_string()),
+        ("user".into(), eval_request),
+    ];
+
+    let eval_result = llama_cpp_chat::complete_llama_cpp_chat_blocking(
+        path,
+        &eval_messages,
+        (temperature * 0.5).max(0.1), // 評価は低温度で安定化
+        max_tokens,
+        context_length,
+        hardware,
+    );
+
+    let evaluation = match eval_result {
+        Ok(reply) => {
+            let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(
+                "✓ Phase 2 完了 — 経路評価が終わりました\n".into(),
+            ));
+            reply.content
+        }
+        Err(e) => {
+            // 評価失敗時は Phase 1 の結果をそのまま使用
+            let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(format!(
+                "⚠ Phase 2 評価失敗 ({e})、Phase 1 の結果を直接使用します\n"
+            )));
+            format!("評価省略 — 最初のアプローチを採用")
+        }
+    };
+
+    // ── Phase 3: 合成 — 最良経路から最終回答を生成 ──
+    let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(
+        "**Phase 3/3**: 最終回答を合成中…\n\n---\n\n".into(),
+    ));
+
+    let synth_request = tot_synthesize_prompt(user_question, &branches_text, &evaluation);
+    let synth_messages: Vec<(String, String)> = vec![
+        ("system".into(), system_msg.to_string()),
+        ("user".into(), synth_request),
+    ];
+
+    let synth_result = llama_cpp_chat::complete_llama_cpp_chat_blocking(
+        path,
+        &synth_messages,
+        temperature,
+        max_tokens,
+        context_length,
+        hardware,
+    );
+
+    let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+    match synth_result {
+        Ok(reply) => {
+            let mut metrics = reply.metrics.unwrap_or_default();
+            metrics.elapsed_ms = Some(elapsed_ms);
+            metrics.stop_reason = Some(format!("ToT {branch_count}経路探索"));
+
+            let final_reply = llama_cpp_chat::LlamaCppChatResponse {
+                content: format!(
+                    "{}\n\n---\n*🌳 Tree-of-Thoughts: {branch_count} 経路を探索・評価・合成*",
+                    reply.content
+                ),
+                thinking: Some(format!(
+                    "=== Phase 1: 思考経路 ===\n{branches_text}\n\n=== Phase 2: 評価 ===\n{evaluation}"
+                )),
+                metrics: Some(metrics),
+            };
+            let _ = tx.send_blocking(ChatStreamEvent::Complete(final_reply));
+        }
+        Err(e) => {
+            // Phase 3 失敗時は Phase 1 + Phase 2 の結果を返す
+            let fallback = format!(
+                "## 思考経路（ToT Phase 1）\n{branches_text}\n\n## 評価（ToT Phase 2）\n{evaluation}\n\n---\n*⚠ Phase 3（合成）失敗: {e}*"
+            );
+            let mut metrics = ChatMsgMetrics::default();
+            metrics.elapsed_ms = Some(elapsed_ms);
+            metrics.stop_reason = Some(format!("ToT fallback ({e})"));
+
+            let _ = tx.send_blocking(ChatStreamEvent::Complete(
+                llama_cpp_chat::LlamaCppChatResponse {
+                    content: fallback,
+                    thinking: None,
+                    metrics: Some(metrics),
+                },
+            ));
+        }
+    }
+}
+
 /// Self-Consistency 多数決: 回答を正規化してグループ化し、最多得票を返す
 /// 戻り値: (最良回答, メトリクス, 得票数, 総投票数)
 fn majority_vote_select(
@@ -1206,8 +1403,80 @@ impl AppView {
         let hardware_params = self.hardware_params.clone();
         let streaming_enabled = self.ai_prefs.streaming_responses;
         let self_consistency = self.ai_prefs.self_consistency;
+        let tot_mode = self.ai_prefs.tot_mode;
 
         match chat_client::resolve_chat_backend(&api_keys, &chat_prefs, &local_model_paths) {
+            // Tree-of-Thoughts: 複数思考経路を探索・評価・合成（ローカル GGUF 専用）
+            Ok(chat_client::ChatBackend::LlamaCppLocal { path }) if tot_mode.is_enabled() => {
+                let branches = tot_mode.branch_count();
+                let hw = hardware_params.clone();
+                let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
+                std::thread::spawn(move || {
+                    run_tree_of_thoughts(
+                        &path,
+                        &api_messages,
+                        temperature,
+                        max_tokens,
+                        context_length,
+                        &hw,
+                        branches,
+                        &tx,
+                    );
+                });
+
+                cx.spawn(async move |this, cx| {
+                    let mut saw_content_delta = false;
+                    while let Ok(event) = rx.recv().await {
+                        let done = matches!(
+                            event,
+                            ChatStreamEvent::Complete(_) | ChatStreamEvent::Error(_)
+                        );
+                        let _ = cx.update(|app| {
+                            let _ = this.update(app, |this: &mut AppView, cx| {
+                                if let Some(last) = this
+                                    .session_store
+                                    .active_mut()
+                                    .and_then(|s| s.messages.last_mut())
+                                {
+                                    if last.role == "assistant" {
+                                        match event {
+                                            ChatStreamEvent::ContentDelta(delta) => {
+                                                if !saw_content_delta {
+                                                    last.content.clear();
+                                                    saw_content_delta = true;
+                                                }
+                                                last.content.push_str(&delta);
+                                            }
+                                            ChatStreamEvent::Complete(reply) => {
+                                                this.chat_pending = false;
+                                                last.content = reply.content;
+                                                last.thinking = reply.thinking;
+                                                last.metrics = merge_metrics(
+                                                    last.metrics.take(),
+                                                    reply.metrics,
+                                                );
+                                                chat_session::save_sessions(&this.session_store);
+                                            }
+                                            ChatStreamEvent::Error(err) => {
+                                                this.chat_pending = false;
+                                                last.content = format!("エラー: {err}");
+                                                chat_session::save_sessions(&this.session_store);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                this.chat_scroll.scroll_to_bottom();
+                                cx.notify();
+                            });
+                        });
+                        if done {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
             // Self-Consistency: 複数回推論して多数決（ストリーミング無効で実行）
             Ok(chat_client::ChatBackend::LlamaCppLocal { path })
                 if self_consistency.is_enabled() =>
@@ -2580,6 +2849,92 @@ impl AppView {
             )
     }
 
+    fn settings_tot_mode_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.ai_prefs.tot_mode;
+        let modes = [
+            model_prefs::ToTMode::Off,
+            model_prefs::ToTMode::Branch2,
+            model_prefs::ToTMode::Branch3,
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hex(TEXT_PRIMARY))
+                            .child("Tree-of-Thoughts (ToT)"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(hex(TEXT_MUTED))
+                            .whitespace_normal()
+                            .child(
+                                "複数の思考経路を生成→評価→合成する3フェーズ推論。ローカル GGUF 専用。推論時間は3倍+。",
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .children(modes.into_iter().map(|mode| {
+                        let is_selected = mode == current;
+                        div()
+                            .flex_1()
+                            .px(px(8.))
+                            .py(px(6.))
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(if is_selected {
+                                hex(ACCENT_BLUE)
+                            } else {
+                                hex(CONTROL_BORDER)
+                            })
+                            .bg(if is_selected {
+                                hex_a(ACCENT_BLUE, 0.18)
+                            } else {
+                                hex(CONTROL_BG)
+                            })
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.ai_prefs.tot_mode = mode;
+                                    this.persist_local_llm_prefs();
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(hex(TEXT_PRIMARY))
+                                            .child(mode.label()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(9.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .child(mode.subtitle()),
+                                    ),
+                            )
+                    })),
+            )
+    }
+
     fn settings_self_consistency_row(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.ai_prefs.self_consistency;
         let modes = [
@@ -3917,6 +4272,7 @@ impl AppView {
                                             ))
                                             .child(self.settings_cot_mode_row(cx))
                                             .child(self.settings_self_consistency_row(cx))
+                                            .child(self.settings_tot_mode_row(cx))
                                             .child(self.settings_chat_inference_block(cx)),
                                     ),
                             )
