@@ -1,0 +1,8 @@
+{
+  "llama_cpp_tag": "b8698",
+  "llama_server_version": "b8698",
+  "platform": "windows-x64-cpu-upstream",
+  "asset_name": "llama-b8698-bin-win-cpu-x64.zip",
+  "source_release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b8698",
+  "llama_server_sha256": "6F6D6615CA9EB240A057C39E567B0D508E465E9E8D9E8B5BFEFBA300CC617965"
+}

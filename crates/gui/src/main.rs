@@ -2341,7 +2341,7 @@ impl AppView {
                                 .text_size(px(11.))
                                 .text_color(hex(TEXT_MUTED))
                                 .whitespace_normal()
-                                .child("比較先: ggml-org/llama.cpp（同梱 runtime は Prism 互換構成）"),
+                                .child("比較先: ggml-org/llama.cpp（同梱 runtime は Prism + upstream フォールバック構成）"),
                         )
                         .child(
                             div()

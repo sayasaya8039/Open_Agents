@@ -1,4 +1,4 @@
-// Open_Agents v0.3.5 — Local AI Coding Engine
+// Open_Agents v0.3.6 — Local AI Coding Engine
 // C フルスクラッチ | GGUF + ONNX | GPU/CPU/NPU 並行 | Vulkan | Multi-NIC
 //
 // Usage:
@@ -29,7 +29,7 @@
 #include "gui/win32_app.h"
 
 #ifndef OAG_VERSION
-#define OAG_VERSION "0.3.5"
+#define OAG_VERSION "0.3.6"
 #endif
 
 // ============================================================

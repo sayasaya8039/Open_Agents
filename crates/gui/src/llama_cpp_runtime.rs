@@ -93,14 +93,40 @@ pub fn bundled_runtime_search_dirs_for_backend(backend: BundledLlamaBackend) -> 
     candidate_runtime_dirs_for_backend(backend)
 }
 
+pub fn upstream_runtime_search_dirs_for_backend(backend: BundledLlamaBackend) -> Vec<PathBuf> {
+    candidate_upstream_runtime_dirs_for_backend(backend)
+}
+
 pub fn load_bundled_runtime_for_backend(
     backend: BundledLlamaBackend,
 ) -> Result<BundledLlamaRuntime, String> {
-    let dir = resolve_runtime_dir_for_backend(backend).ok_or_else(|| {
+    let search_dirs = bundled_runtime_search_dirs_for_backend(backend);
+    let dir = resolve_runtime_dir_from_candidates(&search_dirs).ok_or_else(|| {
         format!(
             "{} 向け内蔵 llama.cpp runtime が見つかりません。探索先: {}",
             backend.label(),
-            format_search_dirs(&bundled_runtime_search_dirs_for_backend(backend))
+            format_search_dirs(&search_dirs)
+        )
+    })?;
+    let binary_path = dir.join(binary_name());
+    let manifest = load_manifest_from_dir(&dir, backend)?;
+    Ok(BundledLlamaRuntime {
+        backend,
+        dir,
+        binary_path,
+        manifest,
+    })
+}
+
+pub fn load_upstream_runtime_for_backend(
+    backend: BundledLlamaBackend,
+) -> Result<BundledLlamaRuntime, String> {
+    let search_dirs = upstream_runtime_search_dirs_for_backend(backend);
+    let dir = resolve_runtime_dir_from_candidates(&search_dirs).ok_or_else(|| {
+        format!(
+            "{} 向け upstream llama.cpp runtime が見つかりません。探索先: {}",
+            backend.label(),
+            format_search_dirs(&search_dirs)
         )
     })?;
     let binary_path = dir.join(binary_name());
@@ -197,12 +223,6 @@ pub fn compute_update_notice(
     })
 }
 
-fn resolve_runtime_dir_for_backend(backend: BundledLlamaBackend) -> Option<PathBuf> {
-    candidate_runtime_dirs_for_backend(backend)
-        .into_iter()
-        .find(|dir| dir.join(binary_name()).is_file() && dir.join("manifest.json").is_file())
-}
-
 #[cfg(test)]
 fn resolve_dir_with_file_from_candidates(
     candidates: &[PathBuf],
@@ -211,6 +231,13 @@ fn resolve_dir_with_file_from_candidates(
     candidates
         .iter()
         .find(|dir| dir.join(file_name).is_file())
+        .cloned()
+}
+
+fn resolve_runtime_dir_from_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .find(|dir| dir.join(binary_name()).is_file() && dir.join("manifest.json").is_file())
         .cloned()
 }
 
@@ -238,6 +265,15 @@ fn candidate_runtime_dirs_for_backend(backend: BundledLlamaBackend) -> Vec<PathB
             push_unique_path(&mut dirs, root.clone());
         }
         push_unique_path(&mut dirs, root.join(backend.dir_name()));
+    }
+    dirs
+}
+
+fn candidate_upstream_runtime_dirs_for_backend(backend: BundledLlamaBackend) -> Vec<PathBuf> {
+    let roots = candidate_runtime_dirs();
+    let mut dirs = Vec::new();
+    for root in roots {
+        push_unique_path(&mut dirs, root.join("upstream").join(backend.dir_name()));
     }
     dirs
 }
@@ -322,6 +358,24 @@ mod tests {
         let dirs = bundled_runtime_search_dirs_for_backend(BundledLlamaBackend::Cpu);
         assert!(!dirs.is_empty());
         assert!(dirs.iter().all(|dir| dir.ends_with("cpu")));
+    }
+
+    #[test]
+    fn upstream_cuda_search_dirs_use_upstream_subdirectory() {
+        let dirs = upstream_runtime_search_dirs_for_backend(BundledLlamaBackend::Cuda);
+        assert!(!dirs.is_empty());
+        assert!(dirs
+            .iter()
+            .all(|dir| dir.ends_with(Path::new("upstream").join("cuda"))));
+    }
+
+    #[test]
+    fn upstream_cpu_search_dirs_use_upstream_subdirectory() {
+        let dirs = upstream_runtime_search_dirs_for_backend(BundledLlamaBackend::Cpu);
+        assert!(!dirs.is_empty());
+        assert!(dirs
+            .iter()
+            .all(|dir| dir.ends_with(Path::new("upstream").join("cpu"))));
     }
 
     #[test]

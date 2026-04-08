@@ -624,21 +624,72 @@ fn candidate_launch_plans(
     hardware: &model_prefs::HardwareParams,
 ) -> Result<Vec<LaunchPlan>, String> {
     let hw = launch_hardware_params(hardware);
+    let mut plans = Vec::new();
+    let mut errors = Vec::new();
     match hw.llama_runtime_preset {
         model_prefs::LlamaRuntimePreset::HighPerformance4090 => {
-            let runtime = llama_cpp_runtime::load_bundled_runtime_for_backend(
+            append_backend_runtimes(
                 llama_cpp_runtime::BundledLlamaBackend::Cuda,
-            )?;
-            Ok(vec![build_cuda_single_plan(runtime, &hw)])
+                &mut plans,
+                &mut errors,
+                &hw,
+                build_cuda_single_plan,
+            );
+            append_backend_runtimes(
+                llama_cpp_runtime::BundledLlamaBackend::Cpu,
+                &mut plans,
+                &mut errors,
+                &hw,
+                build_cpu_single_plan,
+            );
         }
         model_prefs::LlamaRuntimePreset::ExperimentalHybrid4090Arc => {
-            build_hybrid_vulkan_plans(&hw)
+            return build_hybrid_vulkan_plans(&hw);
         }
         model_prefs::LlamaRuntimePreset::IntelNpuEfficient => {
-            let runtime = llama_cpp_runtime::load_bundled_runtime_for_backend(
+            append_backend_runtimes(
                 llama_cpp_runtime::BundledLlamaBackend::Cpu,
-            )?;
-            Ok(vec![build_cpu_single_plan(runtime, &hw)])
+                &mut plans,
+                &mut errors,
+                &hw,
+                build_cpu_single_plan,
+            );
+        }
+    }
+
+    if plans.is_empty() {
+        Err(errors.join("\n"))
+    } else {
+        Ok(plans)
+    }
+}
+
+fn append_backend_runtimes(
+    backend: llama_cpp_runtime::BundledLlamaBackend,
+    plans: &mut Vec<LaunchPlan>,
+    errors: &mut Vec<String>,
+    hardware: &model_prefs::HardwareParams,
+    builder: fn(llama_cpp_runtime::BundledLlamaRuntime, &model_prefs::HardwareParams) -> LaunchPlan,
+) {
+    match llama_cpp_runtime::load_bundled_runtime_for_backend(backend) {
+        Ok(runtime) => plans.push(builder(runtime, hardware)),
+        Err(error) => errors.push(error),
+    }
+
+    if matches!(
+        backend,
+        llama_cpp_runtime::BundledLlamaBackend::Cuda | llama_cpp_runtime::BundledLlamaBackend::Cpu
+    ) {
+        match llama_cpp_runtime::load_upstream_runtime_for_backend(backend) {
+            Ok(runtime) => {
+                if !plans
+                    .iter()
+                    .any(|plan| plan.runtime.binary_path == runtime.binary_path)
+                {
+                    plans.push(builder(runtime, hardware));
+                }
+            }
+            Err(error) => errors.push(error),
         }
     }
 }
@@ -678,19 +729,20 @@ fn build_hybrid_vulkan_plans(
         Err(error) => errors.push(error),
     }
 
-    match llama_cpp_runtime::load_bundled_runtime_for_backend(
+    append_backend_runtimes(
         llama_cpp_runtime::BundledLlamaBackend::Cuda,
-    ) {
-        Ok(runtime) => plans.push(build_cuda_single_plan(runtime, hardware)),
-        Err(error) => errors.push(error),
-    }
-
-    match llama_cpp_runtime::load_bundled_runtime_for_backend(
+        &mut plans,
+        &mut errors,
+        hardware,
+        build_cuda_single_plan,
+    );
+    append_backend_runtimes(
         llama_cpp_runtime::BundledLlamaBackend::Cpu,
-    ) {
-        Ok(runtime) => plans.push(build_cpu_single_plan(runtime, hardware)),
-        Err(error) => errors.push(error),
-    }
+        &mut plans,
+        &mut errors,
+        hardware,
+        build_cpu_single_plan,
+    );
 
     if plans.is_empty() {
         return Err(errors.join("\n"));
@@ -710,7 +762,11 @@ fn build_cuda_single_plan(
     runtime: llama_cpp_runtime::BundledLlamaRuntime,
     hardware: &model_prefs::HardwareParams,
 ) -> LaunchPlan {
-    let summary = format!("{} 単独", runtime.backend.label());
+    let summary = format!(
+        "{} 単独 ({})",
+        runtime.backend.label(),
+        runtime_source_label(&runtime)
+    );
     build_launch_plan(runtime, None, None, hardware, summary)
 }
 
@@ -718,7 +774,8 @@ fn build_cpu_single_plan(
     runtime: llama_cpp_runtime::BundledLlamaRuntime,
     hardware: &model_prefs::HardwareParams,
 ) -> LaunchPlan {
-    build_launch_plan(runtime, None, None, hardware, "CPU 単独".to_string())
+    let summary = format!("CPU 単独 ({})", runtime_source_label(&runtime));
+    build_launch_plan(runtime, None, None, hardware, summary)
 }
 
 fn build_vulkan_single_plan(
@@ -726,12 +783,13 @@ fn build_vulkan_single_plan(
     device_id: &str,
     hardware: &model_prefs::HardwareParams,
 ) -> LaunchPlan {
+    let summary = format!("Vulkan 単独 ({})", runtime_source_label(&runtime));
     build_launch_plan(
         runtime,
         Some(device_id.to_string()),
         None,
         hardware,
-        "Vulkan 単独".to_string(),
+        summary,
     )
 }
 
@@ -740,13 +798,26 @@ fn build_vulkan_hybrid_plan(
     device_ids: &str,
     hardware: &model_prefs::HardwareParams,
 ) -> LaunchPlan {
+    let summary = format!("Vulkan 混成 ({})", runtime_source_label(&runtime));
     build_launch_plan(
         runtime,
         Some(device_ids.to_string()),
         Some("layer"),
         hardware,
-        "Vulkan 混成".to_string(),
+        summary,
     )
+}
+
+fn runtime_source_label(runtime: &llama_cpp_runtime::BundledLlamaRuntime) -> &'static str {
+    if runtime
+        .manifest
+        .source_release_url
+        .contains("PrismML-Eng/llama.cpp")
+    {
+        "Prism"
+    } else {
+        "upstream"
+    }
 }
 
 fn build_launch_plan(
@@ -1229,6 +1300,14 @@ fn normalize_runtime_launch_error(
     error: &str,
 ) -> String {
     let lower = error.to_ascii_lowercase();
+    if lower.contains("unknown model architecture") {
+        return format!(
+            "{} runtime でこの GGUF のモデルアーキテクチャを認識できませんでした。runtime 世代差が原因の可能性があります。\nモデル: {}\n詳細:\n{}",
+            runtime_source_label(runtime),
+            model_path.display(),
+            error
+        );
+    }
     if lower.contains("tensor type")
         || lower.contains("unsupported tensor")
         || lower.contains("unknown tensor")
@@ -1549,6 +1628,18 @@ mod tests {
         );
         assert!(error.contains("未知または backend 非対応の量子化"));
         assert!(error.contains("bonsai.gguf"));
+    }
+
+    #[test]
+    fn normalize_runtime_launch_error_highlights_unknown_architecture() {
+        let runtime = test_launch_plan().runtime;
+        let error = normalize_runtime_launch_error(
+            &runtime,
+            Path::new("C:/models/gemma4.gguf"),
+            "error loading model architecture: unknown model architecture: 'gemma4'",
+        );
+        assert!(error.contains("モデルアーキテクチャを認識できませんでした"));
+        assert!(error.contains("gemma4.gguf"));
     }
 
     fn arg_after(args: &[OsString], flag: &str) -> Option<String> {

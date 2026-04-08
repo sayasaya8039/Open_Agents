@@ -374,7 +374,7 @@ static char* build_html_content(void) {
 "      <span id=\"status-gpu\"></span>\n"
 "      <span id=\"status-nic\"></span>\n"
 "      <div style=\"flex:1;\"></div>\n"
-"      <span>Open_Agents v0.3.5</span>\n"
+"      <span>Open_Agents v0.3.6</span>\n"
 "    </div>\n"
 "  </div>\n"
 "</div>\n"
