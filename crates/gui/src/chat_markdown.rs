@@ -3,7 +3,9 @@ use std::ops::Range;
 use gpui::*;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::{hex, hex_a, ACCENT_BLUE, BORDER, PANEL_BG, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY};
+use crate::{
+    hex, hex_a, ACCENT_BLUE, BORDER, PANEL_BG, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
+};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 struct InlineContent {
@@ -108,10 +110,13 @@ impl InlineBuilder {
     }
 }
 
-pub fn render_markdown_blocks(markdown: &str) -> Vec<AnyElement> {
+pub fn render_markdown_blocks(
+    markdown: &str,
+    cx: &mut Context<crate::AppView>,
+) -> Vec<AnyElement> {
     parse_markdown_blocks(markdown)
         .into_iter()
-        .map(render_markdown_block)
+        .map(|block| render_markdown_block(block, cx))
         .collect()
 }
 
@@ -233,7 +238,10 @@ fn parse_markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
     blocks
 }
 
-fn render_markdown_block(block: MarkdownBlock) -> AnyElement {
+fn render_markdown_block(
+    block: MarkdownBlock,
+    cx: &mut Context<crate::AppView>,
+) -> AnyElement {
     match block {
         MarkdownBlock::Paragraph(content) => div()
             .w_full()
@@ -284,27 +292,55 @@ fn render_markdown_block(block: MarkdownBlock) -> AnyElement {
             )
             .into_any_element(),
         MarkdownBlock::CodeBlock { language, code } => {
-            let mut block = div()
+            let code_for_copy = code.clone();
+            let lang_label = language.clone();
+            let mut header = div()
                 .w_full()
-                .min_w(px(0.))
                 .flex()
-                .flex_col()
-                .gap(px(8.))
-                .bg(hex(PANEL_BG))
-                .border_1()
-                .border_color(hex(BORDER))
-                .rounded(px(10.))
-                .px(px(12.))
-                .py(px(10.));
-            if let Some(language) = language.filter(|value| !value.is_empty()) {
-                block = block.child(
+                .items_center()
+                .justify_between();
+            if let Some(language) = lang_label.filter(|value| !value.is_empty()) {
+                header = header.child(
                     div()
                         .text_size(px(10.))
                         .text_color(hex(TEXT_MUTED))
                         .child(language),
                 );
+            } else {
+                header = header.child(div());
             }
-            block
+            // コードブロックの「Copy」ボタン
+            header = header.child(
+                div()
+                    .px(px(8.))
+                    .py(px(2.))
+                    .rounded(px(4.))
+                    .text_size(px(10.))
+                    .text_color(hex(TEXT_MUTED))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(hex(BORDER)).text_color(hex(TEXT_PRIMARY)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            this.chat_copy_message(code_for_copy.clone(), cx);
+                        }),
+                    )
+                    .child("Copy"),
+            );
+
+            div()
+                .w_full()
+                .min_w(px(0.))
+                .flex()
+                .flex_col()
+                .bg(hex(PANEL_BG))
+                .border_1()
+                .border_color(hex(BORDER))
+                .rounded(px(10.))
+                .px(px(12.))
+                .py(px(10.))
+                .gap(px(4.))
+                .child(header)
                 .child(
                     div()
                         .w_full()

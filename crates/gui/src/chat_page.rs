@@ -684,6 +684,8 @@ fn render_message(
         }
     }
 
+    // メッセージ本文（右クリックでコピー対応）
+    let content_for_right_click = msg.content.clone();
     block = block.child(
         div()
             .ml(px(30.))
@@ -692,7 +694,14 @@ fn render_message(
             .flex()
             .flex_col()
             .gap(px(10.))
-            .children(render_markdown_blocks(&msg.content)),
+            .cursor(CursorStyle::default())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    this.chat_copy_message(content_for_right_click.clone(), cx);
+                }),
+            )
+            .children(render_markdown_blocks(&msg.content, cx)),
     );
 
     if !is_user && !metric_labels.is_empty() {
@@ -708,8 +717,9 @@ fn render_message(
         );
     }
 
-    if !is_user {
-        let can_regenerate = is_last_message && !chat_pending;
+    // アクションボタン（コピー・削除・再生成）— 全メッセージ共通
+    {
+        let can_regenerate = !is_user && is_last_message && !chat_pending;
         let copy_text = msg.content.clone();
         block = block.child(
             div()
