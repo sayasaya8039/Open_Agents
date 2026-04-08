@@ -1581,14 +1581,6 @@ impl AppView {
 
     // ── Chat セッション操作 ──
 
-    /// Chat推論先の設定を永続化
-    fn save_chat_prefs(&self) {
-        let prefs = model_prefs::load_local_llm_prefs();
-        let mut updated = prefs;
-        updated.chat = self.chat_prefs.clone();
-        model_prefs::save_local_llm_prefs(&updated);
-    }
-
     /// ローカルモデルを次のインデックスに切替
     fn cycle_local_model(&mut self, cx: &mut Context<Self>) {
         if self.settings_model_paths.is_empty() {
@@ -1596,7 +1588,7 @@ impl AppView {
         }
         self.chat_prefs.local_model_index =
             (self.chat_prefs.local_model_index + 1) % self.settings_model_paths.len();
-        self.save_chat_prefs();
+        self.persist_local_llm_prefs();
         // サーバキャッシュをクリア（次回送信時に新しいモデルで起動）
         llama_cpp_chat::cleanup_orphan_servers();
         cx.notify();
@@ -2964,6 +2956,8 @@ impl AppView {
         self.chat_prefs = self.chat_prefs.clone().sanitize();
         self.normalize_model_params_for_chat_source();
         self.persist_local_llm_prefs();
+        // LocalWeights に切り替わった場合、サーバをプリウォーム
+        self.prewarm_llama_server(cx);
         cx.notify();
     }
 
@@ -3118,7 +3112,7 @@ impl AppView {
                                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                                             this.chat_prefs.api_model = id_string.clone();
                                             this.chat_prefs.api_provider = pid.clone();
-                                            this.save_chat_prefs();
+                                            this.persist_local_llm_prefs();
                                             cx.notify();
                                         }),
                                     )

@@ -868,7 +868,7 @@ fn render_input_bar(
                                             cx.listener(|this, _: &MouseDownEvent, _, cx| {
                                                 this.chat_prefs.source =
                                                     this.chat_prefs.source.cycle();
-                                                this.save_chat_prefs();
+                                                this.persist_local_llm_prefs();
                                                 cx.notify();
                                             }),
                                         )
