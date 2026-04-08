@@ -360,7 +360,30 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
         }
     }
 
-    // 3. 汎用 OpenAI 互換
+    // 3. ローカル / セルフホスト OpenAI 互換サーバ（LM Studio, vLLM, llama.cpp server）
+    //    これらは API キー不要でアクセスできるため、URL だけで利用可能
+    for &(id, default_model) in &[
+        ("lm_studio_base_url", "default"),
+        ("vllm_base_url", "default"),
+        ("llama_cpp_server_url", "default"),
+    ] {
+        let base_url = api.get_str(id);
+        if !base_url.is_empty() {
+            let model = trimmed_or(chat_model, default_model);
+            let mut base = base_url.trim_end_matches('/').to_string();
+            // /v1 が含まれている場合、PROVIDER_ENDPOINTS と同じ形式に合わせる
+            if base.ends_with("/v1") {
+                base.truncate(base.len() - "/v1".len());
+            }
+            return Ok(ChatBackend::OpenAiCompatible {
+                base_url: base,
+                api_key: "no-key".to_string(), // ローカルサーバはキー不要
+                model,
+            });
+        }
+    }
+
+    // 4. 汎用 OpenAI 互換
     let gen_base = api.get_str("generic_openai_base_url");
     let gen_key = api.get_str("generic_openai_api_key");
     if !gen_base.is_empty() && !gen_key.is_empty() {
@@ -377,24 +400,42 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
     }
 
     Err(
-        "Chat をクラウド API に設定していますが、利用可能なプロバイダがありません。Settings の「API キー管理」でキーを登録してください。"
+        "Chat をクラウド API に設定していますが、利用可能なプロバイダがありません。Settings の「API キー管理」でキーを登録するか、ローカル / セルフホストの URL を設定してください。"
             .into(),
     )
 }
 
 fn resolve_ollama_backend(api: &ApiKeyPrefs, ollama_model: &str) -> Result<ChatBackend, String> {
     let ollama = api.get_str("ollama_base_url");
-    if ollama.is_empty() {
-        return Err(
-            "Chat をローカル (Ollama) に設定していますが、Ollama ベース URL が未登録です。API キー管理で ollama_base_url を設定してください。"
-                .into(),
-        );
+    if !ollama.is_empty() {
+        let model = trimmed_or(ollama_model, "llama3.2");
+        return Ok(ChatBackend::Ollama {
+            base_url: ollama.trim_end_matches('/').to_string(),
+            model,
+        });
     }
-    let model = trimmed_or(ollama_model, "llama3.2");
-    Ok(ChatBackend::Ollama {
-        base_url: ollama.trim_end_matches('/').to_string(),
-        model,
-    })
+
+    // Ollama URL が未設定の場合、LM Studio / vLLM / llama.cpp server を OpenAI 互換として使用
+    for &id in &["lm_studio_base_url", "vllm_base_url", "llama_cpp_server_url"] {
+        let url = api.get_str(id);
+        if !url.is_empty() {
+            let model = trimmed_or(ollama_model, "default");
+            let mut base = url.trim_end_matches('/').to_string();
+            if base.ends_with("/v1") {
+                base.truncate(base.len() - "/v1".len());
+            }
+            return Ok(ChatBackend::OpenAiCompatible {
+                base_url: base,
+                api_key: "no-key".to_string(),
+                model,
+            });
+        }
+    }
+
+    Err(
+        "Chat をローカル (Ollama) に設定していますが、Ollama ベース URL が未登録です。API キー管理で ollama_base_url または LM Studio / vLLM の URL を設定してください。"
+            .into(),
+    )
 }
 
 fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
