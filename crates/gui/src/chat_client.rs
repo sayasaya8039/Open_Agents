@@ -370,11 +370,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
         let base_url = api.get_str(id);
         if !base_url.is_empty() {
             let model = trimmed_or(chat_model, default_model);
-            let mut base = base_url.trim_end_matches('/').to_string();
-            // /v1 が含まれている場合、PROVIDER_ENDPOINTS と同じ形式に合わせる
-            if base.ends_with("/v1") {
-                base.truncate(base.len() - "/v1".len());
-            }
+            let base = normalize_local_server_url(&base_url);
             return Ok(ChatBackend::OpenAiCompatible {
                 base_url: base,
                 api_key: "no-key".to_string(), // ローカルサーバはキー不要
@@ -420,10 +416,7 @@ fn resolve_ollama_backend(api: &ApiKeyPrefs, ollama_model: &str) -> Result<ChatB
         let url = api.get_str(id);
         if !url.is_empty() {
             let model = trimmed_or(ollama_model, "default");
-            let mut base = url.trim_end_matches('/').to_string();
-            if base.ends_with("/v1") {
-                base.truncate(base.len() - "/v1".len());
-            }
+            let base = normalize_local_server_url(&url);
             return Ok(ChatBackend::OpenAiCompatible {
                 base_url: base,
                 api_key: "no-key".to_string(),
@@ -436,6 +429,32 @@ fn resolve_ollama_backend(api: &ApiKeyPrefs, ollama_model: &str) -> Result<ChatB
         "Chat をローカル (Ollama) に設定していますが、Ollama ベース URL が未登録です。API キー管理で ollama_base_url または LM Studio / vLLM の URL を設定してください。"
             .into(),
     )
+}
+
+/// ローカルサーバ URL を正規化。
+/// ユーザーが以下のどの形式で入力しても `http://host:port` に統一する:
+///   - `http://localhost:1234`
+///   - `http://localhost:1234/`
+///   - `http://localhost:1234/v1`
+///   - `http://localhost:1234/v1/`
+///   - `http://localhost:1234/v1/chat/completions`
+///   - `http://localhost:1234/api/v1/chat`
+fn normalize_local_server_url(url: &str) -> String {
+    let mut base = url.trim().trim_end_matches('/').to_string();
+    // 末尾の OpenAI パス部分を除去（ユーザーが完全 URL を貼った場合）
+    for suffix in &[
+        "/chat/completions",
+        "/completions",
+        "/models",
+        "/chat",
+    ] {
+        if base.ends_with(suffix) {
+            base.truncate(base.len() - suffix.len());
+        }
+    }
+    // /v1 や /api/v1 は残す — complete_chat_blocking が /v1 の有無を見て URL を構築する
+    // ただし末尾の / は除去
+    base.trim_end_matches('/').to_string()
 }
 
 fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
@@ -895,5 +914,54 @@ mod tests {
         let err = resolve_chat_backend(&p, &chat, &[temp_model_path("missing")]).unwrap_err();
         assert!(err.contains("見つかりません"));
         assert!(err.contains("ローカルLLM"));
+    }
+
+    #[test]
+    fn normalize_local_server_url_strips_paths() {
+        assert_eq!(
+            normalize_local_server_url("http://localhost:1234/v1"),
+            "http://localhost:1234/v1"
+        );
+        assert_eq!(
+            normalize_local_server_url("http://localhost:1234/v1/"),
+            "http://localhost:1234/v1"
+        );
+        assert_eq!(
+            normalize_local_server_url("http://localhost:1234/v1/chat/completions"),
+            "http://localhost:1234/v1"
+        );
+        assert_eq!(
+            normalize_local_server_url("http://localhost:1234/api/v1/chat"),
+            "http://localhost:1234/api/v1"
+        );
+        assert_eq!(
+            normalize_local_server_url("http://localhost:1234"),
+            "http://localhost:1234"
+        );
+        assert_eq!(
+            normalize_local_server_url("http://localhost:1234/"),
+            "http://localhost:1234"
+        );
+    }
+
+    #[test]
+    fn lm_studio_url_resolves_as_openai_compatible() {
+        let mut p = ApiKeyPrefs::default();
+        p.set_entry("lm_studio_base_url", "http://127.0.0.1:1234/v1".into());
+        let chat = ChatPrefs {
+            source: ChatInferenceSource::Api,
+            ..Default::default()
+        };
+        let b = resolve_chat_backend(&p, &chat, &[]).expect("backend");
+        match b {
+            ChatBackend::OpenAiCompatible { base_url, .. } => {
+                // /v1 は残る — complete_chat_blocking が /chat/completions を付ける
+                assert!(
+                    base_url.contains("127.0.0.1:1234"),
+                    "unexpected url: {base_url}"
+                );
+            }
+            _ => panic!("expected OpenAiCompatible backend for LM Studio"),
+        }
     }
 }
