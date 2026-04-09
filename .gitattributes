@@ -1,3 +1,8 @@
 third_party/llama.cpp/windows-x64/ggml-cuda.dll filter=lfs diff=lfs merge=lfs -text
 third_party/llama.cpp/windows-x64/cpu/ggml-cuda.dll filter=lfs diff=lfs merge=lfs -text
 third_party/llama.cpp/windows-x64/upstream/cuda/ggml-cuda.dll filter=lfs diff=lfs merge=lfs -text
+third_party/llama.cpp/windows-x64/cublasLt64_13.dll filter=lfs diff=lfs merge=lfs -text
+third_party/llama.cpp/windows-x64/upstream/cuda/cublasLt64_13.dll filter=lfs diff=lfs merge=lfs -text
+third_party/llama.cpp/windows-x64/vulkan/ggml-vulkan.dll filter=lfs diff=lfs merge=lfs -text
+third_party/llama.cpp/windows-x64/cublas64_13.dll filter=lfs diff=lfs merge=lfs -text
+third_party/llama.cpp/windows-x64/upstream/cuda/cublas64_13.dll filter=lfs diff=lfs merge=lfs -text

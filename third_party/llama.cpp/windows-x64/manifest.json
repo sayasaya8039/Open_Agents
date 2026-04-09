@@ -1,8 +1,8 @@
 {
-  "llama_cpp_tag": "b8201",
-  "llama_server_version": "prism-b8201-ba7e817",
-  "platform": "windows-x64-cuda-13.1-prism",
-  "asset_name": "llama-prism-b1-ba7e817-bin-win-cuda-13.1-x64.zip",
-  "source_release_url": "https://github.com/PrismML-Eng/llama.cpp/releases/tag/prism-b8201-ba7e817",
-  "llama_server_sha256": "01647BADD6247AEB328FAF5DF01ABC0955480318264C85ECA21563C0B89F4218"
+  "llama_cpp_tag": "b8724",
+  "llama_server_version": "b8724",
+  "platform": "windows-x64-cuda-13.1",
+  "asset_name": "llama-b8724-bin-win-cuda-13.1-x64.zip",
+  "source_release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b8724",
+  "llama_server_sha256": "0A1F8772E8A5BEA586A21CFD3F5759BFB19390B2FCF55BDF7E2A81BEDF7BA9A9"
 }
