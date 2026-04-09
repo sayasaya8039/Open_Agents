@@ -2,6 +2,8 @@
 
 use std::ops::Range;
 
+use crate::i18n;
+
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem, Context,
     CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
@@ -59,7 +61,7 @@ impl SessionTitleEditor {
         Self {
             focus_handle: cx.focus_handle(),
             content,
-            placeholder: "セッション名".into(),
+            placeholder: i18n::session_name_placeholder().into(),
             selected_range: 0..len,
             selection_reversed: false,
             marked_range: None,

@@ -7,6 +7,7 @@ mod chat_markdown;
 mod chat_page;
 mod chat_session;
 mod editor;
+pub mod i18n;
 mod llama_cpp_chat;
 mod llama_cpp_runtime;
 mod model_prefs;
@@ -327,7 +328,7 @@ mod tests {
         impl ChatSubmitHarness {
             fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
                 let composer =
-                    cx.new(|ecx| chat_composer::ChatComposer::new(ecx, "メッセージを入力…"));
+                    cx.new(|ecx| chat_composer::ChatComposer::new(ecx, i18n::placeholder_message()));
                 composer.read(cx).focus(window);
                 cx.subscribe(
                     &composer,
@@ -2738,7 +2739,7 @@ impl AppView {
                                 .text_size(px(11.))
                                 .text_color(hex(TEXT_MUTED))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(def.group),
+                                .child(api_key_prefs::translate_group(def.group)),
                         )
                         .into_any_element(),
                 );
@@ -4657,7 +4658,7 @@ impl AppView {
                                 div()
                                     .text_size(px(13.))
                                     .text_color(hex(TEXT_PRIMARY))
-                                    .child("Settings"),
+                                    .child(i18n::settings()),
                             ),
                     ),
             )
@@ -4687,7 +4688,7 @@ impl AppView {
                                     .child(self.settings_figma_heading(
                                         "💾",
                                         FIGMA_ICON_ORANGE,
-                                        "ローカルLLM設定",
+                                        i18n::settings_local_llm(),
                                     ))
                                     .child(
                                         div()
@@ -4704,8 +4705,8 @@ impl AppView {
                                                     .justify_between()
                                                     .gap(px(16.))
                                                     .child(self.settings_labeled_block(
-                                                        "モデル形式",
-                                                        "選択したモデルファイルから自動判定",
+                                                        i18n::settings_model_format(),
+                                                        i18n::settings_model_format_hint(),
                                                     ))
                                                     .child(self.settings_fake_dropdown(
                                                         self.settings_model_format_label().as_ref(),
@@ -4720,7 +4721,7 @@ impl AppView {
                                                         div()
                                                             .text_size(px(13.))
                                                             .text_color(hex(TEXT_PRIMARY))
-                                                            .child("モデルファイル"),
+                                                            .child(i18n::settings_model_file()),
                                                     )
                                                     .child(
                                                         div()
@@ -4750,7 +4751,7 @@ impl AppView {
                                                                 ),
                                                             )
                                                             .child("⬆")
-                                                            .child("モデルファイルを読み込む"),
+                                                            .child(i18n::settings_load_model()),
                                                     )
                                                     .child(
                                                         div()
@@ -4768,7 +4769,7 @@ impl AppView {
                                                                 div()
                                                                     .text_size(px(13.))
                                                                     .text_color(hex(TEXT_PRIMARY))
-                                                                    .child("読み込み済みモデル"),
+                                                                    .child(i18n::settings_loaded_models()),
                                                             )
                                                             .when(self.settings_model_paths.is_empty(), |d| {
                                                                 d.child(
@@ -4776,7 +4777,7 @@ impl AppView {
                                                                         .text_size(px(11.))
                                                                         .text_color(hex(TEXT_DIM))
                                                                         .child(
-                                                                            "上のボタンで追加するとここに並びます（次回起動後も保持）",
+                                                                            i18n::settings_loaded_models_hint(),
                                                                         ),
                                                                 )
                                                             })
@@ -4806,24 +4807,24 @@ impl AppView {
                                                         div()
                                                             .text_size(px(13.))
                                                             .text_color(hex(TEXT_PRIMARY))
-                                                            .child("モデルパラメータ"),
+                                                            .child(i18n::settings_model_params()),
                                                     )
                                                     .child(self.settings_model_param_row(
                                                         cx,
                                                         ModelParamAdjustKind::Temperature,
                                                         "Temperature",
-                                                        Some("低い値ほど決定論的、高い値ほど創造的"),
+                                                        Some(i18n::settings_temperature_hint()),
                                                     ))
                                                     .child(self.settings_model_param_row(
                                                         cx,
                                                         ModelParamAdjustKind::MaxOutputTokens,
-                                                        "最大トークン数",
-                                                        Some("ローカル GGUF は 256〜512 推奨。大きい値は応答完了まで極端に遅くなります"),
+                                                        i18n::settings_max_tokens(),
+                                                        Some(i18n::settings_max_tokens_hint()),
                                                     ))
                                                     .child(self.settings_model_param_row(
                                                         cx,
                                                         ModelParamAdjustKind::ContextLength,
-                                                        "コンテキスト長",
+                                                        i18n::settings_context_length(),
                                                         None,
                                                     )),
                                             )
@@ -4839,27 +4840,27 @@ impl AppView {
                                                         div()
                                                             .text_size(px(13.))
                                                             .text_color(hex(TEXT_PRIMARY))
-                                                            .child("ハードウェア設定"),
+                                                            .child(i18n::settings_hardware()),
                                                     )
                                                     .child(self.settings_runtime_preset_row(cx))
                                                     .child(self.settings_hardware_stepper_row(
                                                         cx,
                                                         HardwareParamAdjustKind::GpuLayers,
-                                                        "GPU レイヤー数",
+                                                        i18n::settings_gpu_layers(),
                                                         Some(
-                                                            "選択中モードの llama-server に対して --n-gpu-layers へ渡します。混成モードでもレイヤー数の上限として扱います。",
+                                                            i18n::settings_gpu_layers_hint(),
                                                         ),
                                                     ))
                                                     .child(self.settings_hardware_stepper_row(
                                                         cx,
                                                         HardwareParamAdjustKind::NThreads,
-                                                        "スレッド数",
+                                                        i18n::settings_threads(),
                                                         None,
                                                     ))
                                                     .child(self.settings_hardware_stepper_row(
                                                         cx,
                                                         HardwareParamAdjustKind::BatchSize,
-                                                        "バッチサイズ",
+                                                        i18n::settings_batch_size(),
                                                         None,
                                                     )),
                                             ),
@@ -4873,7 +4874,7 @@ impl AppView {
                                     .child(self.settings_figma_heading(
                                         "🎨",
                                         FIGMA_ICON_BLUE,
-                                        "外観",
+                                        i18n::settings_appearance(),
                                     ))
                                     .child(
                                         div()
@@ -4896,7 +4897,7 @@ impl AppView {
                                     .child(self.settings_figma_heading(
                                         "🧠",
                                         PURPLE,
-                                        "AI設定",
+                                        i18n::settings_ai(),
                                     ))
                                     .child(
                                         div()
@@ -4909,20 +4910,20 @@ impl AppView {
                                             .child(self.settings_ai_toggle_row(
                                                 cx,
                                                 AiToggleKind::AutoComplete,
-                                                "自動補完",
-                                                "AI による自動補完を有効化",
+                                                i18n::settings_auto_complete(),
+                                                i18n::settings_auto_complete_hint(),
                                             ))
                                             .child(self.settings_ai_toggle_row(
                                                 cx,
                                                 AiToggleKind::CodeSuggestions,
-                                                "コード提案",
-                                                "リアルタイムのコード提案を表示",
+                                                i18n::settings_code_suggestions(),
+                                                i18n::settings_code_suggestions_hint(),
                                             ))
                                             .child(self.settings_ai_toggle_row(
                                                 cx,
                                                 AiToggleKind::StreamingResponses,
-                                                "ストリーミング応答",
-                                                "応答をリアルタイムで表示",
+                                                i18n::settings_streaming(),
+                                                i18n::settings_streaming_hint(),
                                             ))
                                             .child(self.settings_cot_mode_row(cx))
                                             .child(self.settings_self_consistency_row(cx))
@@ -4942,7 +4943,7 @@ impl AppView {
                                     .child(self.settings_figma_heading(
                                         "🔑",
                                         FIGMA_ICON_GREEN,
-                                        "APIキー管理",
+                                        i18n::settings_api_keys(),
                                     ))
                                     .child(
                                         div()
@@ -4965,7 +4966,7 @@ impl AppView {
                                                             .whitespace_normal()
                                                             .text_size(px(12.))
                                                             .text_color(hex(TEXT_MUTED))
-                                                            .child("外部 API・ローカル推論（Ollama / llama.cpp 等）のキーと URL をローカルに保存します（api_keys.json の entries）。キーをコピーして「貼り付け」で取り込めます。カタログにないマイナー API は同ファイルの entries に手動で ID を追加してください。"),
+                                                            .child(i18n::settings_api_keys_description()),
                                                     )
                                                     .when(extra_keys > 0, |d| {
                                                         d.child(
@@ -4974,9 +4975,7 @@ impl AppView {
                                                                 .whitespace_normal()
                                                                 .text_size(px(11.))
                                                                 .text_color(hex(ACCENT_ORANGE))
-                                                                .child(format!(
-                                                                    "カタログ外のエントリが {extra_keys} 件あります（api_keys.json を参照）。",
-                                                                )),
+                                                                .child(i18n::settings_extra_entries(extra_keys)),
                                                         )
                                                     }),
                                             )
@@ -4990,7 +4989,7 @@ impl AppView {
                                                         div()
                                                             .text_size(px(13.))
                                                             .text_color(hex(TEXT_PRIMARY))
-                                                            .child("登録済み（カタログ順）"),
+                                                            .child(i18n::settings_registered_catalog()),
                                                     )
                                                     .children(
                                                         self.settings_api_keys_child_elements(cx),
@@ -5006,7 +5005,7 @@ impl AppView {
                                     .child(self.settings_figma_heading(
                                         "ℹ",
                                         TEXT_SECONDARY,
-                                        "アプリ情報",
+                                        i18n::settings_app_info(),
                                     ))
                                     .child(
                                         div()
@@ -5025,7 +5024,7 @@ impl AppView {
                                                         div()
                                                             .text_size(px(12.))
                                                             .text_color(hex(TEXT_MUTED))
-                                                            .child("バージョン"),
+                                                            .child(i18n::settings_version()),
                                                     )
                                                     .child(
                                                         div()
@@ -5043,7 +5042,7 @@ impl AppView {
                                                         div()
                                                             .text_size(px(12.))
                                                             .text_color(hex(TEXT_MUTED))
-                                                            .child("ビルド"),
+                                                            .child(i18n::settings_build()),
                                                     )
                                                     .child(
                                                         div()
@@ -5136,6 +5135,7 @@ fn install_chat_submit_fallback(cx: &mut App) {
 }
 
 fn main() {
+    i18n::init();
     Application::new().run(|cx: &mut App| {
         // キーバインド登録
         editor::actions::register_keybindings(cx);
@@ -5174,7 +5174,7 @@ fn main() {
                     let local_llm = model_prefs::load_local_llm_prefs();
                     let api_keys = api_key_prefs::load_api_keys();
                     let chat_composer =
-                        cx.new(|ecx| chat_composer::ChatComposer::new(ecx, "メッセージを入力…"));
+                        cx.new(|ecx| chat_composer::ChatComposer::new(ecx, i18n::placeholder_message()));
                     let llama_cpp_runtime_statuses =
                         llama_cpp_runtime::probe_bundled_runtime_statuses();
                     cx.subscribe(

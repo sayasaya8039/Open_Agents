@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::i18n;
+
 /// 設定 UI および推奨環境変数名のメタデータ（値は `entries` に格納）
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialKind {
@@ -415,10 +417,23 @@ pub fn save_api_keys(prefs: &ApiKeyPrefs) {
     }
 }
 
+/// グループ ID（日本語）を現在の言語に翻訳する
+pub fn translate_group(group: &str) -> &'static str {
+    match group {
+        "クラウド LLM（主要）" => i18n::api_group_cloud_primary(),
+        "クラウド LLM・推論（追加）" => i18n::api_group_cloud_extra(),
+        "ローカル / セルフホスト（Ollama・Llama）" => i18n::api_group_local(),
+        "OpenAI 互換（汎用）" => i18n::api_group_openai_compat(),
+        "Azure / AWS" => i18n::api_group_azure_aws(),
+        "Hub・Embedding・検索" => i18n::api_group_hub(),
+        _ => i18n::api_group_cloud_primary(), // fallback
+    }
+}
+
 /// マスク表示用（URL・トークン共通）
 pub fn masked_line(key: &str, reveal_full: bool) -> String {
     if key.is_empty() {
-        return "（未設定）".into();
+        return i18n::not_set().into();
     }
     if reveal_full {
         return key.to_string();
@@ -444,7 +459,11 @@ pub fn masked_line(key: &str, reveal_full: bool) -> String {
 pub fn extra_entry_count(prefs: &ApiKeyPrefs) -> usize {
     let known: std::collections::HashSet<&'static str> =
         PROVIDER_CATALOG.iter().map(|p| p.id).collect();
-    prefs.entries.keys().filter(|k| !known.contains(k.as_str())).count()
+    prefs
+        .entries
+        .keys()
+        .filter(|k| !known.contains(k.as_str()))
+        .count()
 }
 
 #[cfg(test)]

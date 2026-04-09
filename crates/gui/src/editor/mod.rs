@@ -9,14 +9,15 @@ mod syntax_highlight;
 use buffer::{Position, TextBuffer};
 use cursor::CursorState;
 use grid_renderer::{GridCell, GridRenderer};
-use syntax_highlight::{SyntaxColorRole, SyntaxSpan, highlight_buffer};
+use syntax_highlight::{highlight_buffer, SyntaxColorRole, SyntaxSpan};
 
-use gpui::*;
 use gpui::prelude::*;
+use gpui::*;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::i18n;
 use crate::model_prefs::{AppearancePrefs, UiTheme};
 use crate::{hex, hex_a, BG, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY};
 
@@ -58,7 +59,7 @@ impl EditorView {
     pub fn new(cx: &mut Context<Self>, appearance: &AppearancePrefs) -> Self {
         let focus_handle = cx.focus_handle();
         let buffer = TextBuffer::from_string(
-            "// Open Agents エディタへようこそ！\n// ここにコードを書いてください。\n\nfn main() {\n    println!(\"Hello, world!\");\n}\n",
+            i18n::editor_welcome(),
         );
         let highlighted_lines = highlight_buffer(buffer.file_path(), buffer.lines());
         let ap = appearance.clone().sanitize();
@@ -166,8 +167,10 @@ impl EditorView {
                 match std::fs::read(path) {
                     Ok(bytes) => {
                         let text = String::from_utf8_lossy(&bytes);
-                        self.buffer =
-                            TextBuffer::from_string_with_path(text.as_ref(), Some(path.to_path_buf()));
+                        self.buffer = TextBuffer::from_string_with_path(
+                            text.as_ref(),
+                            Some(path.to_path_buf()),
+                        );
                         self.refresh_highlights();
                         self.cursor = CursorState::new();
                         cx.notify();
@@ -191,11 +194,10 @@ impl EditorView {
         segments: &[String],
         cx: &mut Context<Self>,
     ) {
-        let path: std::path::PathBuf =
-            segments.iter().fold(workspace_root.to_path_buf(), |a, s| a.join(s));
-        let path = path
-            .canonicalize()
-            .unwrap_or(path);
+        let path: std::path::PathBuf = segments
+            .iter()
+            .fold(workspace_root.to_path_buf(), |a, s| a.join(s));
+        let path = path.canonicalize().unwrap_or(path);
         if path.is_file() {
             self.load_file(&path, cx);
             return;
@@ -220,10 +222,7 @@ impl EditorView {
             return root;
         };
         if path.is_file() {
-            return path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or(root);
+            return path.parent().map(|p| p.to_path_buf()).unwrap_or(root);
         }
         if path.is_dir() {
             return path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -236,10 +235,8 @@ impl EditorView {
 
     /// カーソル行が画面外に出た場合のみスクロール（非strict: 既に見えていれば何もしない）
     fn ensure_cursor_visible(&self) {
-        self.scroll_handle.scroll_to_item(
-            self.cursor.position.line,
-            gpui::ScrollStrategy::Top,
-        );
+        self.scroll_handle
+            .scroll_to_item(self.cursor.position.line, gpui::ScrollStrategy::Top);
     }
 
     /// バッファ差し替え後に古いスクロール位置が残ると、可視行範囲が空になりテキストが一切描画されない。
@@ -271,46 +268,53 @@ impl EditorView {
     }
 
     /// バッファ内容を GridCell の2D配列に変換（syntax highlight 色付き）
-    fn buffer_to_grid_cells(
-        &self,
-        cols: u32,
-        rows: u32,
-        scroll_y: usize,
-    ) -> Vec<Vec<GridCell>> {
-        let default_fg = if self.is_editor_light() { 0x1E1E1Eu32 } else { 0xE5E5E5u32 };
-        let default_bg = if self.is_editor_light() { 0xF3F3F3u32 } else { 0x1E1E1Eu32 };
+    fn buffer_to_grid_cells(&self, cols: u32, rows: u32, scroll_y: usize) -> Vec<Vec<GridCell>> {
+        let default_fg = if self.is_editor_light() {
+            0x1E1E1Eu32
+        } else {
+            0xE5E5E5u32
+        };
+        let default_bg = if self.is_editor_light() {
+            0xF3F3F3u32
+        } else {
+            0x1E1E1Eu32
+        };
         let line_count = self.buffer.line_count();
 
-        (0..rows as usize).map(|screen_row| {
-            let line_idx = scroll_y + screen_row;
-            let mut row_cells = vec![GridCell::default(); cols as usize];
+        (0..rows as usize)
+            .map(|screen_row| {
+                let line_idx = scroll_y + screen_row;
+                let mut row_cells = vec![GridCell::default(); cols as usize];
 
-            // デフォルト bg を設定
-            for cell in row_cells.iter_mut() {
-                cell.bg = default_bg;
-                cell.fg = default_fg;
-            }
+                // デフォルト bg を設定
+                for cell in row_cells.iter_mut() {
+                    cell.bg = default_bg;
+                    cell.fg = default_fg;
+                }
 
-            if line_idx < line_count {
-                let spans = self.line_spans(line_idx);
-                let mut col = 0usize;
-                for span in &spans {
-                    let fg = Self::color_for_role(span.role, default_fg);
-                    for ch in span.text.chars() {
-                        if col >= cols as usize { break; }
-                        row_cells[col] = GridCell {
-                            ch,
-                            fg,
-                            bg: default_bg,
-                            flags: 0,
-                        };
-                        col += 1;
+                if line_idx < line_count {
+                    let spans = self.line_spans(line_idx);
+                    let mut col = 0usize;
+                    for span in &spans {
+                        let fg = Self::color_for_role(span.role, default_fg);
+                        for ch in span.text.chars() {
+                            if col >= cols as usize {
+                                break;
+                            }
+                            row_cells[col] = GridCell {
+                                ch,
+                                fg,
+                                bg: default_bg,
+                                flags: 0,
+                            };
+                            col += 1;
+                        }
                     }
                 }
-            }
 
-            row_cells
-        }).collect()
+                row_cells
+            })
+            .collect()
     }
 
     fn line_spans(&self, line_idx: usize) -> Vec<SyntaxSpan> {
@@ -375,27 +379,35 @@ impl EditorView {
         result
     }
 
-    fn render_spans(editor: &EditorView, spans: &[SyntaxSpan], override_color: Option<Hsla>) -> AnyElement {
+    fn render_spans(
+        editor: &EditorView,
+        spans: &[SyntaxSpan],
+        override_color: Option<Hsla>,
+    ) -> AnyElement {
         let fs = px(editor.font_size_px as f32);
         div()
             .flex()
-            .children(spans.iter().filter(|span| !span.text.is_empty()).map(|span| {
-                div()
-                    .text_size(fs)
-                    .font_family("Cascadia Code")
-                    .text_color(override_color.unwrap_or_else(|| editor.role_color(span.role)))
-                    .child(span.text.clone())
-                    .into_any_element()
-            }))
+            .children(
+                spans
+                    .iter()
+                    .filter(|span| !span.text.is_empty())
+                    .map(|span| {
+                        div()
+                            .text_size(fs)
+                            .font_family("Cascadia Code")
+                            .text_color(
+                                override_color.unwrap_or_else(|| editor.role_color(span.role)),
+                            )
+                            .child(span.text.clone())
+                            .into_any_element()
+                    }),
+            )
             .into_any_element()
     }
 
     // --- 行描画 ---
 
-    fn render_line(
-        editor: &EditorView,
-        line_idx: usize,
-    ) -> impl IntoElement {
+    fn render_line(editor: &EditorView, line_idx: usize) -> impl IntoElement {
         let is_current = editor.cursor.position.line == line_idx;
         let line_text = editor.buffer.line(line_idx).to_string();
         let line_num = format!("{:>4}", line_idx + 1);
@@ -451,10 +463,12 @@ impl EditorView {
                     line_len
                 };
 
-                let sc = (0..=line_len).rev()
+                let sc = (0..=line_len)
+                    .rev()
                     .find(|&i| i <= sel_col_start && line_text.is_char_boundary(i))
                     .unwrap_or(0);
-                let ec = (0..=line_len).rev()
+                let ec = (0..=line_len)
+                    .rev()
                     .find(|&i| i <= sel_col_end && line_text.is_char_boundary(i))
                     .unwrap_or(0);
 
@@ -467,15 +481,11 @@ impl EditorView {
                         &Self::slice_spans(&spans, 0, before_len),
                         None,
                     ))
-                    .child(
-                        div()
-                            .bg(sel_bg)
-                            .child(Self::render_spans(
-                                editor,
-                                &Self::slice_spans(&spans, sc, ec),
-                                Some(sel_fg),
-                            )),
-                    )
+                    .child(div().bg(sel_bg).child(Self::render_spans(
+                        editor,
+                        &Self::slice_spans(&spans, sc, ec),
+                        Some(sel_fg),
+                    )))
                     .child(Self::render_spans(
                         editor,
                         &Self::slice_spans(&spans, ec, line_text.len()),
@@ -781,12 +791,7 @@ impl EditorView {
         cx.notify();
     }
 
-    fn handle_tab(
-        &mut self,
-        _action: &actions::Tab,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn handle_tab(&mut self, _action: &actions::Tab, _window: &mut Window, cx: &mut Context<Self>) {
         self.cursor.delete_selection(&mut self.buffer);
         let new_pos = self.buffer.insert_text(self.cursor.position, "    ");
         self.cursor.position = new_pos;
@@ -810,13 +815,16 @@ impl EditorView {
             cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
                 if let Ok(Ok(Some(path))) = receiver.await {
                     cx.update(|cx| {
-                        entity.update(cx, |this: &mut Self, cx| {
-                            if let Err(e) = this.buffer.save_as(&path) {
-                                eprintln!("保存エラー: {}", e);
-                            }
-                            cx.notify();
-                        }).ok();
-                    }).ok();
+                        entity
+                            .update(cx, |this: &mut Self, cx| {
+                                if let Err(e) = this.buffer.save_as(&path) {
+                                    eprintln!("保存エラー: {}", e);
+                                }
+                                cx.notify();
+                            })
+                            .ok();
+                    })
+                    .ok();
                 }
             })
             .detach();
@@ -849,10 +857,13 @@ impl EditorView {
                 if let Some(path) = paths.first() {
                     let path = path.clone();
                     cx.update(|cx| {
-                        entity.update(cx, |this: &mut Self, cx| {
-                            this.load_file(&path, cx);
-                        }).ok();
-                    }).ok();
+                        entity
+                            .update(cx, |this: &mut Self, cx| {
+                                this.load_file(&path, cx);
+                            })
+                            .ok();
+                    })
+                    .ok();
                 }
             }
         })
@@ -888,16 +899,16 @@ impl EditorView {
         let line = if scrolled_y < px(0.) {
             0
         } else {
-            ((scrolled_y / line_height) as usize)
-                .min(self.buffer.line_count().saturating_sub(1))
+            ((scrolled_y / line_height) as usize).min(self.buffer.line_count().saturating_sub(1))
         };
 
         let line_text: SharedString = self.buffer.line(line).to_string().into();
         let rel_x = (local_x - gutter_width).max(px(0.));
         let runs = self.editor_text_runs(line_text.len());
-        let shaped = window
-            .text_system()
-            .shape_line(line_text, px(self.font_size_px as f32), &runs, None);
+        let shaped =
+            window
+                .text_system()
+                .shape_line(line_text, px(self.font_size_px as f32), &runs, None);
         let mut col = shaped
             .closest_index_for_x(rel_x)
             .min(self.buffer.line_len(line));
@@ -910,7 +921,12 @@ impl EditorView {
     }
 
     /// マウスクリック — カーソル移動
-    fn handle_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+    fn handle_mouse_down(
+        &mut self,
+        ev: &MouseDownEvent,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
         if ev.button == MouseButton::Left {
             self.focus_handle.focus(window);
             let pos = self.position_from_point(ev.position, window);
@@ -923,7 +939,12 @@ impl EditorView {
     }
 
     /// マウスドラッグ — 選択範囲拡張
-    fn handle_mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_mouse_move(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.dragging && ev.pressed_button == Some(MouseButton::Left) {
             let pos = self.position_from_point(ev.position, window);
             if self.cursor.anchor.is_none() {
@@ -950,7 +971,12 @@ impl EditorView {
 
     // --- クリップボード ---
 
-    fn handle_copy(&mut self, _action: &actions::Copy, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_copy(
+        &mut self,
+        _action: &actions::Copy,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some((start, end)) = self.cursor.selection_range() {
             let text = self.buffer.text_in_range(start, end);
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -968,7 +994,12 @@ impl EditorView {
         }
     }
 
-    fn handle_paste(&mut self, _action: &actions::Paste, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_paste(
+        &mut self,
+        _action: &actions::Paste,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(item) = cx.read_from_clipboard() {
             if let Some(text) = item.text() {
                 if !text.is_empty() {
@@ -984,7 +1015,12 @@ impl EditorView {
         }
     }
 
-    fn handle_select_all(&mut self, _action: &actions::SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_select_all(
+        &mut self,
+        _action: &actions::SelectAll,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cursor.anchor = Some(Position::new(0, 0));
         let last_line = self.buffer.line_count().saturating_sub(1);
         self.cursor.position = Position::new(last_line, self.buffer.line_len(last_line));
@@ -1132,9 +1168,7 @@ impl Render for EditorView {
                             let entity = entity.clone();
                             move |range: Range<usize>, _window: &mut Window, cx: &mut App| {
                                 let editor = entity.read(cx);
-                                range
-                                    .map(|ix| Self::render_line(editor, ix))
-                                    .collect()
+                                range.map(|ix| Self::render_line(editor, ix)).collect()
                             }
                         })
                         .with_sizing_behavior(ListSizingBehavior::Infer)
@@ -1280,9 +1314,10 @@ impl EntityInputHandler for EditorView {
         let gutter = self.gutter_width_px();
         let line_text: SharedString = self.buffer.line(pos.line).to_string().into();
         let runs = self.editor_text_runs(line_text.len());
-        let shaped = window
-            .text_system()
-            .shape_line(line_text, px(self.font_size_px as f32), &runs, None);
+        let shaped =
+            window
+                .text_system()
+                .shape_line(line_text, px(self.font_size_px as f32), &runs, None);
         let scroll_y = self.scroll_handle.0.borrow().base_handle.offset().y;
         let x = self.editor_bounds.origin.x + gutter + shaped.x_for_index(pos.column);
         let y = self.editor_bounds.origin.y + scroll_y + line_height * pos.line as f32;

@@ -7,6 +7,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::i18n;
+
 /// 個別チャットメッセージ
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatMsg {
@@ -51,10 +53,10 @@ impl ChatSession {
         let now = unix_now();
         Self {
             id: now as u64,
-            title: "新しい会話".into(),
+            title: i18n::new_conversation().into(),
             messages: vec![ChatMsg {
                 role: "assistant".into(),
-                content: "こんにちは！Open Agents AIコーディングアシスタントです。コードの作成、編集、リファクタ��ングなど、お手伝いします。".into(),
+                content: i18n::greeting_message().into(),
                 thinking: None,
                 metrics: None,
             }],
@@ -148,7 +150,7 @@ impl SessionStore {
         let duplicate_id = self.next_session_id();
         let duplicate = ChatSession {
             id: duplicate_id,
-            title: format!("{} のコピー", source.title),
+            title: format!("{}{}", source.title, i18n::copy_suffix()),
             messages: source.messages,
             created_at: now,
             updated_at: now,
@@ -185,7 +187,8 @@ impl SessionStore {
         let now = unix_now();
         let removed_active = self.active_id.is_some_and(|active_id| {
             self.sessions.iter().any(|session| {
-                session.id == active_id && group_label_for(session.updated_at, now) == label
+                session.id == active_id
+                    && group_label_for(session.updated_at, now) == label
             })
         });
 
@@ -219,22 +222,22 @@ impl SessionStore {
         let mut earlier = Vec::new();
 
         for s in sorted {
-            match group_label_for(s.updated_at, now) {
-                "Today" => today.push(s),
-                "Yesterday" => yesterday.push(s),
+            match group_index_for(s.updated_at, now) {
+                0 => today.push(s),
+                1 => yesterday.push(s),
                 _ => earlier.push(s),
             }
         }
 
         let mut groups = Vec::new();
         if !today.is_empty() {
-            groups.push(("Today", today));
+            groups.push((i18n::group_today(), today));
         }
         if !yesterday.is_empty() {
-            groups.push(("Yesterday", yesterday));
+            groups.push((i18n::group_yesterday(), yesterday));
         }
         if !earlier.is_empty() {
-            groups.push(("Earlier", earlier));
+            groups.push((i18n::group_earlier(), earlier));
         }
         groups
     }
@@ -300,15 +303,24 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-fn group_label_for(updated_at: i64, now: i64) -> &'static str {
+/// 日付グループ判定 — 0=today, 1=yesterday, 2=earlier
+fn group_index_for(updated_at: i64, now: i64) -> usize {
     let today_start = now - (now % 86400);
     let yesterday_start = today_start - 86400;
     if updated_at >= today_start {
-        "Today"
+        0
     } else if updated_at >= yesterday_start {
-        "Yesterday"
+        1
     } else {
-        "Earlier"
+        2
+    }
+}
+
+fn group_label_for(updated_at: i64, now: i64) -> &'static str {
+    match group_index_for(updated_at, now) {
+        0 => i18n::group_today(),
+        1 => i18n::group_yesterday(),
+        _ => i18n::group_earlier(),
     }
 }
 

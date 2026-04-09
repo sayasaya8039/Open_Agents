@@ -10,6 +10,7 @@ use gpui::*;
 
 use crate::chat_markdown::render_markdown_blocks;
 use crate::chat_session::{ChatMsg, SessionStore};
+use crate::i18n;
 use crate::{
     hex, hex_a, ACCENT_BLUE, ACCENT_ORANGE, BG, BORDER, HOVER_BG, PANEL_BG, SIDEBAR_BG, TEXT_DIM,
     TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
@@ -103,7 +104,7 @@ fn render_session_sidebar(
                     .justify_center()
                     .gap(px(6.))
                     .child("＋")
-                    .child("New Session")
+                    .child(i18n::new_session())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -150,7 +151,7 @@ fn render_session_sidebar(
                                             .text_color(hex(TEXT_MUTED))
                                             .cursor_pointer()
                                             .hover(|d| d.text_color(hex(TEXT_PRIMARY)))
-                                            .child("削除")
+                                            .child(i18n::delete())
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(
@@ -235,7 +236,7 @@ fn render_session_sidebar(
                                                             .text_size(px(11.))
                                                             .text_color(hex(0xFFFFFF))
                                                             .cursor_pointer()
-                                                            .child("保存")
+                                                            .child(i18n::save())
                                                             .on_mouse_down(
                                                                 MouseButton::Left,
                                                                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -257,7 +258,7 @@ fn render_session_sidebar(
                                                             .text_color(hex(TEXT_MUTED))
                                                             .cursor_pointer()
                                                             .hover(|d| d.bg(hex(HOVER_BG)))
-                                                            .child("取消")
+                                                            .child(i18n::cancel())
                                                             .on_mouse_down(
                                                                 MouseButton::Left,
                                                                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -304,7 +305,7 @@ fn render_session_sidebar(
                                             .bg(hex(PANEL_BG))
                                             .overflow_hidden()
                                             .child(
-                                                session_menu_item("名前変更", false)
+                                                session_menu_item(i18n::rename(), false)
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -315,7 +316,7 @@ fn render_session_sidebar(
                                                     ),
                                             )
                                             .child(
-                                                session_menu_item("複製", false)
+                                                session_menu_item(i18n::duplicate(), false)
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -326,7 +327,7 @@ fn render_session_sidebar(
                                                     ),
                                             )
                                             .child(
-                                                session_menu_item("エクスポート", false)
+                                                session_menu_item(i18n::export(), false)
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -337,7 +338,7 @@ fn render_session_sidebar(
                                                     ),
                                             )
                                             .child(
-                                                session_menu_item("エクスプローラーで表示", false)
+                                                session_menu_item(i18n::show_in_explorer(), false)
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -348,7 +349,7 @@ fn render_session_sidebar(
                                                     ),
                                             )
                                             .child(
-                                                session_menu_item("削除", true)
+                                                session_menu_item(i18n::delete(), true)
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -385,7 +386,7 @@ fn render_session_sidebar(
                         .items_center()
                         .gap(px(8.))
                         .child("⚙")
-                        .child("Settings")
+                        .child(i18n::settings())
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -471,9 +472,9 @@ fn render_chat_main(
                             }),
                         )
                         .child(if chat_show_thinking {
-                            "思考: 表示"
+                            i18n::thinking_show()
                         } else {
-                            "思考: 非表示"
+                            i18n::thinking_hide()
                         }),
                 ),
         )
@@ -507,7 +508,7 @@ fn render_chat_main(
                                             .text_color(hex(TEXT_DIM))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .mb(px(10.))
-                                            .child("提案"),
+                                            .child(i18n::suggestions()),
                                     )
                                     .child(
                                         div()
@@ -519,18 +520,18 @@ fn render_chat_main(
                                                     .flex()
                                                     .gap(px(6.))
                                                     .child(suggestion_chip(
-                                                        "Reactコンポーネントを作成",
+                                                        i18n::suggestion_create_react(),
                                                     ))
-                                                    .child(suggestion_chip("バグを修正")),
+                                                    .child(suggestion_chip(i18n::suggestion_fix_bug())),
                                             )
                                             .child(
                                                 div()
                                                     .flex()
                                                     .gap(px(6.))
                                                     .child(suggestion_chip(
-                                                        "コードをリファクタリング",
+                                                        i18n::suggestion_refactor(),
                                                     ))
-                                                    .child(suggestion_chip("テストを追加")),
+                                                    .child(suggestion_chip(i18n::suggestion_add_tests())),
                                             ),
                                     ),
                             )
@@ -548,7 +549,7 @@ fn render_chat_main(
                                         .border_color(hex(BORDER))
                                         .text_size(px(11.))
                                         .text_color(hex(TEXT_MUTED))
-                                        .child(format!("↑ 過去 {skip} 件のメッセージ")),
+                                        .child(i18n::older_messages(skip)),
                                 ),
                             )
                         })
@@ -651,7 +652,7 @@ fn render_message(
                     div()
                         .text_size(px(11.))
                         .text_color(hex(TEXT_DIM))
-                        .child(if is_user { "You" } else { "Agent" }),
+                        .child(if is_user { i18n::role_you() } else { i18n::role_agent() }),
                 ),
         );
 
@@ -892,7 +893,7 @@ fn render_input_bar(
                                                     this.cycle_local_model(cx);
                                                 }),
                                             )
-                                            .child("▶ 次のモデル"),
+                                            .child(i18n::next_model()),
                                     )
                                 }),
                         )
@@ -911,7 +912,7 @@ fn render_input_bar(
                                         .rounded(px(3.))
                                         .child("Enter"),
                                 )
-                                .child("送信")
+                                .child(i18n::send())
                                 .child(
                                     div()
                                         .px(px(5.))
@@ -920,7 +921,7 @@ fn render_input_bar(
                                         .rounded(px(3.))
                                         .child("Shift+Enter"),
                                 )
-                                .child("改行"),
+                                .child(i18n::newline()),
                         ),
                 ),
         )
@@ -960,7 +961,7 @@ fn metric_labels(metrics: &crate::chat_session::ChatMsgMetrics) -> Vec<String> {
     let mut labels = Vec::new();
     let token_count = metrics.completion_tokens.or(metrics.total_tokens);
     if let Some(token_count) = token_count {
-        labels.push(format!("トークン数: {token_count} トークン"));
+        labels.push(i18n::metric_tokens(token_count));
     }
     if let Some(tokens_per_second) =
         metrics
@@ -972,16 +973,13 @@ fn metric_labels(metrics: &crate::chat_session::ChatMsgMetrics) -> Vec<String> {
                 _ => None,
             })
     {
-        labels.push(format!(
-            "トークン毎秒: {:.2} トークン/秒",
-            tokens_per_second
-        ));
+        labels.push(i18n::metric_tokens_per_sec(tokens_per_second));
     }
     if let Some(elapsed_ms) = metrics.elapsed_ms {
-        labels.push(format!("応答時間: {}", format_elapsed_ms(elapsed_ms)));
+        labels.push(i18n::metric_response_time(&format_elapsed_ms(elapsed_ms)));
     }
     if let Some(stop_reason) = &metrics.stop_reason {
-        labels.push(format!("停止理由: {stop_reason}"));
+        labels.push(i18n::metric_stop_reason(stop_reason));
     }
     labels
 }

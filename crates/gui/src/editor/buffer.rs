@@ -3,6 +3,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::i18n;
+
 /// バッファ内の位置
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Position {
@@ -24,7 +26,9 @@ impl PartialOrd for Position {
 
 impl Ord for Position {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.line.cmp(&other.line).then(self.column.cmp(&other.column))
+        self.line
+            .cmp(&other.line)
+            .then(self.column.cmp(&other.column))
     }
 }
 
@@ -110,7 +114,10 @@ impl TextBuffer {
             self.dirty = false;
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "ファイルパスが未設定"))
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "ファイルパスが未設定",
+            ))
         }
     }
 
@@ -159,7 +166,7 @@ impl TextBuffer {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "無題".to_string())
+            .unwrap_or_else(|| i18n::untitled().to_string())
     }
 
     pub fn set_dirty(&mut self) {
@@ -211,7 +218,11 @@ impl TextBuffer {
             return start;
         }
         self.dirty = true;
-        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
         let start_line = start.line.min(self.lines.len().saturating_sub(1));
         let end_line = end.line.min(self.lines.len().saturating_sub(1));
         let start_col = start.column.min(self.lines[start_line].len());
@@ -272,7 +283,11 @@ impl TextBuffer {
 
     /// バッファ位置範囲のテキストを返す
     pub fn text_in_range(&self, start: Position, end: Position) -> String {
-        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
         if start.line == end.line {
             let line = &self.lines[start.line];
             let s = start.column.min(line.len());

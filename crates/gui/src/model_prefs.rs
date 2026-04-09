@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::i18n;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ModelParams {
     /// サンプリング温度（`oag_sampler_params_t::temperature` に相当）0.0〜2.0
@@ -90,12 +92,12 @@ pub enum KvCacheType {
 impl KvCacheType {
     pub fn label(self) -> &'static str {
         match self {
-            Self::None => "FP16（標準）",
-            Self::Q8 => "Q8（2x圧縮）",
-            Self::Q4 => "Q4（4x圧縮）",
-            Self::Turbo3 => "Turbo3（4.9x圧縮・推奨）",
-            Self::Turbo4 => "Turbo4（3.8x圧縮・高品質）",
-            Self::Turbo2 => "Turbo2（6.4x圧縮・最大）",
+            Self::None => i18n::kv_cache_label("none"),
+            Self::Q8 => i18n::kv_cache_label("q8"),
+            Self::Q4 => i18n::kv_cache_label("q4"),
+            Self::Turbo3 => i18n::kv_cache_label("turbo3"),
+            Self::Turbo4 => i18n::kv_cache_label("turbo4"),
+            Self::Turbo2 => i18n::kv_cache_label("turbo2"),
         }
     }
 }
@@ -128,19 +130,19 @@ impl LlamaRuntimePreset {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Auto => "自動検出（推奨）",
-            Self::NvidiaCuda => "NVIDIA CUDA",
-            Self::VulkanHybrid => "Vulkan 混成（実験）",
-            Self::CpuOnly => "CPU のみ",
+            Self::Auto => i18n::runtime_preset_label("auto"),
+            Self::NvidiaCuda => i18n::runtime_preset_label("nvidia_cuda"),
+            Self::VulkanHybrid => i18n::runtime_preset_label("vulkan_hybrid"),
+            Self::CpuOnly => i18n::runtime_preset_label("cpu_only"),
         }
     }
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Self::Auto => "起動時に GPU を検出して最適な設定を自動適用",
-            Self::NvidiaCuda => "CUDA 単独で速度を優先（NVIDIA GPU 必須）",
-            Self::VulkanHybrid => "Vulkan で複数 GPU の混成を試す",
-            Self::CpuOnly => "GPU を使わず CPU のみで推論する省電力モード",
+            Self::Auto => i18n::runtime_preset_subtitle("auto"),
+            Self::NvidiaCuda => i18n::runtime_preset_subtitle("nvidia_cuda"),
+            Self::VulkanHybrid => i18n::runtime_preset_subtitle("vulkan_hybrid"),
+            Self::CpuOnly => i18n::runtime_preset_subtitle("cpu_only"),
         }
     }
 
@@ -269,7 +271,7 @@ fn build_profile_from_gpus(gpus: Vec<DetectedGpu>) -> GpuProfile {
                 0,
                 threads,
                 batch,
-                "GPU 未検出 — CPU のみ".to_string(),
+                i18n::gpu_not_detected().to_string(),
             )
         }
     };
@@ -431,8 +433,8 @@ pub enum PowerMode {
 impl PowerMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Balanced => "バランス",
-            Self::MaxPerformance => "最大性能（AC接続推奨）",
+            Self::Balanced => i18n::power_balanced(),
+            Self::MaxPerformance => i18n::power_max_performance(),
         }
     }
 }
@@ -516,9 +518,9 @@ pub enum UiTheme {
 impl UiTheme {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Dark => "ダーク",
-            Self::Light => "ライト",
-            Self::Auto => "自動",
+            Self::Dark => i18n::theme_dark(),
+            Self::Light => i18n::theme_light(),
+            Self::Auto => i18n::theme_auto(),
         }
     }
 }
@@ -612,17 +614,17 @@ pub enum CoTMode {
 impl CoTMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Off => "無効",
-            Self::Basic => "基本（推奨）",
-            Self::Detailed => "詳細（4段階推論）",
+            Self::Off => i18n::cot_off(),
+            Self::Basic => i18n::cot_basic(),
+            Self::Detailed => i18n::cot_detailed(),
         }
     }
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Self::Off => "CoT なし — 直接回答する",
-            Self::Basic => "ステップバイステップで考えてから回答する",
-            Self::Detailed => "分解→仮説→検証→結論の4段階で推論する",
+            Self::Off => i18n::cot_subtitle_off(),
+            Self::Basic => i18n::cot_subtitle_basic(),
+            Self::Detailed => i18n::cot_subtitle_detailed(),
         }
     }
 
@@ -678,17 +680,17 @@ pub enum ToTMode {
 impl ToTMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Off => "無効",
-            Self::Branch2 => "2経路（高速）",
-            Self::Branch3 => "3経路（標準）",
+            Self::Off => i18n::tot_off(),
+            Self::Branch2 => i18n::tot_branch2(),
+            Self::Branch3 => i18n::tot_branch3(),
         }
     }
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Self::Off => "ToT なし — 通常の 1 経路推論",
-            Self::Branch2 => "2つの思考経路を探索して最良を合成",
-            Self::Branch3 => "3つの思考経路を探索して最良を合成",
+            Self::Off => i18n::tot_subtitle_off(),
+            Self::Branch2 => i18n::tot_subtitle_branch2(),
+            Self::Branch3 => i18n::tot_subtitle_branch3(),
         }
     }
 
@@ -724,17 +726,17 @@ pub enum ReActMode {
 impl ReActMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Off => "無効",
-            Self::Steps3 => "最大3ステップ",
-            Self::Steps5 => "最大5ステップ",
+            Self::Off => i18n::react_off(),
+            Self::Steps3 => i18n::react_steps3(),
+            Self::Steps5 => i18n::react_steps5(),
         }
     }
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Self::Off => "ツール不使用の通常推論",
-            Self::Steps3 => "検索・計算を最大3回使って回答",
-            Self::Steps5 => "検索・計算を最大5回使って回答",
+            Self::Off => i18n::react_subtitle_off(),
+            Self::Steps3 => i18n::react_subtitle_steps3(),
+            Self::Steps5 => i18n::react_subtitle_steps5(),
         }
     }
 
@@ -767,17 +769,17 @@ pub enum SelfConsistencyMode {
 impl SelfConsistencyMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Off => "無効",
-            Self::Vote3 => "3回投票",
-            Self::Vote5 => "5回投票",
+            Self::Off => i18n::sc_off(),
+            Self::Vote3 => i18n::sc_vote3(),
+            Self::Vote5 => i18n::sc_vote5(),
         }
     }
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Self::Off => "1回の推論で回答（高速）",
-            Self::Vote3 => "3回推論して最も一致する回答を採用",
-            Self::Vote5 => "5回推論して最も一致する回答を採用（高品質）",
+            Self::Off => i18n::sc_subtitle_off(),
+            Self::Vote3 => i18n::sc_subtitle_vote3(),
+            Self::Vote5 => i18n::sc_subtitle_vote5(),
         }
     }
 
@@ -836,9 +838,9 @@ pub enum ChatInferenceSource {
 impl ChatInferenceSource {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Api => "クラウド API",
-            Self::Local => "Ollama (HTTP)",
-            Self::LocalWeights => "ローカル GGUF/ONNX",
+            Self::Api => i18n::source_cloud_api(),
+            Self::Local => i18n::source_ollama(),
+            Self::LocalWeights => i18n::source_local_gguf(),
         }
     }
 
