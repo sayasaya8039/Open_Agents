@@ -178,10 +178,33 @@ fn load_manifest_from_dir(
     })
 }
 
+/// IPv4 のみを返すリゾルバ。
+/// 一部ホスト（GitHub CDN 等）で IPv6 TLS ハンドシェイクが失敗するため、
+/// IPv4 を強制して接続安定性を確保する。
+struct Ipv4OnlyResolver;
+
+impl ureq::Resolver for Ipv4OnlyResolver {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        use std::net::{SocketAddr, ToSocketAddrs};
+        let addrs: Vec<SocketAddr> = netloc
+            .to_socket_addrs()?
+            .filter(|a| a.is_ipv4())
+            .collect();
+        if addrs.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                format!("IPv4 アドレスが見つかりません: {netloc}"),
+            ));
+        }
+        Ok(addrs)
+    }
+}
+
 pub fn fetch_latest_release() -> Result<LatestLlamaRelease, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(10))
+        .resolver(Ipv4OnlyResolver)
         .build();
     let resp = agent
         .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")

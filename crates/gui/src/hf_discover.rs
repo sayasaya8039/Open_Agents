@@ -200,12 +200,35 @@ fn native_tls_connector() -> std::sync::Arc<native_tls::TlsConnector> {
     std::sync::Arc::new(native_tls::TlsConnector::new().expect("native-tls init"))
 }
 
+/// IPv4 のみを返すリゾルバ。
+/// 一部ホスト（HuggingFace CDN 等）で IPv6 TLS ハンドシェイクが失敗するため、
+/// IPv4 を強制して接続安定性を確保する。
+struct Ipv4OnlyResolver;
+
+impl ureq::Resolver for Ipv4OnlyResolver {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        use std::net::{SocketAddr, ToSocketAddrs};
+        let addrs: Vec<SocketAddr> = netloc
+            .to_socket_addrs()?
+            .filter(|a| a.is_ipv4())
+            .collect();
+        if addrs.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                format!("IPv4 アドレスが見つかりません: {netloc}"),
+            ));
+        }
+        Ok(addrs)
+    }
+}
+
 fn build_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30))
         .user_agent(&user_agent())
         .tls_connector(native_tls_connector())
+        .resolver(Ipv4OnlyResolver)
         .build()
 }
 
@@ -635,6 +658,7 @@ pub fn run_download(
         .timeout_read(Duration::from_secs(300))
         .user_agent(&user_agent())
         .tls_connector(native_tls_connector())
+        .resolver(Ipv4OnlyResolver)
         .build();
     let mut req = agent.get(&task.url);
     if let Some(tok) = hf_token.as_deref().filter(|s| !s.is_empty()) {
