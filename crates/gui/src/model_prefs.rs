@@ -970,6 +970,42 @@ fn migrate_prefs_json(raw: &str) -> String {
     v.to_string()
 }
 
+// ── API サーバー設定 ──
+
+fn default_api_server_port() -> u16 {
+    11435
+}
+
+/// 内蔵 HTTP API サーバー（OpenAI 互換）の永続化設定
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ApiServerPrefs {
+    pub enabled: bool,
+    #[serde(default = "default_api_server_port")]
+    pub port: u16,
+    pub api_key: String,
+}
+
+impl Default for ApiServerPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_api_server_port(),
+            api_key: String::new(),
+        }
+    }
+}
+
+impl ApiServerPrefs {
+    pub fn sanitize(mut self) -> Self {
+        if self.port == 0 {
+            self.port = default_api_server_port();
+        }
+        self.port = self.port.clamp(1024, 65535);
+        self
+    }
+}
+
 /// モデル（ルートに flatten）＋ `hardware` / `appearance` / `ai` サブオブジェクト
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LocalLlmPrefs {
@@ -987,6 +1023,9 @@ pub struct LocalLlmPrefs {
     /// Chat ページの推論先・モデル ID
     #[serde(default)]
     pub chat: ChatPrefs,
+    /// 内蔵 API サーバー設定
+    #[serde(default)]
+    pub api_server: ApiServerPrefs,
 }
 
 impl Default for LocalLlmPrefs {
@@ -998,6 +1037,7 @@ impl Default for LocalLlmPrefs {
             ai: AiPrefs::default(),
             model_paths: Vec::new(),
             chat: ChatPrefs::default(),
+            api_server: ApiServerPrefs::default(),
         }
     }
 }
@@ -1010,6 +1050,7 @@ impl LocalLlmPrefs {
         self.ai = self.ai.sanitize();
         self.model_paths = sanitize_model_paths(std::mem::take(&mut self.model_paths));
         self.chat = self.chat.clone().sanitize();
+        self.api_server = self.api_server.sanitize();
         if self.chat.source == ChatInferenceSource::LocalWeights {
             self.model.max_output_tokens =
                 effective_local_max_output_tokens(self.model.max_output_tokens);
@@ -1023,6 +1064,7 @@ impl LocalLlmPrefs {
         self.appearance.clamp();
         self.ai = self.ai.clone().sanitize();
         self.chat = self.chat.clone().sanitize();
+        self.api_server = self.api_server.clone().sanitize();
         if self.chat.source == ChatInferenceSource::LocalWeights {
             self.model.max_output_tokens =
                 effective_local_max_output_tokens(self.model.max_output_tokens);

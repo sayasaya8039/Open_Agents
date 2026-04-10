@@ -1,6 +1,7 @@
 #![recursion_limit = "4096"]
 
 mod api_key_prefs;
+mod api_server;
 mod chat_client;
 mod chat_composer;
 mod chat_markdown;
@@ -1404,6 +1405,12 @@ struct AppView {
     hf_search_composer: Entity<chat_composer::ChatComposer>,
     /// ダウンロードマネージャ
     hf_downloads: hf_discover::DownloadManager,
+    /// 内蔵 API サーバー設定（永続化）
+    api_server_prefs: model_prefs::ApiServerPrefs,
+    /// 稼働中の API サーバーインスタンス
+    api_server: Option<api_server::ApiServer>,
+    /// API サーバー起動エラーメッセージ
+    api_server_error: Option<String>,
 }
 
 impl AppView {
@@ -2995,7 +3002,306 @@ impl AppView {
             ai: self.ai_prefs.clone(),
             model_paths: self.settings_model_paths.clone(),
             chat: self.chat_prefs.clone(),
+            api_server: self.api_server_prefs.clone(),
         });
+    }
+
+    // ── API サーバー管理 ──
+
+    fn resolve_proxy_target(&self) -> (String, String) {
+        match chat_client::resolve_chat_backend(
+            &self.api_keys,
+            &self.chat_prefs,
+            &self.settings_model_paths,
+        ) {
+            Ok(backend) => backend.proxy_target(),
+            Err(_) => (String::new(), String::new()),
+        }
+    }
+
+    fn start_api_server(&mut self) {
+        // 既に起動中なら停止
+        if let Some(mut s) = self.api_server.take() {
+            s.stop();
+        }
+        let (proxy_url, proxy_key) = self.resolve_proxy_target();
+        let config = api_server::ApiServerConfig {
+            port: self.api_server_prefs.port,
+            api_key: self.api_server_prefs.api_key.clone(),
+            proxy_target_url: proxy_url,
+            proxy_target_key: proxy_key,
+        };
+        match api_server::ApiServer::start(config) {
+            Ok(server) => {
+                self.api_server = Some(server);
+                self.api_server_error = None;
+            }
+            Err(e) => {
+                self.api_server_error = Some(e);
+            }
+        }
+    }
+
+    fn stop_api_server(&mut self) {
+        if let Some(mut s) = self.api_server.take() {
+            s.stop();
+        }
+        self.api_server_error = None;
+    }
+
+    fn api_server_is_running(&self) -> bool {
+        self.api_server.as_ref().map_or(false, |s| s.is_running())
+    }
+
+    fn settings_api_server_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let running = self.api_server_is_running();
+        let base_url: SharedString =
+            format!("http://localhost:{}", self.api_server_prefs.port).into();
+        let masked_key: SharedString = if self.api_server_prefs.api_key.len() > 8 {
+            format!("{}...", &self.api_server_prefs.api_key[..8]).into()
+        } else {
+            self.api_server_prefs.api_key.clone().into()
+        };
+        let full_key = self.api_server_prefs.api_key.clone();
+        let full_base_url = base_url.clone();
+        let port_label: SharedString = format!("{}", self.api_server_prefs.port).into();
+        let status_label: SharedString = if running {
+            "稼働中".into()
+        } else if let Some(ref e) = self.api_server_error {
+            SharedString::from(format!("エラー: {}", e))
+        } else {
+            "停止中".into()
+        };
+        let status_color = if running {
+            FIGMA_ICON_GREEN
+        } else if self.api_server_error.is_some() {
+            TRAFFIC_RED
+        } else {
+            TEXT_MUTED
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .child(self.settings_figma_heading(
+                "🌐",
+                FIGMA_ICON_BLUE,
+                "API サーバー（外部アプリ連携）",
+            ))
+            .child(
+                div()
+                    .bg(hex(PANEL_BG))
+                    .rounded(px(8.))
+                    .p(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    // ON/OFF トグル
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                self.settings_labeled_block(
+                                    "サーバー",
+                                    "外部アプリから OpenAI 互換 API として利用",
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(9999.))
+                                    .cursor_pointer()
+                                    .bg(if running {
+                                        hex_a(ACCENT_BLUE, 0.35)
+                                    } else {
+                                        hex(CONTROL_BG)
+                                    })
+                                    .text_size(px(11.))
+                                    .text_color(if running {
+                                        hex(TEXT_PRIMARY)
+                                    } else {
+                                        hex(TEXT_MUTED)
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            if this.api_server_is_running() {
+                                                this.stop_api_server();
+                                                this.api_server_prefs.enabled = false;
+                                            } else {
+                                                this.api_server_prefs.enabled = true;
+                                                this.start_api_server();
+                                            }
+                                            this.persist_local_llm_prefs();
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(if running { "ON" } else { "OFF" }),
+                            ),
+                    )
+                    // ポート
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child("ポート"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(TEXT_SECONDARY))
+                                    .child(port_label),
+                            ),
+                    )
+                    // ベース URL + コピー
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child("ベース URL"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child(full_base_url.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .rounded(px(4.))
+                                            .bg(hex(CONTROL_BG))
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |_, _: &MouseDownEvent, _window, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            full_base_url.to_string(),
+                                                        ),
+                                                    );
+                                                }),
+                                            )
+                                            .child("コピー"),
+                                    ),
+                            ),
+                    )
+                    // API キー + コピー + 再生成
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child("API キー"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(hex(TEXT_SECONDARY))
+                                            .child(masked_key),
+                                    )
+                                    .child({
+                                        let key_for_copy = full_key.clone();
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .rounded(px(4.))
+                                            .bg(hex(CONTROL_BG))
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(
+                                                    move |_, _: &MouseDownEvent, _window, cx| {
+                                                        cx.write_to_clipboard(
+                                                            ClipboardItem::new_string(
+                                                                key_for_copy.clone(),
+                                                            ),
+                                                        );
+                                                    },
+                                                ),
+                                            )
+                                            .child("コピー")
+                                    })
+                                    .child(
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .rounded(px(4.))
+                                            .bg(hex(CONTROL_BG))
+                                            .text_size(px(10.))
+                                            .text_color(hex(TEXT_MUTED))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                                    this.api_server_prefs.api_key =
+                                                        api_server::generate_api_key();
+                                                    this.persist_local_llm_prefs();
+                                                    // 稼働中なら再起動して新キーを反映
+                                                    if this.api_server_is_running() {
+                                                        this.start_api_server();
+                                                    }
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child("再生成"),
+                                    ),
+                            ),
+                    )
+                    // ステータス
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(hex(TEXT_PRIMARY))
+                                    .child("ステータス"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(hex(status_color))
+                                    .child(status_label),
+                            ),
+                    ),
+            )
     }
 
     fn cycle_chat_inference_source(&mut self, cx: &mut Context<Self>) {
@@ -5280,6 +5586,8 @@ impl AppView {
                                             )
                                     )
                             })
+                            // --- API サーバー ---
+                            .child(self.settings_api_server_section(cx))
                             // --- アプリ情報 ---
                             .child(
                                 div()
@@ -5481,6 +5789,11 @@ fn main() {
                         },
                     )
                     .detach();
+                    // API サーバー設定 — キーが空なら自動生成して保存
+                    let mut api_server_prefs = local_llm.api_server;
+                    if api_server_prefs.api_key.is_empty() {
+                        api_server_prefs.api_key = api_server::generate_api_key();
+                    }
                     let mut app = AppView {
                         page: Page::Chat,
                         session_store: chat_session::load_sessions(),
@@ -5511,6 +5824,9 @@ fn main() {
                         hf_state: hf_discover::HuggingFaceSearchState::default(),
                         hf_search_composer,
                         hf_downloads: hf_discover::DownloadManager::default(),
+                        api_server_prefs,
+                        api_server: None,
+                        api_server_error: None,
                     };
                     llama_cpp_chat::cleanup_orphan_servers();
                     // GPU 自動検出 & 最適化（Auto モード時）
@@ -5526,6 +5842,11 @@ fn main() {
                     }
                     app.start_llama_cpp_update_check(cx);
                     app.prewarm_llama_server(cx);
+                    // API サーバー自動起動
+                    if app.api_server_prefs.enabled {
+                        app.start_api_server();
+                    }
+                    app.persist_local_llm_prefs();
                     app
                 })
             },

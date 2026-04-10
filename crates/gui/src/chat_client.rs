@@ -139,6 +139,24 @@ pub enum ChatBackend {
     },
 }
 
+impl ChatBackend {
+    /// API サーバーのプロキシ転送先を `(base_url, api_key)` で返す。
+    /// Ollama はネイティブ `/api/chat` なので URL をそのまま返す。
+    /// LlamaCppLocal は llama-server の OpenAI 互換ポートを返す。
+    pub fn proxy_target(&self) -> (String, String) {
+        match self {
+            Self::OpenAiCompatible {
+                base_url, api_key, ..
+            } => (base_url.clone(), api_key.clone()),
+            Self::Ollama { base_url, .. } => (base_url.clone(), String::new()),
+            Self::LlamaCppLocal { .. } => {
+                // llama-server は 8080 で起動する（llama_cpp_chat 参照）
+                ("http://127.0.0.1:8080/v1".to_string(), String::new())
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ChatCompletionResult {
     pub content: String,
