@@ -37,7 +37,7 @@ pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, String, Vec<Stri
     let mut results = Vec::new();
 
     for &(id, base_url, _default) in PROVIDER_ENDPOINTS {
-        let key = api.get_str(id);
+        let key = api.get_value(id);
         if key.is_empty() {
             continue;
         }
@@ -49,7 +49,7 @@ pub fn fetch_provider_models(api: &ApiKeyPrefs) -> Vec<(String, String, Vec<Stri
                 format!("{base}/v1/models")
             };
 
-        match fetch_models_from_url(&url, key) {
+        match fetch_models_from_url(&url, &key) {
             Ok(models) => {
                 let models: Vec<String> = models
                     .into_iter()
@@ -329,7 +329,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
             .iter()
             .find(|(id, _, _)| *id == provider_id)
         {
-            let key = api.get_str(&provider_id);
+            let key = api.get_value(&provider_id);
             if !key.is_empty() {
                 let model = trimmed_or(chat_model, default_model);
                 if !supports_chat_completions(&provider_id, &model) {
@@ -337,7 +337,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
                 }
                 return Ok(ChatBackend::OpenAiCompatible {
                     base_url: base_url.to_string(),
-                    api_key: key.to_string(),
+                    api_key: key,
                     model,
                 });
             }
@@ -346,7 +346,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
 
     // 2. フォールバック: 登録済みプロバイダを優先順に検索
     for &(id, base_url, default_model) in PROVIDER_ENDPOINTS {
-        let key = api.get_str(id);
+        let key = api.get_value(id);
         if !key.is_empty() {
             let model = trimmed_or(chat_model, default_model);
             if !supports_chat_completions(id, &model) {
@@ -354,7 +354,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
             }
             return Ok(ChatBackend::OpenAiCompatible {
                 base_url: base_url.to_string(),
-                api_key: key.to_string(),
+                api_key: key,
                 model,
             });
         }
@@ -367,7 +367,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
         ("vllm_base_url", "default"),
         ("llama_cpp_server_url", "default"),
     ] {
-        let base_url = api.get_str(id);
+        let base_url = api.get_value(id);
         if !base_url.is_empty() {
             let model = trimmed_or(chat_model, default_model);
             let base = normalize_local_server_url(&base_url);
@@ -380,8 +380,8 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
     }
 
     // 4. 汎用 OpenAI 互換
-    let gen_base = api.get_str("generic_openai_base_url");
-    let gen_key = api.get_str("generic_openai_api_key");
+    let gen_base = api.get_value("generic_openai_base_url");
+    let gen_key = api.get_value("generic_openai_api_key");
     if !gen_base.is_empty() && !gen_key.is_empty() {
         let model = trimmed_or(chat_model, "gpt-4o-mini");
         let mut base = gen_base.trim_end_matches('/').to_string();
@@ -390,7 +390,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
         }
         return Ok(ChatBackend::OpenAiCompatible {
             base_url: base,
-            api_key: gen_key.to_string(),
+            api_key: gen_key,
             model,
         });
     }
@@ -402,7 +402,7 @@ fn resolve_api_backend(api: &ApiKeyPrefs, chat: &ChatPrefs) -> Result<ChatBacken
 }
 
 fn resolve_ollama_backend(api: &ApiKeyPrefs, ollama_model: &str) -> Result<ChatBackend, String> {
-    let ollama = api.get_str("ollama_base_url");
+    let ollama = api.get_value("ollama_base_url");
     if !ollama.is_empty() {
         let model = trimmed_or(ollama_model, "llama3.2");
         return Ok(ChatBackend::Ollama {
@@ -413,7 +413,7 @@ fn resolve_ollama_backend(api: &ApiKeyPrefs, ollama_model: &str) -> Result<ChatB
 
     // Ollama URL が未設定の場合、LM Studio / vLLM / llama.cpp server を OpenAI 互換として使用
     for &id in &["lm_studio_base_url", "vllm_base_url", "llama_cpp_server_url"] {
-        let url = api.get_str(id);
+        let url = api.get_value(id);
         if !url.is_empty() {
             let model = trimmed_or(ollama_model, "default");
             let base = normalize_local_server_url(&url);

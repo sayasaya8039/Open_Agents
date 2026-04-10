@@ -326,6 +326,63 @@ impl ApiKeyPrefs {
         self.entries.get(id).map(|s| s.as_str()).unwrap_or("")
     }
 
+    /// entries → 環境変数の順で値を解決し `String` で返す
+    pub fn get_value(&self, id: &str) -> String {
+        if let Some(v) = self.entries.get(id) {
+            if !v.is_empty() {
+                return v.clone();
+            }
+        }
+        if let Some(def) = PROVIDER_CATALOG.iter().find(|p| p.id == id) {
+            for name in extract_env_var_names(def.env_hint) {
+                if let Ok(val) = std::env::var(&name) {
+                    if !val.is_empty() {
+                        return val;
+                    }
+                }
+            }
+        }
+        String::new()
+    }
+
+    /// entries に値がなく環境変数に値がある場合 `true`
+    pub fn is_from_env(&self, id: &str) -> bool {
+        if let Some(v) = self.entries.get(id) {
+            if !v.is_empty() {
+                return false;
+            }
+        }
+        if let Some(def) = PROVIDER_CATALOG.iter().find(|p| p.id == id) {
+            for name in extract_env_var_names(def.env_hint) {
+                if let Ok(val) = std::env::var(&name) {
+                    if !val.is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// 環境変数から解決されている場合、その変数名を返す
+    pub fn active_env_var_name(&self, id: &str) -> Option<String> {
+        if let Some(v) = self.entries.get(id) {
+            if !v.is_empty() {
+                return None;
+            }
+        }
+        if let Some(def) = PROVIDER_CATALOG.iter().find(|p| p.id == id) {
+            for name in extract_env_var_names(def.env_hint) {
+                if let Ok(val) = std::env::var(&name) {
+                    if !val.is_empty() {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn set_entry(&mut self, id: &str, value: String) {
         let v = value.trim().to_string();
         if v.is_empty() {
@@ -344,6 +401,33 @@ impl ApiKeyPrefs {
             .collect();
         self
     }
+}
+
+/// env_hint 文字列から環境変数名を抽出する。
+/// `[A-Z][A-Z0-9_]+` にマッチする2文字以上のトークンを返す。
+pub fn extract_env_var_names(env_hint: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let chars: Vec<char> = env_hint.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_uppercase() {
+            let start = i;
+            i += 1;
+            while i < chars.len()
+                && (chars[i].is_ascii_uppercase()
+                    || chars[i].is_ascii_digit()
+                    || chars[i] == '_')
+            {
+                i += 1;
+            }
+            if i - start >= 2 {
+                names.push(chars[start..i].iter().collect());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    names
 }
 
 fn keys_file() -> PathBuf {
@@ -512,5 +596,37 @@ mod tests {
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"ollama_base_url"));
         assert!(ids.contains(&"llama_cpp_server_url"));
+    }
+
+    #[test]
+    fn extract_env_var_names_basic() {
+        assert_eq!(extract_env_var_names("OPENAI_API_KEY"), vec!["OPENAI_API_KEY"]);
+        assert_eq!(
+            extract_env_var_names("GOOGLE_API_KEY / GEMINI_API_KEY"),
+            vec!["GOOGLE_API_KEY", "GEMINI_API_KEY"]
+        );
+        assert_eq!(
+            extract_env_var_names("OLLAMA_HOST（例: http://127.0.0.1:11434）"),
+            vec!["OLLAMA_HOST"]
+        );
+        assert_eq!(
+            extract_env_var_names("HF_TOKEN / HUGGINGFACE_HUB_TOKEN"),
+            vec!["HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"]
+        );
+        assert!(extract_env_var_names("例: http://127.0.0.1:1234/v1").is_empty());
+        assert!(extract_env_var_names("任意（リバースプロキシ認証用）").is_empty());
+    }
+
+    #[test]
+    fn get_value_falls_back_to_env() {
+        let p = ApiKeyPrefs::default();
+        // entries は空なので env var がなければ空文字列
+        assert_eq!(p.get_value("openai"), "");
+
+        // entries に値があれば env var より優先
+        let mut p2 = ApiKeyPrefs::default();
+        p2.set_entry("openai", "sk-stored".into());
+        assert_eq!(p2.get_value("openai"), "sk-stored");
+        assert!(!p2.is_from_env("openai"));
     }
 }

@@ -2605,10 +2605,12 @@ impl AppView {
         def: api_key_prefs::ProviderDef,
     ) -> impl IntoElement {
         let provider_id = def.id;
-        let key_ref = self.api_keys.get_str(provider_id);
-        let has_key = !key_ref.is_empty();
+        let effective = self.api_keys.get_value(provider_id);
+        let from_env = self.api_keys.is_from_env(provider_id);
+        let env_name_opt = self.api_keys.active_env_var_name(provider_id);
+        let has_key = !effective.is_empty();
         let reveal = self.api_key_reveal.get(row_idx).copied().unwrap_or(false);
-        let masked: SharedString = api_key_prefs::masked_line(key_ref, reveal).into();
+        let masked: SharedString = api_key_prefs::masked_line(&effective, reveal).into();
         let title = def.title;
         let tag = def.env_hint;
         let kind_line: &'static str = match def.kind {
@@ -2655,13 +2657,41 @@ impl AppView {
                                         .text_color(hex(0x22c55e))
                                         .child("✓"),
                                 )
+                            })
+                            .when(from_env, |d| {
+                                d.child(
+                                    div()
+                                        .px(px(6.))
+                                        .py(px(1.))
+                                        .bg(hex_a(TRAFFIC_GREEN, 0.2))
+                                        .rounded(px(3.))
+                                        .text_size(px(10.))
+                                        .text_color(hex(TRAFFIC_GREEN))
+                                        .child("ENV"),
+                                )
                             }),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(hex(TEXT_MUTED))
-                            .child(tag),
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(hex(TEXT_MUTED))
+                                    .child(tag),
+                            )
+                            .when_some(env_name_opt, |d, name| {
+                                let label: SharedString =
+                                    format!("← ${name}").into();
+                                d.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(hex(TEXT_DIM))
+                                        .child(label),
+                                )
+                            }),
                     )
                     .child(
                         div()
@@ -3023,7 +3053,7 @@ impl AppView {
 
         let has_any_key = chat_client::PROVIDER_ENDPOINTS
             .iter()
-            .any(|(id, _, _)| !self.api_keys.get_str(id).is_empty());
+            .any(|(id, _, _)| !self.api_keys.get_value(id).is_empty());
 
         div()
             .flex()
@@ -4662,7 +4692,7 @@ impl AppView {
         self.hf_state.request_gen = self.hf_state.request_gen.wrapping_add(1);
         let gen = self.hf_state.request_gen;
         let sort = self.hf_state.sort;
-        let token = self.api_keys.get_str("huggingface").to_string();
+        let token = self.api_keys.get_value("huggingface");
         cx.notify();
 
         cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
@@ -4703,7 +4733,7 @@ impl AppView {
         self.hf_state.detail = None;
         self.hf_state.detail_loading = true;
         self.hf_state.detail_error = None;
-        let token = self.api_keys.get_str("huggingface").to_string();
+        let token = self.api_keys.get_value("huggingface");
         cx.notify();
 
         cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
@@ -4738,7 +4768,7 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         // 1. キューにタスクを積む
-        let token = self.api_keys.get_str("huggingface").to_string();
+        let token = self.api_keys.get_value("huggingface");
         let token_opt = if token.is_empty() { None } else { Some(token) };
         self.hf_downloads.enqueue(model_id, &file, token_opt);
         self.hf_downloads.panel_open = true;
