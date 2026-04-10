@@ -196,11 +196,16 @@ fn user_agent() -> String {
     format!("OpenAgents/{}", env!("CARGO_PKG_VERSION"))
 }
 
+fn native_tls_connector() -> std::sync::Arc<native_tls::TlsConnector> {
+    std::sync::Arc::new(native_tls::TlsConnector::new().expect("native-tls init"))
+}
+
 fn build_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30))
         .user_agent(&user_agent())
+        .tls_connector(native_tls_connector())
         .build()
 }
 
@@ -629,6 +634,7 @@ pub fn run_download(
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(300))
         .user_agent(&user_agent())
+        .tls_connector(native_tls_connector())
         .build();
     let mut req = agent.get(&task.url);
     if let Some(tok) = hf_token.as_deref().filter(|s| !s.is_empty()) {
