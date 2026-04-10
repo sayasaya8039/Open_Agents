@@ -20,7 +20,7 @@ smol = "2"
 image = { version = "0.25", default-features = false }
 smallvec = "1"
 unicode-segmentation = "1.11"
-ureq = { version = "2.12", features = ["json"] }
+ureq = { version = "2.12", default-features = false, features = ["json", "native-tls", "gzip"] }
 pulldown-cmark = "0.12"
 
 [build-dependencies]
