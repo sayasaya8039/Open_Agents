@@ -1,8 +1,8 @@
 {
-  "llama_cpp_tag": "b8698",
-  "llama_server_version": "b8698",
-  "platform": "windows-x64-cuda-13.1-upstream",
-  "asset_name": "llama-b8698-bin-win-cuda-13.1-x64.zip",
-  "source_release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b8698",
-  "llama_server_sha256": "6F6D6615CA9EB240A057C39E567B0D508E465E9E8D9E8B5BFEFBA300CC617965"
+  "llama_cpp_tag": "b8746",
+  "llama_server_version": "0893f50f2",
+  "platform": "windows-x64-cuda-13.1",
+  "asset_name": "llama-b8746-bin-win-cuda-13.1-x64.zip",
+  "source_release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b8746",
+  "llama_server_sha256": "DF0C6878EB12E3A120CB2D155A6B8CEB4E4A56EB2D86F348352C4591CC58EDE9"
 }
