@@ -3688,7 +3688,7 @@ dependencies = [
 
 [[package]]
 name = "open-agents-gui"
-version = "0.4.13"
+version = "0.4.14"
 dependencies = [
  "cc",
  "dirs 6.0.0",

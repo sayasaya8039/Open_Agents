@@ -3,12 +3,11 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, SharedString, Style, Subscription, TextAlign, TextRun, UTF16Selection,
-    UnderlineStyle, Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative,
-    rgba, size,
+    actions, div, fill, point, prelude::*, px, relative, rgba, size, App, Bounds, ClipboardItem,
+    Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
+    FocusHandle, Focusable, GlobalElementId, KeyBinding, KeyDownEvent, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style,
+    Subscription, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine,
 };
 use unicode_segmentation::*;
 
@@ -653,12 +652,8 @@ impl Element for TextElement {
         let lh = window.line_height();
 
         let cursor_quad = if selected_range.is_empty() {
-            position_for_utf8_index(&lines, cursor, &bounds, lh).map(|p| {
-                fill(
-                    Bounds::new(point(p.x, p.y), size(px(2.), lh)),
-                    gpui::blue(),
-                )
-            })
+            position_for_utf8_index(&lines, cursor, &bounds, lh)
+                .map(|p| fill(Bounds::new(point(p.x, p.y), size(px(2.), lh)), gpui::blue()))
         } else {
             None
         };
@@ -684,10 +679,7 @@ impl Element for TextElement {
                         let right = p0.x.max(p1.x).max(left + px(2.));
                         let top = p0.y.min(p1.y);
                         selection_quads.push(fill(
-                            Bounds::from_corners(
-                                point(left, top),
-                                point(right, top + lh),
-                            ),
+                            Bounds::from_corners(point(left, top), point(right, top + lh)),
                             rgba(0x3311ff30),
                         ));
                     }

@@ -66,7 +66,10 @@ pub fn default_sample_tree() -> TreeNode {
                 "crates",
                 vec![TreeNode::dir(
                     "gui",
-                    vec![TreeNode::file("main.rs"), TreeNode::file("project_explorer.rs")],
+                    vec![
+                        TreeNode::file("main.rs"),
+                        TreeNode::file("project_explorer.rs"),
+                    ],
                 )],
             ),
             TreeNode::file("README.md"),
@@ -96,7 +99,9 @@ pub fn expanded_first_level(tree: &TreeNode) -> HashSet<Vec<String>> {
 
 /// ワークスペース相対セグメントを絶対パスへ
 pub fn absolute_path(workspace: &Path, segments: &[String]) -> PathBuf {
-    segments.iter().fold(workspace.to_path_buf(), |acc, s| acc.join(s))
+    segments
+        .iter()
+        .fold(workspace.to_path_buf(), |acc, s| acc.join(s))
 }
 
 /// リフレッシュ後、存在しないディレクトリパスを展開集合から除去
@@ -172,9 +177,7 @@ pub fn path_to_segments(workspace: &Path, path: &Path) -> Vec<String> {
                 .filter_map(|c| {
                     use std::path::Component;
                     match c {
-                        Component::Normal(s) => {
-                            Some(s.to_string_lossy().into_owned())
-                        }
+                        Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
                         _ => None,
                     }
                 })
@@ -188,7 +191,11 @@ pub fn path_to_segments(workspace: &Path, path: &Path) -> Vec<String> {
 }
 
 /// `expanded` に載っているディレクトリだけ子を列挙する DFS（visible entries の生成）
-pub fn flatten_visible(node: &TreeNode, expanded: &HashSet<Vec<String>>, out: &mut Vec<VisibleRow>) {
+pub fn flatten_visible(
+    node: &TreeNode,
+    expanded: &HashSet<Vec<String>>,
+    out: &mut Vec<VisibleRow>,
+) {
     let mut prefix = Vec::new();
     flatten_children(&node.children, &mut prefix, 0, expanded, out);
 }
@@ -260,10 +267,7 @@ mod tests {
 
     #[test]
     fn unique_child_name_increments() {
-        let tmp = std::env::temp_dir().join(format!(
-            "oa_explorer_test_{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("oa_explorer_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         assert_eq!(unique_child_name(&tmp, "New File"), "New File");

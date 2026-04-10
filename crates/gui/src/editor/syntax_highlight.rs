@@ -70,7 +70,10 @@ pub fn detect_language(path: Option<&Path>) -> Language {
 
 pub fn highlight_buffer(path: Option<&Path>, lines: &[String]) -> Vec<Vec<SyntaxSpan>> {
     let language = detect_language(path);
-    lines.iter().map(|line| highlight_line(language, line)).collect()
+    lines
+        .iter()
+        .map(|line| highlight_line(language, line))
+        .collect()
 }
 
 fn highlight_line(language: Language, line: &str) -> Vec<SyntaxSpan> {
@@ -79,9 +82,9 @@ fn highlight_line(language: Language, line: &str) -> Vec<SyntaxSpan> {
             line,
             &[
                 "as", "async", "await", "break", "const", "continue", "crate", "else", "enum",
-                "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match",
-                "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static",
-                "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+                "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
+                "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
+                "trait", "true", "type", "unsafe", "use", "where", "while",
             ],
         ),
         Language::CFamily => highlight_code_like(
@@ -97,12 +100,53 @@ fn highlight_line(language: Language, line: &str) -> Vec<SyntaxSpan> {
         Language::Zig => highlight_code_like(
             line,
             &[
-                "addrspace", "align", "allowzero", "and", "anyframe", "anytype", "asm", "async",
-                "await", "break", "catch", "comptime", "const", "continue", "defer", "else",
-                "enum", "errdefer", "error", "export", "extern", "false", "fn", "for", "if",
-                "inline", "linksection", "noalias", "null", "or", "orelse", "packed", "pub",
-                "resume", "return", "struct", "suspend", "switch", "test", "threadlocal",
-                "true", "try", "union", "unreachable", "usingnamespace", "var", "volatile",
+                "addrspace",
+                "align",
+                "allowzero",
+                "and",
+                "anyframe",
+                "anytype",
+                "asm",
+                "async",
+                "await",
+                "break",
+                "catch",
+                "comptime",
+                "const",
+                "continue",
+                "defer",
+                "else",
+                "enum",
+                "errdefer",
+                "error",
+                "export",
+                "extern",
+                "false",
+                "fn",
+                "for",
+                "if",
+                "inline",
+                "linksection",
+                "noalias",
+                "null",
+                "or",
+                "orelse",
+                "packed",
+                "pub",
+                "resume",
+                "return",
+                "struct",
+                "suspend",
+                "switch",
+                "test",
+                "threadlocal",
+                "true",
+                "try",
+                "union",
+                "unreachable",
+                "usingnamespace",
+                "var",
+                "volatile",
                 "while",
             ],
         ),
@@ -280,10 +324,7 @@ fn highlight_markdown(line: &str) -> Vec<SyntaxSpan> {
     let trimmed = line.trim_start();
     let role = if trimmed.starts_with("```") || trimmed.starts_with('#') {
         SyntaxColorRole::Heading
-    } else if trimmed.starts_with("- ")
-        || trimmed.starts_with("* ")
-        || trimmed.starts_with("> ")
-    {
+    } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("> ") {
         SyntaxColorRole::Accent
     } else {
         SyntaxColorRole::Plain
@@ -316,7 +357,11 @@ fn highlight_value_with_comments(value: &str, comment_prefix: char) -> Vec<Synta
     let value_offset = leading_len;
     if value_trimmed.starts_with('"') {
         let end_ix = read_string(value, value_offset, '"');
-        push_span(&mut spans, &value[value_offset..end_ix], SyntaxColorRole::String);
+        push_span(
+            &mut spans,
+            &value[value_offset..end_ix],
+            SyntaxColorRole::String,
+        );
         if end_ix < value.len() {
             let rest = &value[end_ix..];
             let comment_at = rest.find(comment_prefix);
@@ -484,11 +529,14 @@ fn push_span(spans: &mut Vec<SyntaxSpan>, text: &str, role: SyntaxColorRole) {
 mod tests {
     use std::path::Path;
 
-    use super::{SyntaxColorRole, detect_language, highlight_buffer};
+    use super::{detect_language, highlight_buffer, SyntaxColorRole};
 
     #[test]
     fn detects_rust_files_by_extension() {
-        assert_eq!(detect_language(Some(Path::new("src/main.rs"))).name(), "rust");
+        assert_eq!(
+            detect_language(Some(Path::new("src/main.rs"))).name(),
+            "rust"
+        );
     }
 
     #[test]

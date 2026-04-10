@@ -605,7 +605,14 @@ mod tests {
     fn update_cell_marks_dirty() {
         let mut r = GridRenderer::new(10, 5);
         let _ = r.render_image(); // clear dirty
-        r.update_cell(0, 0, GridCell { ch: 'X', ..Default::default() });
+        r.update_cell(
+            0,
+            0,
+            GridCell {
+                ch: 'X',
+                ..Default::default()
+            },
+        );
         // After update, a new render should produce a new image
         let img = r.render_image();
         assert_eq!(img.size(0).width.0, (10 * 8) as i32);

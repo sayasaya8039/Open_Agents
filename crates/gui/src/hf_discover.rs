@@ -9,7 +9,7 @@
 
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -502,8 +502,8 @@ pub struct DownloadManager {
     pub panel_open: bool,
     pub tx: Sender<DownloadProgress>,
     pub rx: Receiver<DownloadProgress>,
-    /// ワーカースレッドが走っているか（同時ダウンロード 1 に制限する）
-    pub worker_running: Arc<AtomicBool>,
+    /// アクティブなワーカー数（最大 3 並列）
+    pub worker_count: Arc<AtomicU32>,
 }
 
 impl Default for DownloadManager {
@@ -514,7 +514,7 @@ impl Default for DownloadManager {
             panel_open: false,
             tx,
             rx,
-            worker_running: Arc::new(AtomicBool::new(false)),
+            worker_count: Arc::new(AtomicU32::new(0)),
         }
     }
 }

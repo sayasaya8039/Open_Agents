@@ -244,7 +244,7 @@ impl SessionStore {
 
     pub fn export_session_json(&self, id: u64) -> Option<String> {
         let session = self.sessions.iter().find(|session| session.id == id)?;
-        serde_json::to_string_pretty(session).ok()
+        serde_json::to_string(session).ok()
     }
 
     fn next_session_id(&self) -> u64 {
@@ -286,7 +286,7 @@ pub fn save_sessions(store: &SessionStore) {
         eprintln!("chat_sessions: ディレクトリ作成に失敗: {e}");
         return;
     }
-    match serde_json::to_string_pretty(store) {
+    match serde_json::to_string(store) {
         Ok(json) => {
             if let Err(e) = fs::write(&path, json) {
                 eprintln!("chat_sessions: 書き込み失敗: {e}");

@@ -520,7 +520,8 @@ pub fn complete_chat_blocking(
             });
             let mut req = ureq::post(&url)
                 .set("Authorization", &format!("Bearer {}", api_key))
-                .set("Content-Type", "application/json");
+                .set("Content-Type", "application/json")
+                .timeout(Duration::from_secs(60));
             if base_url.contains("openrouter.ai") {
                 req = req
                     .set(
@@ -567,6 +568,7 @@ pub fn complete_chat_blocking(
             });
             let resp = ureq::post(&url)
                 .set("Content-Type", "application/json")
+                .timeout(Duration::from_secs(60))
                 .send_json(body)
                 .map_err(|e| format!("Ollama リクエスト失敗: {e}"))?;
             let status = resp.status();

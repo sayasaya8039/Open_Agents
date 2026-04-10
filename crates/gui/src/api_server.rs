@@ -6,9 +6,12 @@
 
 use std::io::Read as IoRead;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
+
+/// リクエストボディ上限（10MB）
+const MAX_REQUEST_BODY: u64 = 10 * 1024 * 1024;
 
 /// API キープレフィックス
 const KEY_PREFIX: &str = "oag-";
@@ -178,6 +181,18 @@ fn check_auth(req: &tiny_http::Request, expected_key: &str) -> bool {
 }
 
 fn handle_chat_completions(mut req: tiny_http::Request, config: &ApiServerConfig) {
+    // リクエストサイズ制限チェック
+    if let Some(len) = req.body_length() {
+        if len as u64 > MAX_REQUEST_BODY {
+            let _ = respond_cors(
+                req,
+                413,
+                r#"{"error":{"message":"Request body too large (max 10MB)","type":"invalid_request_error"}}"#,
+            );
+            return;
+        }
+    }
+
     // リクエストボディ読み取り
     let mut body = String::new();
     if let Err(e) = req.as_reader().read_to_string(&mut body) {
@@ -244,28 +259,27 @@ fn handle_chat_completions(mut req: tiny_http::Request, config: &ApiServerConfig
 
 // ── レスポンスヘルパー ──
 
+fn cors_headers() -> [tiny_http::Header; 4] {
+    static HEADERS: OnceLock<[tiny_http::Header; 4]> = OnceLock::new();
+    HEADERS
+        .get_or_init(|| {
+            [
+                tiny_http::Header::from_bytes(b"Content-Type" as &[u8], b"application/json" as &[u8]).unwrap(),
+                tiny_http::Header::from_bytes(b"Access-Control-Allow-Origin" as &[u8], b"*" as &[u8]).unwrap(),
+                tiny_http::Header::from_bytes(b"Access-Control-Allow-Methods" as &[u8], b"GET, POST, OPTIONS" as &[u8]).unwrap(),
+                tiny_http::Header::from_bytes(b"Access-Control-Allow-Headers" as &[u8], b"Content-Type, Authorization" as &[u8]).unwrap(),
+            ]
+        })
+        .clone()
+}
+
 fn respond_cors(req: tiny_http::Request, status: u16, body: &str) -> Result<(), ()> {
+    let [ct, origin, methods, headers] = cors_headers();
     let response = tiny_http::Response::from_string(body.to_string())
         .with_status_code(status)
-        .with_header(
-            "Content-Type: application/json"
-                .parse::<tiny_http::Header>()
-                .unwrap(),
-        )
-        .with_header(
-            "Access-Control-Allow-Origin: *"
-                .parse::<tiny_http::Header>()
-                .unwrap(),
-        )
-        .with_header(
-            "Access-Control-Allow-Methods: GET, POST, OPTIONS"
-                .parse::<tiny_http::Header>()
-                .unwrap(),
-        )
-        .with_header(
-            "Access-Control-Allow-Headers: Content-Type, Authorization"
-                .parse::<tiny_http::Header>()
-                .unwrap(),
-        );
+        .with_header(ct)
+        .with_header(origin)
+        .with_header(methods)
+        .with_header(headers);
     req.respond(response).map_err(|_| ())
 }

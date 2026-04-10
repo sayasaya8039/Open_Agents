@@ -85,8 +85,9 @@ fn assign_child_to_job(child: &Child) {
     }
 }
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
-const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
+const POLL_INTERVAL_INIT: Duration = Duration::from_millis(250);
+const POLL_INTERVAL_MAX: Duration = Duration::from_secs(2);
 const MAX_LOG_BYTES: usize = 32 * 1024;
 const DEFAULT_CONTEXT_LENGTH: i32 = model_prefs::LOCAL_CONTEXT_LENGTH_DEFAULT;
 const MIN_CONTEXT_LENGTH: i32 = 512;
@@ -168,6 +169,7 @@ pub fn complete_llama_cpp_chat_blocking(
     let body = chat_completion_request_body(&model_id, messages, temperature, max_tokens, false);
     let resp = ureq::post(&url)
         .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(60))
         .send_json(body)
         .map_err(|e| format!("llama.cpp リクエスト失敗: {e}"))?;
     let status = resp.status();
@@ -203,6 +205,7 @@ where
     let resp = ureq::post(&url)
         .set("Content-Type", "application/json")
         .set("Accept", "text/event-stream")
+        .timeout(Duration::from_secs(120))
         .send_json(body)
         .map_err(|e| format!("llama.cpp ストリーミングリクエスト失敗: {e}"))?;
     let status = resp.status();
@@ -1164,6 +1167,7 @@ fn wait_until_ready(
     logs: Arc<Mutex<String>>,
 ) -> Result<String, String> {
     let started = Instant::now();
+    let mut poll_interval = POLL_INTERVAL_INIT;
     loop {
         if let Some(status) = child
             .try_wait()
@@ -1201,13 +1205,17 @@ fn wait_until_ready(
             ));
         }
 
-        thread::sleep(POLL_INTERVAL);
+        thread::sleep(poll_interval);
+        poll_interval = (poll_interval * 2).min(POLL_INTERVAL_MAX);
     }
 }
 
 fn fetch_model_id(base_url: &str) -> Option<String> {
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
-    let resp = ureq::get(&url).call().ok()?;
+    let resp = ureq::get(&url)
+        .timeout(Duration::from_secs(3))
+        .call()
+        .ok()?;
     if resp.status() >= 400 {
         return None;
     }
@@ -1316,7 +1324,34 @@ struct GgufTensorType {
 }
 
 fn validate_gguf_tensor_types(path: &Path) -> Result<(), String> {
+    use std::collections::HashMap;
+
+    type CacheKey = (PathBuf, u64, i64);
+    static CACHE: OnceLock<Mutex<HashMap<CacheKey, ()>>> = OnceLock::new();
+
+    let meta = fs::metadata(path)
+        .map_err(|e| format!("GGUF メタデータ取得失敗 ({}): {e}", path.display()))?;
+    let size = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let key = (path.to_path_buf(), size, mtime);
+
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if guard.contains_key(&key) {
+            return Ok(());
+        }
+    }
+
     let _ = scan_gguf_tensor_types(path)?;
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, ());
+    }
     Ok(())
 }
 

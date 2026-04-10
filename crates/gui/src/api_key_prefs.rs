@@ -491,7 +491,7 @@ pub fn save_api_keys(prefs: &ApiKeyPrefs) {
         return;
     }
     let p = prefs.clone().sanitize();
-    match serde_json::to_string_pretty(&p) {
+    match serde_json::to_string(&p) {
         Ok(json) => {
             if let Err(e) = fs::write(&path, json) {
                 eprintln!("api_key_prefs: 書き込み失敗: {e}");

@@ -1120,7 +1120,7 @@ pub fn save_local_llm_prefs(prefs: &LocalLlmPrefs) {
     }
     let mut p = prefs.clone();
     p.clamp();
-    match serde_json::to_string_pretty(&p) {
+    match serde_json::to_string(&p) {
         Ok(json) => {
             if let Err(e) = fs::write(&path, json) {
                 eprintln!("model_prefs: 書き込み失敗: {e}");

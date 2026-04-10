@@ -53,9 +53,8 @@ pub fn load_last_workspace() -> Option<PathBuf> {
 
 /// 起動時: 保存済みフォルダ、なければカレントディレクトリを使い、解決できたら設定ファイルを更新する。
 pub fn resolve_workspace_at_launch() -> PathBuf {
-    let path = load_last_workspace().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let path = load_last_workspace()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let resolved = match path.canonicalize() {
         Ok(c) => c,
         Err(_) => path,

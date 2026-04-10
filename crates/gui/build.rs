@@ -109,7 +109,9 @@ fn files_match(src_path: &Path, dst_path: &Path) -> Result<bool, std::io::Error>
     if src_meta.len() != dst_meta.len() {
         return Ok(false);
     }
-    Ok(fs::read(src_path)? == fs::read(dst_path)?)
+    let src_modified = src_meta.modified()?;
+    let dst_modified = dst_meta.modified()?;
+    Ok(src_modified == dst_modified)
 }
 
 fn profile_output_dir() -> PathBuf {

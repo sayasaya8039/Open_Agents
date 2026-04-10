@@ -89,10 +89,8 @@ impl CursorState {
             self.position.line -= 1;
             self.position.column = target_col.min(buffer.line_len(self.position.line));
             // 文字境界に合わせる
-            self.position.column = snap_to_char_boundary(
-                buffer.line(self.position.line),
-                self.position.column,
-            );
+            self.position.column =
+                snap_to_char_boundary(buffer.line(self.position.line), self.position.column);
         }
     }
 
@@ -103,10 +101,8 @@ impl CursorState {
             self.preferred_column = Some(target_col);
             self.position.line += 1;
             self.position.column = target_col.min(buffer.line_len(self.position.line));
-            self.position.column = snap_to_char_boundary(
-                buffer.line(self.position.line),
-                self.position.column,
-            );
+            self.position.column =
+                snap_to_char_boundary(buffer.line(self.position.line), self.position.column);
         }
     }
 
@@ -206,10 +202,39 @@ impl CursorState {
 // --- ユーティリティ ---
 
 fn is_word_separator(ch: char) -> bool {
-    matches!(ch, '(' | ')' | '{' | '}' | '[' | ']' | '<' | '>'
-        | '.' | ',' | ';' | ':' | '"' | '\'' | '=' | '+' | '-'
-        | '*' | '/' | '\\' | '|' | '&' | '!' | '?' | '@' | '#'
-        | '$' | '%' | '^' | '~' | '`')
+    matches!(
+        ch,
+        '(' | ')'
+            | '{'
+            | '}'
+            | '['
+            | ']'
+            | '<'
+            | '>'
+            | '.'
+            | ','
+            | ';'
+            | ':'
+            | '"'
+            | '\''
+            | '='
+            | '+'
+            | '-'
+            | '*'
+            | '/'
+            | '\\'
+            | '|'
+            | '&'
+            | '!'
+            | '?'
+            | '@'
+            | '#'
+            | '$'
+            | '%'
+            | '^'
+            | '~'
+            | '`'
+    )
 }
 
 /// 前の文字境界
