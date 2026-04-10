@@ -45,6 +45,11 @@ fn main() {
     if target.contains("windows") {
         println!("cargo:rustc-link-lib=dxgi");
         println!("cargo:rustc-link-lib=ws2_32");
+
+        // Embed application icon into the executable
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("open_agents.ico");
+        res.compile().expect("failed to compile Windows resource (icon)");
     }
 }
 

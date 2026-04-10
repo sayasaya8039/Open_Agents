@@ -26,3 +26,4 @@ pulldown-cmark = "0.12"
 
 [build-dependencies]
 cc = "1.2"
+winresource = "0.1"

@@ -1,0 +1,3 @@
+// Windows application icon resource
+// IDI_ICON1 is the default icon index used by Windows shell
+1 ICON "open_agents.ico"
