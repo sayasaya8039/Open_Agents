@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use crate::hf_discover::{
-    format_count, human_size, CapabilitySet, DownloadStatus, GgufFile, GpuFitHint, HfModelDetail,
+    format_count, human_size, CapabilitySet, DownloadStatus, GgufFile, HfModelDetail,
     HfModelSummary, HuggingFaceSearchState,
 };
 use crate::{
@@ -186,23 +186,30 @@ fn render_results_panel(
                         .border_color(hex(CONTROL_BORDER))
                         .child(search_composer),
                 )
-                .child(
-                    div()
+                .child({
+                    let loading = state.loading;
+                    let mut btn = div()
                         .px(px(14.))
                         .py(px(8.))
                         .rounded(px(6.))
-                        .bg(hex(ACCENT_BLUE))
                         .text_size(px(12.))
                         .text_color(hex(0xFFFFFF))
-                        .cursor_pointer()
-                        .child(crate::i18n::discover_search_button())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                this.hf_execute_search(cx);
-                            }),
-                        ),
-                ),
+                        .child(crate::i18n::discover_search_button());
+                    if loading {
+                        btn = btn.bg(hex_a(ACCENT_BLUE, 0.4));
+                    } else {
+                        btn = btn
+                            .bg(hex(ACCENT_BLUE))
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                    this.hf_execute_search(cx);
+                                }),
+                            );
+                    }
+                    btn
+                }),
         )
         .child(
             div()
@@ -258,11 +265,25 @@ fn render_result_card(
     let id_owned = model.id.clone();
     let title: SharedString = model.name.clone().into();
     let author: SharedString = model.author.clone().into();
-    let stats = format!(
-        "⬇ {}  ♥ {}",
-        format_count(model.downloads),
-        format_count(model.likes)
-    );
+    let updated_short = if model.updated_at.len() >= 10 {
+        &model.updated_at[..10]
+    } else {
+        model.updated_at.as_str()
+    };
+    let stats = if updated_short.is_empty() {
+        format!(
+            "⬇ {}  ♥ {}",
+            format_count(model.downloads),
+            format_count(model.likes)
+        )
+    } else {
+        format!(
+            "⬇ {}  ♥ {}  · {}",
+            format_count(model.downloads),
+            format_count(model.likes),
+            updated_short
+        )
+    };
 
     div()
         .id(("hf-card", idx))
@@ -402,6 +423,18 @@ fn render_detail_body(detail: HfModelDetail, cx: &mut Context<crate::AppView>) -
         format_count(detail.downloads),
         format_count(detail.likes)
     );
+    let tags_line: Option<SharedString> = if detail.tags.is_empty() {
+        None
+    } else {
+        let joined = detail
+            .tags
+            .iter()
+            .take(12)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        Some(joined.into())
+    };
     let readme_text: SharedString = if detail.readme.is_empty() {
         "(README なし)".to_string().into()
     } else {
@@ -425,6 +458,15 @@ fn render_detail_body(detail: HfModelDetail, cx: &mut Context<crate::AppView>) -
                 .child(stats),
         )
         .child(render_capability_badges(detail.caps))
+        .when_some(tags_line, |d, tags| {
+            d.child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(hex(TEXT_MUTED))
+                    .whitespace_normal()
+                    .child(tags),
+            )
+        })
         .child(
             div()
                 .text_size(px(13.))
@@ -548,12 +590,47 @@ fn render_downloads_drawer(
         .flex()
         .flex_col()
         .gap(px(6.));
+    let has_completed = downloads.tasks.iter().any(|t| {
+        matches!(
+            t.status,
+            DownloadStatus::Completed | DownloadStatus::Failed | DownloadStatus::Cancelled
+        )
+    });
     col = col.child(
         div()
-            .text_size(px(12.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(hex(TEXT_PRIMARY))
-            .child(crate::i18n::discover_downloads().to_string()),
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(hex(TEXT_PRIMARY))
+                    .child(crate::i18n::discover_downloads().to_string()),
+            )
+            .when(has_completed, |d| {
+                d.child(
+                    div()
+                        .px(px(8.))
+                        .py(px(3.))
+                        .rounded(px(4.))
+                        .bg(hex(CONTROL_BG))
+                        .border_1()
+                        .border_color(hex(CONTROL_BORDER))
+                        .text_size(px(10.))
+                        .text_color(hex(TEXT_SECONDARY))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(hex(HOVER_BG)))
+                        .child("完了をクリア")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.hf_downloads.clear_completed();
+                                cx.notify();
+                            }),
+                        ),
+                )
+            }),
     );
     if downloads.tasks.is_empty() {
         col = col.child(
@@ -572,6 +649,7 @@ fn render_downloads_drawer(
             0.0
         };
         let filename: SharedString = task.filename.clone().into();
+        let model_id_label: SharedString = task.model_id.clone().into();
         let status_label: String = match task.status {
             DownloadStatus::Queued => "Queued".to_string(),
             DownloadStatus::InProgress => format!(
@@ -605,11 +683,25 @@ fn render_downloads_drawer(
                             div()
                                 .flex_1()
                                 .min_w(px(0.))
-                                .text_size(px(11.))
-                                .text_color(hex(TEXT_PRIMARY))
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(filename),
+                                .flex()
+                                .flex_col()
+                                .gap(px(1.))
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(hex(TEXT_PRIMARY))
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .child(filename),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(9.))
+                                        .text_color(hex(TEXT_MUTED))
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .child(model_id_label),
+                                ),
                         )
                         .when(task.status == DownloadStatus::InProgress, |d| {
                             d.child(
@@ -659,4 +751,3 @@ fn render_downloads_drawer(
     col
 }
 
-fn _gpu_fit_unused(_: GpuFitHint) {}

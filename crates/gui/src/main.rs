@@ -4650,6 +4650,10 @@ impl AppView {
     }
 
     fn hf_execute_search(&mut self, cx: &mut Context<Self>) {
+        // 検索中は再入禁止（連打・Enter 連打対策）
+        if self.hf_state.loading {
+            return;
+        }
         // 検索バーから現在のテキストを取得
         let query = self.hf_search_composer.read(cx).text().trim().to_string();
         self.hf_state.query = query.clone();
@@ -4691,6 +4695,10 @@ impl AppView {
     }
 
     fn hf_select_model(&mut self, id: String, cx: &mut Context<Self>) {
+        // 既に同じモデルが選択済みなら再取得しない
+        if self.hf_state.selected_id.as_deref() == Some(id.as_str()) {
+            return;
+        }
         self.hf_state.selected_id = Some(id.clone());
         self.hf_state.detail = None;
         self.hf_state.detail_loading = true;
@@ -4729,74 +4737,116 @@ impl AppView {
         file: hf_discover::GgufFile,
         cx: &mut Context<Self>,
     ) {
-        let task = self.hf_downloads.enqueue(model_id, &file);
-        self.hf_downloads.panel_open = true;
+        // 1. キューにタスクを積む
         let token = self.api_keys.get_str("huggingface").to_string();
-        let tx = self.hf_downloads.tx.clone();
-        let task_c = task.clone();
+        let token_opt = if token.is_empty() { None } else { Some(token) };
+        self.hf_downloads.enqueue(model_id, &file, token_opt);
+        self.hf_downloads.panel_open = true;
         cx.notify();
 
-        // バックグラウンドワーカーで実行
-        cx.background_executor()
-            .spawn(async move {
-                let token_opt = if token.is_empty() { None } else { Some(token) };
-                hf_discover::run_download(task_c, token_opt, tx);
-            })
-            .detach();
+        // 2. ワーカーが既に走っていれば何もしない（同時 1 並列）
+        if self
+            .hf_downloads
+            .worker_running
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return;
+        }
 
-        // 進捗ポーリング — 300ms 毎に drain
+        // 3. ワーカー + 進捗ポーリングを 1 本だけ起動
+        let worker_flag = self.hf_downloads.worker_running.clone();
+        let tx = self.hf_downloads.tx.clone();
         cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(300))
-                    .await;
-                let done = cx
+                // 次のキュー済みタスクを取り出す
+                let next_task = cx
                     .update(|ecx| {
-                        app.update(ecx, |this: &mut AppView, cx| {
-                            let events = this.hf_downloads.drain_progress();
-                            let mut any = false;
-                            let mut all_done = true;
-                            for ev in events {
-                                any = true;
-                                if let hf_discover::DownloadProgress::Completed {
-                                    final_path, ..
-                                } = ev
-                                {
-                                    // ローカルモデル一覧に追加
-                                    if !this
-                                        .settings_model_paths
-                                        .iter()
-                                        .any(|p| p == &final_path)
-                                    {
-                                        this.settings_model_paths.push(final_path);
-                                        this.persist_local_llm_prefs();
-                                    }
-                                }
-                            }
-                            for t in &this.hf_downloads.tasks {
-                                if matches!(
-                                    t.status,
-                                    hf_discover::DownloadStatus::Queued
-                                        | hf_discover::DownloadStatus::InProgress
-                                ) {
-                                    all_done = false;
-                                    break;
-                                }
-                            }
-                            if any {
-                                cx.notify();
-                            }
-                            all_done
+                        app.update(ecx, |this: &mut AppView, _| {
+                            this.hf_downloads.next_queued_task()
                         })
                         .ok()
-                        .unwrap_or(true)
+                        .flatten()
                     })
                     .ok()
-                    .unwrap_or(true);
-                if done {
+                    .flatten();
+
+                let Some(task) = next_task else {
+                    // キュー空 → ワーカー終了
                     break;
+                };
+
+                // ダウンロード実行を別スレッドに投げ、同スレッドで進捗 drain
+                let tx_c = tx.clone();
+                let task_c = task.clone();
+                let token_inner = task.hf_token.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        hf_discover::run_download(task_c, token_inner, tx_c);
+                    })
+                    .detach();
+
+                // このタスクが完了するまで 300ms ごとに drain
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(300))
+                        .await;
+                    let finished = cx
+                        .update(|ecx| {
+                            app.update(ecx, |this: &mut AppView, cx| {
+                                let events = this.hf_downloads.drain_progress();
+                                let mut any = false;
+                                for ev in events {
+                                    any = true;
+                                    if let hf_discover::DownloadProgress::Completed {
+                                        final_path,
+                                        ..
+                                    } = ev
+                                    {
+                                        if !this
+                                            .settings_model_paths
+                                            .iter()
+                                            .any(|p| p == &final_path)
+                                        {
+                                            this.settings_model_paths.push(final_path);
+                                            this.persist_local_llm_prefs();
+                                        }
+                                    }
+                                }
+                                if any {
+                                    cx.notify();
+                                }
+                                // この特定タスクが終わったか
+                                this.hf_downloads
+                                    .tasks
+                                    .iter()
+                                    .find(|t| t.id == task.id)
+                                    .map(|t| {
+                                        !matches!(
+                                            t.status,
+                                            hf_discover::DownloadStatus::Queued
+                                                | hf_discover::DownloadStatus::InProgress
+                                        )
+                                    })
+                                    .unwrap_or(true)
+                            })
+                            .ok()
+                            .unwrap_or(true)
+                        })
+                        .ok()
+                        .unwrap_or(true);
+                    if finished {
+                        break;
+                    }
                 }
             }
+            // ワーカー終了 — フラグを下ろす
+            worker_flag.store(false, std::sync::atomic::Ordering::SeqCst);
         })
         .detach();
     }
@@ -5387,6 +5437,20 @@ fn main() {
                         },
                     )
                     .detach();
+                    // Discover ページ用の検索コンポーザー — Enter で検索実行
+                    let hf_search_composer = cx.new(|ecx| {
+                        chat_composer::ChatComposer::new(
+                            ecx,
+                            i18n::discover_search_placeholder(),
+                        )
+                    });
+                    cx.subscribe(
+                        &hf_search_composer,
+                        |this: &mut AppView, _, _: &chat_composer::SubmitChat, cx| {
+                            this.hf_execute_search(cx);
+                        },
+                    )
+                    .detach();
                     let mut app = AppView {
                         page: Page::Chat,
                         session_store: chat_session::load_sessions(),
@@ -5415,12 +5479,7 @@ fn main() {
                         llama_cpp_update_notice: None,
                         gpu_profile_summary: String::new(),
                         hf_state: hf_discover::HuggingFaceSearchState::default(),
-                        hf_search_composer: cx.new(|ecx| {
-                            chat_composer::ChatComposer::new(
-                                ecx,
-                                i18n::discover_search_placeholder(),
-                            )
-                        }),
+                        hf_search_composer,
                         hf_downloads: hf_discover::DownloadManager::default(),
                     };
                     llama_cpp_chat::cleanup_orphan_servers();

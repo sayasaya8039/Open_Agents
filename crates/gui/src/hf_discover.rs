@@ -27,7 +27,11 @@ pub struct HfModelSummary {
     pub downloads: u64,
     pub likes: u64,
     pub updated_at: String,        // ISO 8601
+    /// 現在 UI 未表示だがフィルタ候補用に保持
+    #[allow(dead_code)]
     pub pipeline_tag: Option<String>,
+    /// caps 推定に使用（UI には detail 側でのみ表示）
+    #[allow(dead_code)]
     pub tags: Vec<String>,
     pub caps: CapabilitySet,
 }
@@ -426,6 +430,7 @@ pub struct DownloadTask {
     pub status: DownloadStatus,
     pub error: Option<String>,
     pub cancel_flag: Arc<AtomicBool>,
+    pub hf_token: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -469,6 +474,8 @@ pub struct DownloadManager {
     pub panel_open: bool,
     pub tx: Sender<DownloadProgress>,
     pub rx: Receiver<DownloadProgress>,
+    /// ワーカースレッドが走っているか（同時ダウンロード 1 に制限する）
+    pub worker_running: Arc<AtomicBool>,
 }
 
 impl Default for DownloadManager {
@@ -479,22 +486,36 @@ impl Default for DownloadManager {
             panel_open: false,
             tx,
             rx,
+            worker_running: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 impl DownloadManager {
-    pub fn enqueue(&mut self, model_id: String, file: &GgufFile) -> DownloadTask {
+    pub fn enqueue(
+        &mut self,
+        model_id: String,
+        file: &GgufFile,
+        hf_token: Option<String>,
+    ) -> DownloadTask {
         let id = NEXT_DOWNLOAD_ID.fetch_add(1, Ordering::Relaxed);
         let url = format!(
             "https://huggingface.co/{}/resolve/main/{}",
             model_id, file.filename
         );
-        let dest_path = models_dir().join(sanitize_file_name(&format!(
-            "{}__{}",
-            model_id.replace('/', "_"),
-            file.filename
-        )));
+        // 保存先: <models_dir>/<author>/<repo>/<filename>
+        //   Windows 予約文字は各セグメントごとにサニタイズし、
+        //   重複防止のため author/repo がない場合はフラットに退避
+        let mut dest_path = models_dir();
+        let (author, repo) = model_id
+            .split_once('/')
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .unwrap_or_else(|| (String::new(), model_id.replace('/', "_")));
+        if !author.is_empty() {
+            dest_path.push(sanitize_file_name(&author));
+        }
+        dest_path.push(sanitize_file_name(&repo));
+        dest_path.push(sanitize_file_name(&file.filename));
         let task = DownloadTask {
             id,
             model_id,
@@ -506,9 +527,31 @@ impl DownloadManager {
             status: DownloadStatus::Queued,
             error: None,
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            hf_token,
         };
         self.tasks.push(task.clone());
         task
+    }
+
+    /// 次に処理すべきキュー済みタスクを取り出し（存在すれば InProgress にはしないが、
+    /// 呼び出し側のワーカーが DownloadProgress::Started を送ったタイミングで進捗反映される）。
+    pub fn next_queued_task(&self) -> Option<DownloadTask> {
+        self.tasks
+            .iter()
+            .find(|t| t.status == DownloadStatus::Queued)
+            .cloned()
+    }
+
+    /// 完了 / 失敗 / キャンセル済みタスクを一括削除
+    pub fn clear_completed(&mut self) {
+        self.tasks.retain(|t| {
+            !matches!(
+                t.status,
+                DownloadStatus::Completed
+                    | DownloadStatus::Failed
+                    | DownloadStatus::Cancelled
+            )
+        });
     }
 
     /// 非ブロッキングで進捗を全部受信して反映（UI 側から定期的に呼ぶ）
@@ -580,10 +623,11 @@ pub fn run_download(
         }
     }
 
-    // リクエスト構築 - ダウンロードは長時間かかるので read timeout を伸ばす
+    // リクエスト構築 - 大きな GGUF (5GB+) のダウンロードで途中切断しないよう
+    // read timeout を 300 秒に延長
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(60))
+        .timeout_read(Duration::from_secs(300))
         .user_agent(&user_agent())
         .build();
     let mut req = agent.get(&task.url);
