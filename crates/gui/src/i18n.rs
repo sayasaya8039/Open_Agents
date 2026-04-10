@@ -238,9 +238,22 @@ pub fn kv_cache_label(variant: &str) -> &'static str {
         "none" => t("FP16（標準）", "FP16 (Standard)"),
         "q8" => t("Q8（2x圧縮）", "Q8 (2x Compression)"),
         "q4" => t("Q4（4x圧縮）", "Q4 (4x Compression)"),
-        "turbo3" => t("Turbo3（4.9x圧縮・推奨）", "Turbo3 (4.9x, Recommended)"),
+        "turbo3" => t("Turbo3（4.9x圧縮）", "Turbo3 (4.9x)"),
         "turbo4" => t("Turbo4（3.8x圧縮・高品質）", "Turbo4 (3.8x, High Quality)"),
         "turbo2" => t("Turbo2（6.4x圧縮・最大）", "Turbo2 (6.4x, Maximum)"),
+        "planar3" => t(
+            "Planar3（10.3x圧縮・推奨・+28%デコード）",
+            "Planar3 (10.3x, Recommended, +28% decode)",
+        ),
+        "iso3" => t(
+            "Iso3（10.3x圧縮・最高品質 PPL 6.91）",
+            "Iso3 (10.3x, Best Quality PPL 6.91)",
+        ),
+        "planar4" => t("Planar4（5.2x圧縮・4-bit）", "Planar4 (5.2x, 4-bit)"),
+        "iso4" => t(
+            "Iso4（5.2x圧縮・4-bit 最高品質）",
+            "Iso4 (5.2x, 4-bit Best Quality)",
+        ),
         _ => "Unknown",
     }
 }

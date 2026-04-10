@@ -70,7 +70,7 @@ impl ModelParams {
     }
 }
 
-/// KV キャッシュ量子化モード（TurboQuant 対応 llama-server 用）
+/// KV キャッシュ量子化モード（TurboQuant / RotorQuant 対応 llama-server 用）
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum KvCacheType {
@@ -81,12 +81,20 @@ pub enum KvCacheType {
     Q8,
     /// q4_0: 4x 圧縮、軽微な品質劣化
     Q4,
-    /// TurboQuant turbo3: 4.9x 圧縮、+1% perplexity（推奨）
+    /// TurboQuant turbo3: 4.9x 圧縮、+1% perplexity
     Turbo3,
     /// TurboQuant turbo4: 3.8x 圧縮、+0.2% perplexity（高品質）
     Turbo4,
     /// TurboQuant turbo2: 6.4x 圧縮、+6.5% perplexity（最大圧縮）
     Turbo2,
+    /// RotorQuant planar3: 2D Givens 回転、10.3x 圧縮、PPL 7.05、デコード+28%（推奨）
+    Planar3,
+    /// RotorQuant iso3: 4D quaternion 回転、10.3x 圧縮、PPL 6.91（最高品質）
+    Iso3,
+    /// RotorQuant planar4: 2D Givens 4-bit、5.2x 圧縮、高品質
+    Planar4,
+    /// RotorQuant iso4: 4D quaternion 4-bit、5.2x 圧縮、最高品質
+    Iso4,
 }
 
 impl KvCacheType {
@@ -98,6 +106,10 @@ impl KvCacheType {
             Self::Turbo3 => i18n::kv_cache_label("turbo3"),
             Self::Turbo4 => i18n::kv_cache_label("turbo4"),
             Self::Turbo2 => i18n::kv_cache_label("turbo2"),
+            Self::Planar3 => i18n::kv_cache_label("planar3"),
+            Self::Iso3 => i18n::kv_cache_label("iso3"),
+            Self::Planar4 => i18n::kv_cache_label("planar4"),
+            Self::Iso4 => i18n::kv_cache_label("iso4"),
         }
     }
 }
@@ -497,6 +509,10 @@ impl HardwareParams {
             KvCacheType::Turbo3 => "turbo3",
             KvCacheType::Turbo4 => "turbo4",
             KvCacheType::Turbo2 => "turbo2",
+            KvCacheType::Planar3 => "planar3",
+            KvCacheType::Iso3 => "iso3",
+            KvCacheType::Planar4 => "planar4",
+            KvCacheType::Iso4 => "iso4",
         }
     }
 }
