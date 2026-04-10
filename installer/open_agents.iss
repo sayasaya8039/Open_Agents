@@ -2,7 +2,7 @@
 ; Usage: iscc installer/open_agents.iss
 
 #define MyAppName "Open Agents"
-#define MyAppVersion "0.4.9"
+#define MyAppVersion "0.4.10"
 #define MyAppPublisher "Open Agents"
 #define MyAppURL "https://github.com/sayasaya8039/Open_Agents"
 #define MyAppExeName "open_agents.exe"

@@ -6,7 +6,9 @@ mod chat_composer;
 mod chat_markdown;
 mod chat_page;
 mod chat_session;
+mod discover_page;
 mod editor;
+mod hf_discover;
 pub mod i18n;
 mod llama_cpp_chat;
 mod llama_cpp_runtime;
@@ -425,6 +427,7 @@ enum Page {
     Chat,
     Settings,
     Terminal,
+    Discover,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1395,6 +1398,12 @@ struct AppView {
     llama_cpp_update_notice: Option<llama_cpp_runtime::LlamaCppUpdateNotice>,
     /// GPU 自動検出結果のサマリ（設定画面で表示）
     gpu_profile_summary: String,
+    /// Hugging Face モデル検索・ダウンロード状態
+    hf_state: hf_discover::HuggingFaceSearchState,
+    /// Discover ページの検索バー（ChatComposer を流用）
+    hf_search_composer: Entity<chat_composer::ChatComposer>,
+    /// ダウンロードマネージャ
+    hf_downloads: hf_discover::DownloadManager,
 }
 
 impl AppView {
@@ -2383,6 +2392,13 @@ impl Render for AppView {
             }
             Page::Settings => self.render_settings(cx).into_any_element(),
             Page::Terminal => self.render_terminal().into_any_element(),
+            Page::Discover => discover_page::render_discover_page(
+                &self.hf_state,
+                self.hf_search_composer.clone(),
+                &self.hf_downloads,
+                cx,
+            )
+            .into_any_element(),
         };
 
         div()
@@ -4605,6 +4621,193 @@ impl AppView {
         col
     }
 
+    // ============================================================
+    // Hugging Face Discover ハンドラ
+    // ============================================================
+
+    fn hf_open_discover(&mut self, cx: &mut Context<Self>) {
+        self.page = Page::Discover;
+        cx.notify();
+    }
+
+    fn hf_cycle_sort(&mut self, cx: &mut Context<Self>) {
+        self.hf_state.sort = match self.hf_state.sort {
+            hf_discover::SortOrder::Trending => hf_discover::SortOrder::Downloads,
+            hf_discover::SortOrder::Downloads => hf_discover::SortOrder::Likes,
+            hf_discover::SortOrder::Likes => hf_discover::SortOrder::LastModified,
+            hf_discover::SortOrder::LastModified => hf_discover::SortOrder::Trending,
+        };
+        cx.notify();
+        // 既に検索済みなら同じクエリで再検索
+        if !self.hf_state.results.is_empty() || !self.hf_state.query.is_empty() {
+            self.hf_execute_search(cx);
+        }
+    }
+
+    fn hf_toggle_downloads_panel(&mut self, cx: &mut Context<Self>) {
+        self.hf_downloads.panel_open = !self.hf_downloads.panel_open;
+        cx.notify();
+    }
+
+    fn hf_execute_search(&mut self, cx: &mut Context<Self>) {
+        // 検索バーから現在のテキストを取得
+        let query = self.hf_search_composer.read(cx).text().trim().to_string();
+        self.hf_state.query = query.clone();
+        self.hf_state.loading = true;
+        self.hf_state.error = None;
+        self.hf_state.request_gen = self.hf_state.request_gen.wrapping_add(1);
+        let gen = self.hf_state.request_gen;
+        let sort = self.hf_state.sort;
+        let token = self.api_keys.get_str("huggingface").to_string();
+        cx.notify();
+
+        cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
+            let token_opt = if token.is_empty() { None } else { Some(token) };
+            let result = smol::unblock(move || {
+                hf_discover::search_hf_models(&query, sort, token_opt.as_deref())
+            })
+            .await;
+            let _ = cx.update(|ecx| {
+                let _ = app.update(ecx, |this: &mut AppView, cx| {
+                    // 古いレスポンスは破棄
+                    if this.hf_state.request_gen != gen {
+                        return;
+                    }
+                    this.hf_state.loading = false;
+                    match result {
+                        Ok(models) => {
+                            this.hf_state.results = models;
+                        }
+                        Err(e) => {
+                            this.hf_state.error = Some(e);
+                            this.hf_state.results.clear();
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn hf_select_model(&mut self, id: String, cx: &mut Context<Self>) {
+        self.hf_state.selected_id = Some(id.clone());
+        self.hf_state.detail = None;
+        self.hf_state.detail_loading = true;
+        self.hf_state.detail_error = None;
+        let token = self.api_keys.get_str("huggingface").to_string();
+        cx.notify();
+
+        cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
+            let token_opt = if token.is_empty() { None } else { Some(token) };
+            let id_c = id.clone();
+            let result = smol::unblock(move || {
+                hf_discover::fetch_model_detail(&id_c, token_opt.as_deref())
+            })
+            .await;
+            let _ = cx.update(|ecx| {
+                let _ = app.update(ecx, |this: &mut AppView, cx| {
+                    // 選択が変わっていたら破棄
+                    if this.hf_state.selected_id.as_deref() != Some(&id) {
+                        return;
+                    }
+                    this.hf_state.detail_loading = false;
+                    match result {
+                        Ok(detail) => this.hf_state.detail = Some(detail),
+                        Err(e) => this.hf_state.detail_error = Some(e),
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn hf_start_download(
+        &mut self,
+        model_id: String,
+        file: hf_discover::GgufFile,
+        cx: &mut Context<Self>,
+    ) {
+        let task = self.hf_downloads.enqueue(model_id, &file);
+        self.hf_downloads.panel_open = true;
+        let token = self.api_keys.get_str("huggingface").to_string();
+        let tx = self.hf_downloads.tx.clone();
+        let task_c = task.clone();
+        cx.notify();
+
+        // バックグラウンドワーカーで実行
+        cx.background_executor()
+            .spawn(async move {
+                let token_opt = if token.is_empty() { None } else { Some(token) };
+                hf_discover::run_download(task_c, token_opt, tx);
+            })
+            .detach();
+
+        // 進捗ポーリング — 300ms 毎に drain
+        cx.spawn(async move |app: WeakEntity<AppView>, cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(300))
+                    .await;
+                let done = cx
+                    .update(|ecx| {
+                        app.update(ecx, |this: &mut AppView, cx| {
+                            let events = this.hf_downloads.drain_progress();
+                            let mut any = false;
+                            let mut all_done = true;
+                            for ev in events {
+                                any = true;
+                                if let hf_discover::DownloadProgress::Completed {
+                                    final_path, ..
+                                } = ev
+                                {
+                                    // ローカルモデル一覧に追加
+                                    if !this
+                                        .settings_model_paths
+                                        .iter()
+                                        .any(|p| p == &final_path)
+                                    {
+                                        this.settings_model_paths.push(final_path);
+                                        this.persist_local_llm_prefs();
+                                    }
+                                }
+                            }
+                            for t in &this.hf_downloads.tasks {
+                                if matches!(
+                                    t.status,
+                                    hf_discover::DownloadStatus::Queued
+                                        | hf_discover::DownloadStatus::InProgress
+                                ) {
+                                    all_done = false;
+                                    break;
+                                }
+                            }
+                            if any {
+                                cx.notify();
+                            }
+                            all_done
+                        })
+                        .ok()
+                        .unwrap_or(true)
+                    })
+                    .ok()
+                    .unwrap_or(true);
+                if done {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn hf_cancel_download(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.hf_downloads.cancel(id);
+        cx.notify();
+    }
+
+    // ============================================================
+
     fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let ver = env!("CARGO_PKG_VERSION");
         div()
@@ -5211,6 +5414,14 @@ fn main() {
                         llama_cpp_runtime_statuses,
                         llama_cpp_update_notice: None,
                         gpu_profile_summary: String::new(),
+                        hf_state: hf_discover::HuggingFaceSearchState::default(),
+                        hf_search_composer: cx.new(|ecx| {
+                            chat_composer::ChatComposer::new(
+                                ecx,
+                                i18n::discover_search_placeholder(),
+                            )
+                        }),
+                        hf_downloads: hf_discover::DownloadManager::default(),
                     };
                     llama_cpp_chat::cleanup_orphan_servers();
                     // GPU 自動検出 & 最適化（Auto モード時）

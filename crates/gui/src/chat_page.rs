@@ -366,13 +366,37 @@ fn render_session_sidebar(
                         .into_any_element()
                 })),
         )
-        // Settings ボタン（下部固定）
+        // Discover + Settings ボタン（下部固定）
         .child(
             div()
                 .flex_shrink_0()
                 .border_t_1()
                 .border_color(hex(BORDER))
                 .p(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .px(px(8.))
+                        .py(px(6.))
+                        .rounded(px(6.))
+                        .text_size(px(12.))
+                        .text_color(hex(TEXT_SECONDARY))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(hex(HOVER_BG)))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child("🤗")
+                        .child(i18n::discover_nav())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.hf_open_discover(cx);
+                            }),
+                        ),
+                )
                 .child(
                     div()
                         .px(px(8.))

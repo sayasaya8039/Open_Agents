@@ -138,6 +138,58 @@ pub fn settings() -> &'static str {
     t("設定", "Settings")
 }
 
+// ── Discover Page (Hugging Face モデル検索) ──
+
+pub fn discover_title() -> &'static str {
+    t("モデルを探す", "Discover Models")
+}
+
+pub fn discover_nav() -> &'static str {
+    t("探す", "Discover")
+}
+
+pub fn discover_search_placeholder() -> &'static str {
+    t("例: llama-3 gguf, gemma, qwen ...", "e.g. llama-3 gguf, gemma, qwen ...")
+}
+
+pub fn discover_search_button() -> &'static str {
+    t("検索", "Search")
+}
+
+pub fn discover_loading() -> &'static str {
+    t("読み込み中…", "Loading…")
+}
+
+pub fn discover_empty() -> &'static str {
+    t(
+        "キーワードを入力して検索してください。",
+        "Enter a keyword and search.",
+    )
+}
+
+pub fn discover_pick_model() -> &'static str {
+    t(
+        "左から1件選ぶと詳細が表示されます。",
+        "Pick a model on the left to see details.",
+    )
+}
+
+pub fn discover_download_options() -> &'static str {
+    t("ダウンロード候補", "Download Options")
+}
+
+pub fn discover_download_button() -> &'static str {
+    t("ダウンロード", "Download")
+}
+
+pub fn discover_downloads() -> &'static str {
+    t("ダウンロード一覧", "Downloads")
+}
+
+pub fn discover_no_downloads() -> &'static str {
+    t("(なし)", "(none)")
+}
+
 // ── Chat Page — Messages ──
 
 pub fn thinking_show() -> &'static str {
