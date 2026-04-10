@@ -778,11 +778,11 @@ impl Render for ChatComposer {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .text_color(hex(TEXT_PRIMARY))
-            .line_height(px(30.))
+            .line_height(px(22.))
             .text_size(px(13.))
             .child(
                 div()
-                    .min_h(px(30. + 4. * 2.))
+                    .min_h(px(22. + 4. * 2.))
                     .w_full()
                     .p(px(4.))
                     .bg(hex(BG))

@@ -19,8 +19,8 @@ use crate::{
 /// 描画するメッセージの最大件数（パフォーマンス対策）
 const MAX_VISIBLE_MESSAGES: usize = 60;
 
-/// セッションサイドバーの幅
-const SESSION_SIDEBAR_W: f32 = 200.0;
+/// セッションサイドバーの幅（macOS 標準に合わせて 240px）
+const SESSION_SIDEBAR_W: f32 = 240.0;
 
 // ── Chat ページ全体 ──
 
@@ -93,12 +93,13 @@ fn render_session_sidebar(
                 div()
                     .w_full()
                     .px(px(12.))
-                    .py(px(8.))
+                    .py(px(7.))
                     .bg(hex(ACCENT_BLUE))
-                    .rounded(px(8.))
-                    .text_size(px(12.))
+                    .rounded(px(999.))
+                    .text_size(px(11.))
                     .text_color(hex(0xFFFFFF))
                     .cursor_pointer()
+                    .hover(|d| d.bg(hex_a(ACCENT_BLUE, 0.85)))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -188,7 +189,7 @@ fn render_session_sidebar(
                                         } else {
                                             hex(TEXT_SECONDARY)
                                         })
-                                        .when(is_active, |d| d.bg(hex(HOVER_BG)))
+                                        .when(is_active, |d| d.bg(hex_a(ACCENT_BLUE, 0.15)))
                                         .hover(|d| d.bg(hex(HOVER_BG)))
                                         .overflow_hidden()
                                         .flex()
@@ -280,7 +281,7 @@ fn render_session_sidebar(
                                                     .items_center()
                                                     .justify_center()
                                                     .text_size(px(14.))
-                                                    .text_color(hex(TEXT_MUTED))
+                                                    .text_color(hex_a(TEXT_MUTED, 0.3))
                                                     .cursor_pointer()
                                                     .hover(|d| d.bg(hex(PANEL_BG)).text_color(hex(TEXT_PRIMARY)))
                                                     .child("⋯")
@@ -578,7 +579,7 @@ fn render_chat_main(
                             )
                         })
                         // メッセージ一覧
-                        .child(div().flex().flex_col().gap(px(24.)).children(
+                        .child(div().flex().flex_col().gap(px(20.)).children(
                             visible.iter().enumerate().map(|(index, msg)| {
                                 render_message(
                                     msg,
@@ -649,7 +650,7 @@ fn render_message(
                     div()
                         .w(px(22.))
                         .h(px(22.))
-                        .rounded(px(6.))
+                        .rounded(px(11.))
                         .bg(hex(ACCENT_BLUE))
                         .flex()
                         .items_center()
@@ -662,7 +663,7 @@ fn render_message(
                     div()
                         .w(px(22.))
                         .h(px(22.))
-                        .rounded(px(6.))
+                        .rounded(px(11.))
                         .bg(hex(ACCENT_ORANGE))
                         .flex()
                         .items_center()
@@ -719,6 +720,11 @@ fn render_message(
             .flex()
             .flex_col()
             .gap(px(10.))
+            .when(is_user, |d| {
+                d.bg(hex_a(ACCENT_BLUE, 0.06))
+                    .rounded(px(12.))
+                    .p(px(16.))
+            })
             .cursor(CursorStyle::default())
             .on_mouse_down(
                 MouseButton::Right,
@@ -817,7 +823,7 @@ fn render_input_bar(
                                 .flex_1()
                                 .min_h(px(52.))
                                 .min_w(px(0.))
-                                .bg(hex(BG))
+                                .bg(hex_a(0xffffff, 0.05))
                                 .border_1()
                                 .border_color(hex(BORDER))
                                 .rounded(px(12.))
@@ -833,13 +839,13 @@ fn render_input_bar(
                                 )
                                 .child(composer),
                         )
-                        // 送信ボタン
+                        // 送信ボタン（丸型）
                         .child(
                             div()
                                 .flex_shrink_0()
                                 .mb(px(4.))
                                 .p(px(8.))
-                                .rounded(px(8.))
+                                .rounded(px(999.))
                                 .bg(if send_disabled {
                                     hex_a(ACCENT_BLUE, 0.45)
                                 } else {
@@ -1030,7 +1036,7 @@ fn render_action_button(
         .h(px(24.))
         .rounded(px(999.))
         .text_size(px(13.))
-        .text_color(hex(TEXT_MUTED))
+        .text_color(hex_a(TEXT_MUTED, 0.35))
         .cursor_pointer()
         .hover(|d| d.bg(hex(HOVER_BG)).text_color(hex(TEXT_PRIMARY)))
         .flex()

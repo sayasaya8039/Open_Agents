@@ -2,19 +2,19 @@
 
 use gpui::*;
 
-pub const BG: u32 = 0x1e1e1e;
-pub const SIDEBAR_BG: u32 = 0x252526;
+pub const BG: u32 = 0x1c1c1e; // macOS systemBackground
+pub const SIDEBAR_BG: u32 = 0x2c2c2e; // macOS secondarySystemBackground
 pub const TITLEBAR_BG: u32 = 0x2d2d2d;
 pub const TITLEBAR_GRADIENT_TOP: u32 = 0x4a4a4c;
 pub const TITLEBAR_GRADIENT_BOTTOM: u32 = 0x2f2f31;
-pub const BORDER: u32 = 0x3d3d3d;
-pub const HOVER_BG: u32 = 0x37373d;
-pub const PANEL_BG: u32 = 0x252526;
-pub const TEXT_PRIMARY: u32 = 0xe5e5e5;
-pub const TEXT_SECONDARY: u32 = 0x9ca3af;
-pub const TEXT_MUTED: u32 = 0x6b7280;
-pub const TEXT_DIM: u32 = 0x4b5563;
-pub const ACCENT_BLUE: u32 = 0x2563eb;
+pub const BORDER: u32 = 0x48484a; // macOS separator
+pub const HOVER_BG: u32 = 0x363638; // adjusted for Sonoma palette
+pub const PANEL_BG: u32 = 0x3a3a3c; // macOS tertiarySystemBackground
+pub const TEXT_PRIMARY: u32 = 0xffffff; // macOS label
+pub const TEXT_SECONDARY: u32 = 0xebebf5; // macOS secondaryLabel
+pub const TEXT_MUTED: u32 = 0x6e6e73; // macOS tertiaryLabel
+pub const TEXT_DIM: u32 = 0x545458; // macOS quaternaryLabel
+pub const ACCENT_BLUE: u32 = 0x0a84ff; // macOS systemBlue
 pub const ACCENT_ORANGE: u32 = 0xfb923c;
 #[allow(dead_code)]
 pub const ACCENT_PINK: u32 = 0xdb2777;
@@ -31,8 +31,8 @@ pub const FIGMA_ICON_ORANGE: u32 = 0xf97316;
 pub const FIGMA_ICON_BLUE: u32 = 0x3b82f6;
 pub const FIGMA_ICON_GREEN: u32 = 0x22c55e;
 /// コントロール背景（Figma `bg-[#3d3d3d]` と揃え、既存 BORDER と同値）
-pub const CONTROL_BG: u32 = 0x3d3d3d;
-pub const CONTROL_BORDER: u32 = 0x4d4d4d;
+pub const CONTROL_BG: u32 = 0x48484a; // aligned with new BORDER
+pub const CONTROL_BORDER: u32 = 0x545458; // aligned with new TEXT_DIM
 
 pub fn hex(c: u32) -> Hsla {
     let r = ((c >> 16) & 0xFF) as f32 / 255.0;

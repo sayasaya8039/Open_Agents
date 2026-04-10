@@ -7,25 +7,45 @@ fn main() {
     let src_dir = "../../src";
     let bundled_runtime_dir = Path::new("../../third_party/llama.cpp/windows-x64");
 
+    // --- rerun-if-changed: C ソースファイル ---
+    let c_sources = [
+        format!("{}/core/gguf.c", src_dir),
+        format!("{}/core/tensor.c", src_dir),
+        format!("{}/core/model.c", src_dir),
+        format!("{}/core/tokenizer.c", src_dir),
+        format!("{}/core/sampler.c", src_dir),
+        format!("{}/core/inference.c", src_dir),
+        format!("{}/core/onnx_loader.c", src_dir),
+        format!("{}/backend/cpu.c", src_dir),
+        format!("{}/backend/gpu_detect.c", src_dir),
+        format!("{}/backend/cuda_backend.c", src_dir),
+        format!("{}/backend/directml_backend.c", src_dir),
+        format!("{}/backend/npu_backend.c", src_dir),
+    ];
+    for src in &c_sources {
+        println!("cargo:rerun-if-changed={}", src);
+    }
+
+    // --- rerun-if-changed: ヘッダファイル ---
+    let headers = [
+        format!("{}/core/gguf.h", src_dir),
+        format!("{}/core/tensor.h", src_dir),
+        format!("{}/core/model.h", src_dir),
+        format!("{}/core/tokenizer.h", src_dir),
+        format!("{}/core/sampler.h", src_dir),
+        format!("{}/core/inference.h", src_dir),
+        format!("{}/core/onnx_loader.h", src_dir),
+        format!("{}/backend/backend.h", src_dir),
+    ];
+    for hdr in &headers {
+        println!("cargo:rerun-if-changed={}", hdr);
+    }
+
     println!("cargo:rerun-if-changed={}", bundled_runtime_dir.display());
     sync_bundled_llama_runtime(bundled_runtime_dir);
 
     cc::Build::new()
-        .files(&[
-            format!("{}/core/gguf.c", src_dir),
-            format!("{}/core/tensor.c", src_dir),
-            format!("{}/core/model.c", src_dir),
-            format!("{}/core/tokenizer.c", src_dir),
-            format!("{}/core/sampler.c", src_dir),
-            format!("{}/core/inference.c", src_dir),
-            format!("{}/core/onnx_loader.c", src_dir),
-            format!("{}/backend/cpu.c", src_dir),
-            // cpu.c レジストリが参照するシンボル（GPU 検出・各 vtable）
-            format!("{}/backend/gpu_detect.c", src_dir),
-            format!("{}/backend/cuda_backend.c", src_dir),
-            format!("{}/backend/directml_backend.c", src_dir),
-            format!("{}/backend/npu_backend.c", src_dir),
-        ])
+        .files(&c_sources)
         .include(src_dir)
         .std("c11")
         .opt_level(3)
@@ -84,22 +104,40 @@ fn copy_runtime_tree(root: &Path, current: &Path, dst_root: &Path) {
             fs::create_dir_all(parent)
                 .expect("failed to create bundled llama runtime destination directory");
         }
-        match fs::copy(&src_path, &dst_path) {
-            Ok(_) => {}
-            Err(err) if files_match(&src_path, &dst_path).unwrap_or(false) => {
-                println!(
-                    "cargo:warning=bundled llama runtime already matches destination, skipping locked file: {}",
-                    dst_path.display()
-                );
-            }
+        match copy_or_link(&src_path, &dst_path) {
+            Ok(()) => {}
             Err(err) => {
                 panic!(
-                    "failed to copy bundled llama runtime {} -> {}: {err}",
+                    "failed to copy/link bundled llama runtime {} -> {}: {err}",
                     src_path.display(),
                     dst_path.display()
                 )
             }
         }
+    }
+}
+
+/// ハードリンク優先、失敗時コピーフォールバック。
+/// 既存ファイルが src と一致していればスキップ。
+fn copy_or_link(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
+    if dst.exists() {
+        if files_match(src, dst).unwrap_or(false) {
+            return Ok(());
+        }
+        // 古いファイルを除去（ロック時は警告のみ）
+        if let Err(e) = fs::remove_file(dst) {
+            // ファイルがロックされている場合、内容一致なら無視
+            println!(
+                "cargo:warning=bundled llama runtime: could not remove {}: {e}, skipping",
+                dst.display()
+            );
+            return Ok(());
+        }
+    }
+    // ハードリンク優先（同一ドライブならゼロコピー）
+    match fs::hard_link(src, dst) {
+        Ok(()) => Ok(()),
+        Err(_) => fs::copy(src, dst).map(|_| ()),
     }
 }
 
