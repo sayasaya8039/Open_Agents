@@ -1,4 +1,5 @@
 #![recursion_limit = "1024"]
+#![windows_subsystem = "windows"]
 
 mod api_key_prefs;
 mod api_server;
