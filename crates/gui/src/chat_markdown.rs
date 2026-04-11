@@ -156,6 +156,20 @@ pub fn render_markdown_blocks(
         .collect()
 }
 
+/// キャッシュ活用版。同一テキストはパースをスキップし、キャッシュ済みブロックを描画する。
+pub fn render_markdown_blocks_cached(
+    markdown: &str,
+    cache: &mut MarkdownCache,
+    cx: &mut Context<crate::AppView>,
+) -> Vec<AnyElement> {
+    cache
+        .get_or_parse(markdown)
+        .to_vec()
+        .into_iter()
+        .map(|block| render_markdown_block(block, cx))
+        .collect()
+}
+
 fn parse_markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
     let mut blocks = Vec::new();
     let mut active_block: Option<ActiveBlock> = None;

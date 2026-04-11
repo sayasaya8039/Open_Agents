@@ -11,7 +11,7 @@ use gpui::{
 };
 use unicode_segmentation::*;
 
-use crate::{hex, BG, TEXT_MUTED, TEXT_PRIMARY};
+use crate::{hex, BG, TEXT_MUTED, TEXT_PRIMARY, TYPE_BODY};
 
 actions!(
     composer,
@@ -779,7 +779,7 @@ impl Render for ChatComposer {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .text_color(hex(TEXT_PRIMARY))
             .line_height(px(22.))
-            .text_size(px(13.))
+            .text_size(px(TYPE_BODY))
             .child(
                 div()
                     .min_h(px(22. + 4. * 2.))

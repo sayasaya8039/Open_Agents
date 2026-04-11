@@ -62,7 +62,7 @@ impl AppView {
                     .bg(hex(CONTROL_BG))
                     .border_1()
                     .border_color(hex(CONTROL_BORDER))
-                    .text_size(px(12.))
+                    .text_size(px(TYPE_CAPTION1))
                     .text_color(hex(TEXT_SECONDARY))
                     .text_center()
                     .on_mouse_down(
@@ -88,7 +88,7 @@ impl AppView {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .text_color(hex(TEXT_PRIMARY))
                             .child("フォントサイズ"),
                     )
@@ -112,7 +112,7 @@ impl AppView {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(14.))
+                                            .text_size(px(TYPE_BODY))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child("−"),
                                     ),
@@ -120,7 +120,7 @@ impl AppView {
                             .child(
                                 div()
                                     .min_w(px(52.))
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_MUTED))
                                     .text_center()
                                     .child(value_str),
@@ -140,7 +140,7 @@ impl AppView {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(14.))
+                                            .text_size(px(TYPE_BODY))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child("+"),
                                     ),
@@ -149,7 +149,7 @@ impl AppView {
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(hex(TEXT_DIM))
                     .child("12 / 14 / 16 / 18 px から選択"),
             )
@@ -174,7 +174,7 @@ impl AppView {
                     } else {
                         hex(CONTROL_BG)
                     })
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(if on {
                         hex(TEXT_PRIMARY)
                     } else {
@@ -243,7 +243,7 @@ impl AppView {
                     } else {
                         hex(CONTROL_BG)
                     })
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(if on {
                         hex(TEXT_PRIMARY)
                     } else {
@@ -281,14 +281,14 @@ impl AppView {
                     .gap(px(4.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(hex(TEXT_PRIMARY))
                             .child("Chain-of-Thought (CoT)"),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .whitespace_normal()
                             .child(
@@ -334,13 +334,13 @@ impl AppView {
                                     .gap(px(2.))
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_PRIMARY))
                                             .child(mode.label()),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(9.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .child(mode.subtitle()),
                                     ),
@@ -367,14 +367,14 @@ impl AppView {
                     .gap(px(4.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(hex(TEXT_PRIMARY))
                             .child("ReAct（検索・計算ツール）"),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .whitespace_normal()
                             .child(
@@ -420,13 +420,13 @@ impl AppView {
                                     .gap(px(2.))
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_PRIMARY))
                                             .child(mode.label()),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(9.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .child(mode.subtitle()),
                                     ),
@@ -453,14 +453,14 @@ impl AppView {
                     .gap(px(4.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(hex(TEXT_PRIMARY))
                             .child("Tree-of-Thoughts (ToT)"),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .whitespace_normal()
                             .child(
@@ -506,13 +506,13 @@ impl AppView {
                                     .gap(px(2.))
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_PRIMARY))
                                             .child(mode.label()),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(9.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .child(mode.subtitle()),
                                     ),
@@ -539,14 +539,14 @@ impl AppView {
                     .gap(px(4.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(hex(TEXT_PRIMARY))
                             .child("Self-Consistency（多数決）"),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .whitespace_normal()
                             .child(
@@ -592,13 +592,13 @@ impl AppView {
                                     .gap(px(2.))
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_PRIMARY))
                                             .child(mode.label()),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(9.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .child(mode.subtitle()),
                                     ),

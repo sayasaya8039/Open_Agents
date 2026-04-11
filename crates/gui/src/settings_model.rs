@@ -66,26 +66,26 @@ impl AppView {
                             .gap(px(8.))
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child(Self::settings_model_filename_for(path)),
                             )
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(FIGMA_ICON_GREEN))
                                     .child("✓"),
                             ),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .child(Self::settings_model_meta_label_for(path)),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_DIM))
                             .child(Self::settings_model_path_label_for(path)),
                     ),
@@ -96,7 +96,7 @@ impl AppView {
                     .py(px(4.))
                     .rounded(px(4.))
                     .bg(hex(TITLEBAR_BG))
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(hex(TEXT_MUTED))
                     .cursor_pointer()
                     .on_mouse_down(
@@ -241,7 +241,7 @@ impl AppView {
                                 hex(ACCENT_BLUE)
                             })
                             .rounded(px(6.))
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(0xFFFFFF))
                             .cursor(if fetching {
                                 CursorStyle::OperationNotAllowed
@@ -263,7 +263,7 @@ impl AppView {
                             }),
                     )
                     .when(!sections.is_empty(), |d| {
-                        d.child(div().text_size(px(10.)).text_color(hex(TEXT_MUTED)).child(
+                        d.child(div().text_size(px(TYPE_CAPTION2)).text_color(hex(TEXT_MUTED)).child(
                             format!(
                                 "{}プロバイダ / {}モデル",
                                 sections.len(),
@@ -275,7 +275,7 @@ impl AppView {
             .when(!has_any_key && sections.is_empty(), |d| {
                 d.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(TYPE_CAPTION2))
                         .text_color(hex(TEXT_MUTED))
                         .child("上の「API キー管理」でプロバイダのキーを登録してください"),
                 )
@@ -289,7 +289,7 @@ impl AppView {
                     .gap(px(3.))
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_DIM))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(label),
@@ -307,7 +307,7 @@ impl AppView {
                                     .px(px(8.))
                                     .py(px(3.))
                                     .rounded(px(4.))
-                                    .text_size(px(10.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .bg(if is_current {
                                         hex(ACCENT_BLUE)
                                     } else {
@@ -362,13 +362,13 @@ impl AppView {
             .gap(px(12.))
             .child(
                 div()
-                    .text_size(px(13.))
+                    .text_size(px(TYPE_BODY))
                     .text_color(hex(TEXT_PRIMARY))
                     .child("Chat での推論"),
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(hex(TEXT_DIM))
                     .child(
                         "チャット送信時の推論先。「Ollama」は HTTP サーバ、「GGUF/ONNX」は設定に追加したファイルを内蔵 llama.cpp runtime 経由で実行します。",
@@ -376,14 +376,14 @@ impl AppView {
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(hex(TEXT_MUTED))
                     .child(bundle_status),
             )
             .when(bundle_error.is_some(), |d| {
                 d.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(TYPE_CAPTION2))
                         .text_color(hex(ACCENT_ORANGE))
                         .whitespace_normal()
                         .child(bundle_error.clone().unwrap_or_default()),
@@ -404,7 +404,7 @@ impl AppView {
                         .gap(px(6.))
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(TYPE_CAPTION2))
                                 .text_color(hex(ACCENT_ORANGE))
                                 .child(format!(
                                     "llama-server 更新あり: {} → {}",
@@ -413,14 +413,14 @@ impl AppView {
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(TYPE_CAPTION2))
                                 .text_color(hex(TEXT_MUTED))
                                 .whitespace_normal()
                                 .child("比較先: ggml-org/llama.cpp（同梱 runtime は Prism + upstream フォールバック構成）"),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(TYPE_CAPTION2))
                                 .text_color(hex(TEXT_MUTED))
                                 .whitespace_normal()
                                 .child(notice.release_url.clone()),
@@ -433,7 +433,7 @@ impl AppView {
                                 .border_1()
                                 .border_color(hex(CONTROL_BORDER))
                                 .rounded(px(6.))
-                                .text_size(px(11.))
+                                .text_size(px(TYPE_CAPTION2))
                                 .text_color(hex(TEXT_SECONDARY))
                                 .cursor_pointer()
                                 .on_mouse_down(
@@ -461,13 +461,13 @@ impl AppView {
                             .gap(px(4.))
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_SECONDARY))
                                     .child("推論先"),
                             )
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child(source_label),
                             ),
@@ -480,7 +480,7 @@ impl AppView {
                             .border_1()
                             .border_color(hex(CONTROL_BORDER))
                             .rounded(px(6.))
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_SECONDARY))
                             .cursor_pointer()
                             .on_mouse_down(
@@ -499,13 +499,13 @@ impl AppView {
                     .gap(px(8.))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(px(TYPE_CAPTION1))
                             .text_color(hex(TEXT_SECONDARY))
                             .child("ネイティブ GGUF / ONNX（読み込み済み一覧から選択）"),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .child(self.chat_local_weights_summary()),
                     )
@@ -521,7 +521,7 @@ impl AppView {
                                     .border_1()
                                     .border_color(hex(CONTROL_BORDER))
                                     .rounded(px(6.))
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(hex(TEXT_SECONDARY))
                                     .cursor_pointer()
                                     .on_mouse_down(
@@ -540,7 +540,7 @@ impl AppView {
                                     .border_1()
                                     .border_color(hex(CONTROL_BORDER))
                                     .rounded(px(6.))
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(hex(TEXT_SECONDARY))
                                     .cursor_pointer()
                                     .on_mouse_down(
@@ -560,7 +560,7 @@ impl AppView {
                     .gap(px(6.))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(px(TYPE_CAPTION1))
                             .text_color(hex(TEXT_SECONDARY))
                             .child("クラウド API モデル ID（クリックで選択）"),
                     )
@@ -571,7 +571,7 @@ impl AppView {
                             .border_1()
                             .border_color(hex(BORDER))
                             .rounded(px(6.))
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .child(api_disp),
                     )
@@ -587,7 +587,7 @@ impl AppView {
                                     .py(px(5.))
                                     .bg(hex(ACCENT_BLUE))
                                     .rounded(px(6.))
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(hex(0xFFFFFF))
                                     .cursor_pointer()
                                     .on_mouse_down(
@@ -604,7 +604,7 @@ impl AppView {
                                     .py(px(5.))
                                     .bg(hex(BORDER))
                                     .rounded(px(6.))
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .cursor_pointer()
                                     .on_mouse_down(
@@ -624,7 +624,7 @@ impl AppView {
                     .gap(px(6.))
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(px(TYPE_CAPTION1))
                             .text_color(hex(TEXT_SECONDARY))
                             .child("Ollama モデル名"),
                     )
@@ -635,7 +635,7 @@ impl AppView {
                             .border_1()
                             .border_color(hex(BORDER))
                             .rounded(px(6.))
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_MUTED))
                             .child(ollama_disp),
                     )
@@ -649,7 +649,7 @@ impl AppView {
                                     .py(px(5.))
                                     .bg(hex(ACCENT_BLUE))
                                     .rounded(px(6.))
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(hex(0xFFFFFF))
                                     .cursor_pointer()
                                     .on_mouse_down(
@@ -666,7 +666,7 @@ impl AppView {
                                     .py(px(5.))
                                     .bg(hex(BORDER))
                                     .rounded(px(6.))
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .cursor_pointer()
                                     .on_mouse_down(
@@ -719,7 +719,7 @@ impl AppView {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .text_color(hex(TEXT_PRIMARY))
                             .child(label),
                     )
@@ -743,7 +743,7 @@ impl AppView {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(14.))
+                                            .text_size(px(TYPE_BODY))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child("−"),
                                     ),
@@ -751,7 +751,7 @@ impl AppView {
                             .child(
                                 div()
                                     .min_w(px(52.))
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_MUTED))
                                     .text_center()
                                     .child(value_str),
@@ -771,7 +771,7 @@ impl AppView {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(14.))
+                                            .text_size(px(TYPE_BODY))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child("+"),
                                     ),
@@ -780,7 +780,7 @@ impl AppView {
             )
             .child(div().h(px(4.)).w_full().rounded(px(2.)).bg(hex(CONTROL_BG)));
         if let Some(h) = hint {
-            col = col.child(div().text_size(px(11.)).text_color(hex(TEXT_DIM)).child(h));
+            col = col.child(div().text_size(px(TYPE_CAPTION2)).text_color(hex(TEXT_DIM)).child(h));
         }
         col
     }

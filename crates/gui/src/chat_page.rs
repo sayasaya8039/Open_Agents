@@ -5,16 +5,24 @@
 //! - 可視メッセージ数を制限（末尾 MAX_VISIBLE_MESSAGES 件）
 //! - ストリーミングの notify バッチ化は呼び出し側（main.rs）で制御
 
+use std::cell::RefCell;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
-use crate::chat_markdown::render_markdown_blocks;
+use crate::chat_markdown::{render_markdown_blocks_cached, MarkdownCache};
 use crate::chat_session::{ChatMsg, SessionStore};
 use crate::i18n;
 use crate::{
     hex, hex_a, ACCENT_BLUE, ACCENT_ORANGE, BG, BORDER, HOVER_BG, PANEL_BG, SIDEBAR_BG, TEXT_DIM,
-    TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
+    TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, TYPE_BODY, TYPE_CAPTION1, TYPE_CAPTION2,
 };
+
+thread_local! {
+    /// Markdown パース結果のフレーム間キャッシュ。
+    /// 完了済みメッセージは毎フレーム再パースせずキャッシュヒットする。
+    static MD_CACHE: RefCell<MarkdownCache> = RefCell::new(MarkdownCache::new());
+}
 
 /// 描画するメッセージの最大件数（パフォーマンス対策）
 const MAX_VISIBLE_MESSAGES: usize = 60;
@@ -96,7 +104,7 @@ fn render_session_sidebar(
                     .py(px(7.))
                     .bg(hex(ACCENT_BLUE))
                     .rounded(px(999.))
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(hex(0xFFFFFF))
                     .cursor_pointer()
                     .hover(|d| d.bg(hex_a(ACCENT_BLUE, 0.85)))
@@ -140,7 +148,7 @@ fn render_session_sidebar(
                                 .py(px(6.))
                                 .child(
                                     div()
-                                        .text_size(px(10.))
+                                        .text_size(px(TYPE_CAPTION2))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(hex(TEXT_DIM))
                                         .child(label.to_string()),
@@ -148,7 +156,7 @@ fn render_session_sidebar(
                                 .when(!chat_pending, |d| {
                                     d.child(
                                         div()
-                                            .text_size(px(10.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .cursor_pointer()
                                             .hover(|d| d.text_color(hex(TEXT_PRIMARY)))
@@ -183,7 +191,7 @@ fn render_session_sidebar(
                                         .px(px(8.))
                                         .py(px(6.))
                                         .rounded(px(6.))
-                                        .text_size(px(12.))
+                                        .text_size(px(TYPE_CAPTION1))
                                         .text_color(if is_active {
                                             hex(TEXT_PRIMARY)
                                         } else {
@@ -234,7 +242,7 @@ fn render_session_sidebar(
                                                             .py(px(4.))
                                                             .rounded(px(6.))
                                                             .bg(hex(ACCENT_BLUE))
-                                                            .text_size(px(11.))
+                                                            .text_size(px(TYPE_CAPTION2))
                                                             .text_color(hex(0xFFFFFF))
                                                             .cursor_pointer()
                                                             .child(i18n::save())
@@ -255,7 +263,7 @@ fn render_session_sidebar(
                                                             .bg(hex(PANEL_BG))
                                                             .border_1()
                                                             .border_color(hex(BORDER))
-                                                            .text_size(px(11.))
+                                                            .text_size(px(TYPE_CAPTION2))
                                                             .text_color(hex(TEXT_MUTED))
                                                             .cursor_pointer()
                                                             .hover(|d| d.bg(hex(HOVER_BG)))
@@ -280,7 +288,7 @@ fn render_session_sidebar(
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
-                                                    .text_size(px(14.))
+                                                    .text_size(px(TYPE_BODY))
                                                     .text_color(hex_a(TEXT_MUTED, 0.3))
                                                     .cursor_pointer()
                                                     .hover(|d| d.bg(hex(PANEL_BG)).text_color(hex(TEXT_PRIMARY)))
@@ -382,7 +390,7 @@ fn render_session_sidebar(
                         .px(px(8.))
                         .py(px(6.))
                         .rounded(px(6.))
-                        .text_size(px(12.))
+                        .text_size(px(TYPE_CAPTION1))
                         .text_color(hex(TEXT_SECONDARY))
                         .cursor_pointer()
                         .hover(|d| d.bg(hex(HOVER_BG)))
@@ -403,7 +411,7 @@ fn render_session_sidebar(
                         .px(px(8.))
                         .py(px(6.))
                         .rounded(px(6.))
-                        .text_size(px(12.))
+                        .text_size(px(TYPE_CAPTION1))
                         .text_color(hex(TEXT_SECONDARY))
                         .cursor_pointer()
                         .hover(|d| d.bg(hex(HOVER_BG)))
@@ -428,7 +436,7 @@ fn session_menu_item(label: &'static str, destructive: bool) -> Div {
         .w_full()
         .px(px(10.))
         .py(px(8.))
-        .text_size(px(11.))
+        .text_size(px(TYPE_CAPTION2))
         .text_color(if destructive {
             hex(ACCENT_ORANGE)
         } else {
@@ -484,7 +492,7 @@ fn render_chat_main(
                         .bg(hex(PANEL_BG))
                         .border_1()
                         .border_color(hex(BORDER))
-                        .text_size(px(10.))
+                        .text_size(px(TYPE_CAPTION2))
                         .text_color(hex(TEXT_MUTED))
                         .cursor_pointer()
                         .hover(|d| d.bg(hex(HOVER_BG)))
@@ -529,7 +537,7 @@ fn render_chat_main(
                                     .flex_col()
                                     .child(
                                         div()
-                                            .text_size(px(10.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_DIM))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .mb(px(10.))
@@ -572,7 +580,7 @@ fn render_chat_main(
                                         .bg(hex(PANEL_BG))
                                         .border_1()
                                         .border_color(hex(BORDER))
-                                        .text_size(px(11.))
+                                        .text_size(px(TYPE_CAPTION2))
                                         .text_color(hex(TEXT_MUTED))
                                         .child(i18n::older_messages(skip)),
                                 ),
@@ -635,7 +643,7 @@ fn render_message(
                 d.child(
                     div()
                         .ml(px(30.))
-                        .text_size(px(11.))
+                        .text_size(px(TYPE_CAPTION2))
                         .text_color(hex(TEXT_MUTED))
                         .child(model_label),
                 )
@@ -655,7 +663,7 @@ fn render_message(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(px(10.))
+                        .text_size(px(TYPE_CAPTION2))
                         .text_color(hex(0xFFFFFF))
                         .child("U")
                         .into_any_element()
@@ -668,14 +676,14 @@ fn render_message(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(px(10.))
+                        .text_size(px(TYPE_CAPTION2))
                         .text_color(hex(0xFFFFFF))
                         .child("✦")
                         .into_any_element()
                 })
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(TYPE_CAPTION2))
                         .text_color(hex(TEXT_DIM))
                         .child(if is_user { i18n::role_you() } else { i18n::role_agent() }),
                 ),
@@ -701,7 +709,7 @@ fn render_message(
                             .p(px(10.))
                             .bg(hex(PANEL_BG))
                             .rounded_r(px(4.))
-                            .text_size(px(12.))
+                            .text_size(px(TYPE_CAPTION1))
                             .text_color(hex(TEXT_SECONDARY))
                             .whitespace_normal()
                             .child(thinking_text),
@@ -732,7 +740,9 @@ fn render_message(
                     this.chat_copy_message(content_for_right_click.clone(), cx);
                 }),
             )
-            .children(render_markdown_blocks(&msg.content, cx)),
+            .children(MD_CACHE.with(|cache| {
+                render_markdown_blocks_cached(&msg.content, &mut cache.borrow_mut(), cx)
+            })),
     );
 
     if !is_user && !metric_labels.is_empty() {
@@ -854,7 +864,7 @@ fn render_input_bar(
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_size(px(12.))
+                                .text_size(px(TYPE_CAPTION1))
                                 .text_color(hex(0xFFFFFF))
                                 .cursor(if send_disabled {
                                     CursorStyle::OperationNotAllowed
@@ -890,7 +900,7 @@ fn render_input_bar(
                                         .py(px(3.))
                                         .bg(hex_a(ACCENT_BLUE, 0.15))
                                         .rounded(px(4.))
-                                        .text_size(px(10.))
+                                        .text_size(px(TYPE_CAPTION2))
                                         .text_color(hex(ACCENT_BLUE))
                                         .cursor_pointer()
                                         .hover(|d| d.bg(hex_a(ACCENT_BLUE, 0.3)))
@@ -913,7 +923,7 @@ fn render_input_bar(
                                             .py(px(2.))
                                             .rounded(px(4.))
                                             .bg(hex(BORDER))
-                                            .text_size(px(10.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .cursor_pointer()
                                             .hover(|d| d.bg(hex(HOVER_BG)))
@@ -932,7 +942,7 @@ fn render_input_bar(
                                 .flex()
                                 .items_center()
                                 .gap(px(4.))
-                                .text_size(px(10.))
+                                .text_size(px(TYPE_CAPTION2))
                                 .text_color(hex(TEXT_MUTED))
                                 .child(
                                     div()
@@ -969,7 +979,7 @@ fn suggestion_chip(label: &str) -> impl IntoElement {
         .border_1()
         .border_color(hex(BORDER))
         .rounded(px(8.))
-        .text_size(px(12.))
+        .text_size(px(TYPE_CAPTION1))
         .text_color(hex(TEXT_SECONDARY))
         .cursor_pointer()
         .hover(|d| d.bg(hex(HOVER_BG)))
@@ -978,7 +988,7 @@ fn suggestion_chip(label: &str) -> impl IntoElement {
         .gap(px(6.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(px(TYPE_BODY))
                 .text_color(hex(ACCENT_BLUE))
                 .child("⚡"),
         )
@@ -1022,7 +1032,7 @@ fn render_metric_chip(label: String) -> impl IntoElement {
         .border_1()
         .border_color(hex(BORDER))
         .rounded(px(999.))
-        .text_size(px(10.))
+        .text_size(px(TYPE_CAPTION2))
         .text_color(hex(TEXT_SECONDARY))
         .child(label)
 }
@@ -1035,7 +1045,7 @@ fn render_action_button(
         .w(px(24.))
         .h(px(24.))
         .rounded(px(999.))
-        .text_size(px(13.))
+        .text_size(px(TYPE_BODY))
         .text_color(hex_a(TEXT_MUTED, 0.35))
         .cursor_pointer()
         .hover(|d| d.bg(hex(HOVER_BG)).text_color(hex(TEXT_PRIMARY)))

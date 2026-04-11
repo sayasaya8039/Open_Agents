@@ -34,6 +34,13 @@ pub const FIGMA_ICON_GREEN: u32 = 0x22c55e;
 pub const CONTROL_BG: u32 = 0x48484a; // aligned with new BORDER
 pub const CONTROL_BORDER: u32 = 0x545458; // aligned with new TEXT_DIM
 
+// ── macOS Sonoma Type Scale ──────────────────────────────
+pub const TYPE_CAPTION2: f32 = 11.0;
+pub const TYPE_CAPTION1: f32 = 12.0;
+pub const TYPE_BODY: f32 = 13.0;
+pub const TYPE_HEADLINE: f32 = 15.0;
+pub const TYPE_TITLE3: f32 = 17.0;
+
 pub fn hex(c: u32) -> Hsla {
     let r = ((c >> 16) & 0xFF) as f32 / 255.0;
     let g = ((c >> 8) & 0xFF) as f32 / 255.0;

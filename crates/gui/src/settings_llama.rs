@@ -180,7 +180,7 @@ impl AppView {
                     .bg(hex(PANEL_BG))
                     .border_1()
                     .border_color(hex(BORDER))
-                    .text_size(px(11.))
+                    .text_size(px(TYPE_CAPTION2))
                     .text_color(hex(TEXT_SECONDARY))
                     .child(gpu_summary),
             )
@@ -239,13 +239,13 @@ impl AppView {
                                         .gap(px(4.))
                                         .child(
                                             div()
-                                                .text_size(px(12.))
+                                                .text_size(px(TYPE_CAPTION1))
                                                 .text_color(hex(TEXT_PRIMARY))
                                                 .child(preset.label()),
                                         )
                                         .child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(px(TYPE_CAPTION2))
                                                 .text_color(hex(TEXT_MUTED))
                                                 .whitespace_normal()
                                                 .child(preset.subtitle()),
@@ -263,7 +263,7 @@ impl AppView {
                                         } else {
                                             hex(0x2c2c2c)
                                         })
-                                        .text_size(px(10.))
+                                        .text_size(px(TYPE_CAPTION2))
                                         .text_color(if is_selected {
                                             hex(TEXT_PRIMARY)
                                         } else if is_available {
@@ -311,7 +311,7 @@ impl AppView {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .text_color(hex(TEXT_PRIMARY))
                             .child(label),
                     )
@@ -335,7 +335,7 @@ impl AppView {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(14.))
+                                            .text_size(px(TYPE_BODY))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child("−"),
                                     ),
@@ -343,7 +343,7 @@ impl AppView {
                             .child(
                                 div()
                                     .min_w(px(52.))
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_MUTED))
                                     .text_center()
                                     .child(value_str),
@@ -363,7 +363,7 @@ impl AppView {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(14.))
+                                            .text_size(px(TYPE_BODY))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child("+"),
                                     ),
@@ -372,7 +372,7 @@ impl AppView {
             )
             .child(div().h(px(4.)).w_full().rounded(px(2.)).bg(hex(CONTROL_BG)));
         if let Some(h) = hint {
-            col = col.child(div().text_size(px(11.)).text_color(hex(TEXT_DIM)).child(h));
+            col = col.child(div().text_size(px(TYPE_CAPTION2)).text_color(hex(TEXT_DIM)).child(h));
         }
         col
     }

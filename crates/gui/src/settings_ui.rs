@@ -65,13 +65,13 @@ impl AppView {
             .mb(px(16.))
             .child(
                 div()
-                    .text_size(px(18.))
+                    .text_size(px(TYPE_TITLE3))
                     .text_color(hex(icon_color))
                     .child(icon.to_string()),
             )
             .child(
                 div()
-                    .text_size(px(16.))
+                    .text_size(px(TYPE_HEADLINE))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(hex(TEXT_PRIMARY))
                     .child(title.to_string()),
@@ -87,7 +87,7 @@ impl AppView {
             .border_1()
             .border_color(hex(CONTROL_BORDER))
             .rounded(px(6.))
-            .text_size(px(12.))
+            .text_size(px(TYPE_CAPTION1))
             .text_color(hex(TEXT_SECONDARY))
             .child(label.to_string())
     }
@@ -99,13 +99,13 @@ impl AppView {
             .gap(px(4.))
             .child(
                 div()
-                    .text_size(px(13.))
+                    .text_size(px(TYPE_BODY))
                     .text_color(hex(TEXT_PRIMARY))
                     .child(title.to_string()),
             )
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(px(TYPE_CAPTION1))
                     .text_color(hex(TEXT_MUTED))
                     .child(subtitle.to_string()),
             )
@@ -216,7 +216,7 @@ impl AppView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(13.))
+                    .text_size(px(TYPE_BODY))
                     .text_color(hex(TEXT_SECONDARY))
                     .child("AI Coding Assistant"),
             )
@@ -256,7 +256,7 @@ impl AppView {
                                     .px(px(8.))
                                     .py(px(4.))
                                     .rounded(px(6.))
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_SECONDARY))
                                     .cursor_pointer()
                                     .hover(|d| d.bg(hex(HOVER_BG)))
@@ -271,13 +271,13 @@ impl AppView {
                             )
                             .child(
                                 div()
-                                    .text_size(px(16.))
+                                    .text_size(px(TYPE_HEADLINE))
                                     .text_color(hex(TEXT_SECONDARY))
                                     .child("⚙"),
                             )
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(px(TYPE_BODY))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child(i18n::settings()),
                             ),
@@ -340,7 +340,7 @@ impl AppView {
                                                     .gap(px(8.))
                                                     .child(
                                                         div()
-                                                            .text_size(px(13.))
+                                                            .text_size(px(TYPE_BODY))
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child(i18n::settings_model_file()),
                                                     )
@@ -357,7 +357,7 @@ impl AppView {
                                                             .border_1()
                                                             .border_color(hex(CONTROL_BORDER))
                                                             .rounded(px(8.))
-                                                            .text_size(px(12.))
+                                                            .text_size(px(TYPE_CAPTION1))
                                                             .text_color(hex(TEXT_SECONDARY))
                                                             .cursor_pointer()
                                                             .on_mouse_down(
@@ -376,7 +376,7 @@ impl AppView {
                                                     )
                                                     .child(
                                                         div()
-                                                            .text_size(px(11.))
+                                                            .text_size(px(TYPE_CAPTION2))
                                                             .text_color(hex(TEXT_DIM))
                                                             .child(self.settings_model_format_hint()),
                                                     ),
@@ -388,14 +388,14 @@ impl AppView {
                                                             .gap(px(8.))
                                                             .child(
                                                                 div()
-                                                                    .text_size(px(13.))
+                                                                    .text_size(px(TYPE_BODY))
                                                                     .text_color(hex(TEXT_PRIMARY))
                                                                     .child(i18n::settings_loaded_models()),
                                                             )
                                                             .when(self.settings_model_paths.is_empty(), |d| {
                                                                 d.child(
                                                                     div()
-                                                                        .text_size(px(11.))
+                                                                        .text_size(px(TYPE_CAPTION2))
                                                                         .text_color(hex(TEXT_DIM))
                                                                         .child(
                                                                             i18n::settings_loaded_models_hint(),
@@ -426,7 +426,7 @@ impl AppView {
                                                     .gap(px(16.))
                                                     .child(
                                                         div()
-                                                            .text_size(px(13.))
+                                                            .text_size(px(TYPE_BODY))
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child(i18n::settings_model_params()),
                                                     )
@@ -459,7 +459,7 @@ impl AppView {
                                                     .gap(px(16.))
                                                     .child(
                                                         div()
-                                                            .text_size(px(13.))
+                                                            .text_size(px(TYPE_BODY))
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child(i18n::settings_hardware()),
                                                     )
@@ -585,7 +585,7 @@ impl AppView {
                                                         div()
                                                             .min_w(px(0.))
                                                             .whitespace_normal()
-                                                            .text_size(px(12.))
+                                                            .text_size(px(TYPE_CAPTION1))
                                                             .text_color(hex(TEXT_MUTED))
                                                             .child(i18n::settings_api_keys_description()),
                                                     )
@@ -594,7 +594,7 @@ impl AppView {
                                                             div()
                                                                 .min_w(px(0.))
                                                                 .whitespace_normal()
-                                                                .text_size(px(11.))
+                                                                .text_size(px(TYPE_CAPTION2))
                                                                 .text_color(hex(ACCENT_ORANGE))
                                                                 .child(i18n::settings_extra_entries(extra_keys)),
                                                         )
@@ -608,7 +608,7 @@ impl AppView {
                                                     .gap(px(8.))
                                                     .child(
                                                         div()
-                                                            .text_size(px(13.))
+                                                            .text_size(px(TYPE_BODY))
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child(i18n::settings_registered_catalog()),
                                                     )
@@ -645,13 +645,13 @@ impl AppView {
                                                     .justify_between()
                                                     .child(
                                                         div()
-                                                            .text_size(px(12.))
+                                                            .text_size(px(TYPE_CAPTION1))
                                                             .text_color(hex(TEXT_MUTED))
                                                             .child(i18n::settings_version()),
                                                     )
                                                     .child(
                                                         div()
-                                                            .text_size(px(12.))
+                                                            .text_size(px(TYPE_CAPTION1))
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child(ver),
                                                     ),
@@ -663,13 +663,13 @@ impl AppView {
                                                     .justify_between()
                                                     .child(
                                                         div()
-                                                            .text_size(px(12.))
+                                                            .text_size(px(TYPE_CAPTION1))
                                                             .text_color(hex(TEXT_MUTED))
                                                             .child(i18n::settings_build()),
                                                     )
                                                     .child(
                                                         div()
-                                                            .text_size(px(12.))
+                                                            .text_size(px(TYPE_CAPTION1))
                                                             .text_color(hex(TEXT_PRIMARY))
                                                             .child("2026.04.05"),
                                                     ),
@@ -700,10 +700,10 @@ impl AppView {
                     .items_center()
                     .px(px(16.))
                     .gap(px(8.))
-                    .child(div().text_size(px(13.)).child("▶"))
+                    .child(div().text_size(px(TYPE_BODY)).child("▶"))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(TYPE_BODY))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(hex(TEXT_SECONDARY))
                             .child("Terminal"),
@@ -714,7 +714,7 @@ impl AppView {
                     .flex_1()
                     .p(px(16.))
                     .font_family("Cascadia Code")
-                    .text_size(px(12.))
+                    .text_size(px(TYPE_CAPTION1))
                     .text_color(hex(TEXT_PRIMARY))
                     .overflow_hidden()
                     .child(

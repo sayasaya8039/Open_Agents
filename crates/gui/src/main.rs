@@ -35,6 +35,41 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{mpsc, OnceLock};
+
+// ============================================================
+// InferencePool: std-only スレッドプール（推論タスク用）
+// ============================================================
+
+struct InferencePool {
+    sender: mpsc::Sender<Box<dyn FnOnce() + Send + 'static>>,
+}
+
+impl InferencePool {
+    fn spawn<F: FnOnce() + Send + 'static>(&self, f: F) {
+        let _ = self.sender.send(Box::new(f));
+    }
+}
+
+fn inference_pool() -> &'static InferencePool {
+    static POOL: OnceLock<InferencePool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let n_workers = std::thread::available_parallelism()
+            .map(|n| n.get().min(8))
+            .unwrap_or(4);
+        let (tx, rx) = mpsc::channel::<Box<dyn FnOnce() + Send + 'static>>();
+        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+        for _ in 0..n_workers {
+            let rx = rx.clone();
+            std::thread::spawn(move || {
+                while let Ok(task) = rx.lock().unwrap().recv() {
+                    task();
+                }
+            });
+        }
+        InferencePool { sender: tx }
+    })
+}
 
 use project_explorer::{
     absolute_path, default_expanded_set, default_sample_tree, expanded_first_level,
@@ -1032,7 +1067,7 @@ impl AppView {
                 let max_steps = react_mode.max_steps();
                 let hw = hardware_params.clone();
                 let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
-                std::thread::spawn(move || {
+                inference_pool().spawn(move || {
                     run_react_loop(
                         &path,
                         &api_messages,
@@ -1103,7 +1138,7 @@ impl AppView {
                 let branches = tot_mode.branch_count();
                 let hw = hardware_params.clone();
                 let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
-                std::thread::spawn(move || {
+                inference_pool().spawn(move || {
                     run_tree_of_thoughts(
                         &path,
                         &api_messages,
@@ -1176,7 +1211,7 @@ impl AppView {
                 let vote_count = self_consistency.vote_count();
                 let hw = hardware_params.clone();
                 let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
-                std::thread::spawn(move || {
+                inference_pool().spawn(move || {
                     let _ = tx.send_blocking(ChatStreamEvent::ContentDelta(format!(
                         "Self-Consistency: {vote_count} 回の推論を実行中…\n\n"
                     )));
@@ -1286,7 +1321,7 @@ impl AppView {
             }
             Ok(chat_client::ChatBackend::LlamaCppLocal { path }) if streaming_enabled => {
                 let (tx, rx) = smol::channel::unbounded::<ChatStreamEvent>();
-                std::thread::spawn(move || {
+                inference_pool().spawn(move || {
                     let result = llama_cpp_chat::stream_llama_cpp_chat_blocking(
                         &path,
                         &api_messages,

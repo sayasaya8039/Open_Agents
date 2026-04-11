@@ -105,14 +105,14 @@ impl AppView {
                             .gap(px(8.))
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child(title),
                             )
                             .when(has_key, |d| {
                                 d.child(
                                     div()
-                                        .text_size(px(12.))
+                                        .text_size(px(TYPE_CAPTION1))
                                         .text_color(hex(FIGMA_ICON_GREEN))
                                         .child("✓"),
                                 )
@@ -124,7 +124,7 @@ impl AppView {
                                         .py(px(1.))
                                         .bg(hex_a(TRAFFIC_GREEN, 0.2))
                                         .rounded(px(3.))
-                                        .text_size(px(10.))
+                                        .text_size(px(TYPE_CAPTION2))
                                         .text_color(hex(TRAFFIC_GREEN))
                                         .child("ENV"),
                                 )
@@ -137,7 +137,7 @@ impl AppView {
                             .gap(px(2.))
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(hex(TEXT_MUTED))
                                     .child(tag),
                             )
@@ -146,7 +146,7 @@ impl AppView {
                                     format!("← ${name}").into();
                                 d.child(
                                     div()
-                                        .text_size(px(10.))
+                                        .text_size(px(TYPE_CAPTION2))
                                         .text_color(hex(TEXT_DIM))
                                         .child(label),
                                 )
@@ -154,13 +154,13 @@ impl AppView {
                     )
                     .child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_DIM))
                             .child(kind_line),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .font_family("Cascadia Code")
                             .text_color(hex(TEXT_SECONDARY))
                             .child(masked),
@@ -177,7 +177,7 @@ impl AppView {
                             .py(px(4.))
                             .rounded(px(6.))
                             .bg(hex(CONTROL_BG))
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_SECONDARY))
                             .cursor_pointer()
                             .on_mouse_down(
@@ -194,7 +194,7 @@ impl AppView {
                             .py(px(4.))
                             .rounded(px(6.))
                             .bg(hex(CONTROL_BG))
-                            .text_size(px(11.))
+                            .text_size(px(TYPE_CAPTION2))
                             .text_color(hex(TEXT_SECONDARY))
                             .cursor_pointer()
                             .on_mouse_down(
@@ -212,7 +212,7 @@ impl AppView {
                                 .py(px(4.))
                                 .rounded(px(6.))
                                 .bg(hex_a(TRAFFIC_RED, 0.2))
-                                .text_size(px(11.))
+                                .text_size(px(TYPE_CAPTION2))
                                 .text_color(hex(TRAFFIC_RED))
                                 .cursor_pointer()
                                 .on_mouse_down(
@@ -241,7 +241,7 @@ impl AppView {
                         .pb(px(4.))
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(TYPE_CAPTION2))
                                 .text_color(hex(TEXT_MUTED))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(api_key_prefs::translate_group(def.group)),
@@ -369,7 +369,7 @@ impl AppView {
                                     } else {
                                         hex(CONTROL_BG)
                                     })
-                                    .text_size(px(11.))
+                                    .text_size(px(TYPE_CAPTION2))
                                     .text_color(if running {
                                         hex(TEXT_PRIMARY)
                                     } else {
@@ -400,13 +400,13 @@ impl AppView {
                             .justify_between()
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(px(TYPE_BODY))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child("ポート"),
                             )
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(TEXT_SECONDARY))
                                     .child(port_label),
                             ),
@@ -420,7 +420,7 @@ impl AppView {
                             .gap(px(8.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(px(TYPE_BODY))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child("ベース URL"),
                             )
@@ -431,7 +431,7 @@ impl AppView {
                                     .gap(px(6.))
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child(full_base_url.clone()),
                                     )
@@ -441,7 +441,7 @@ impl AppView {
                                             .py(px(2.))
                                             .rounded(px(4.))
                                             .bg(hex(CONTROL_BG))
-                                            .text_size(px(10.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .cursor_pointer()
                                             .on_mouse_down(
@@ -467,7 +467,7 @@ impl AppView {
                             .gap(px(8.))
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(px(TYPE_BODY))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child("API キー"),
                             )
@@ -478,7 +478,7 @@ impl AppView {
                                     .gap(px(6.))
                                     .child(
                                         div()
-                                            .text_size(px(11.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_SECONDARY))
                                             .child(masked_key),
                                     )
@@ -489,7 +489,7 @@ impl AppView {
                                             .py(px(2.))
                                             .rounded(px(4.))
                                             .bg(hex(CONTROL_BG))
-                                            .text_size(px(10.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .cursor_pointer()
                                             .on_mouse_down(
@@ -512,7 +512,7 @@ impl AppView {
                                             .py(px(2.))
                                             .rounded(px(4.))
                                             .bg(hex(CONTROL_BG))
-                                            .text_size(px(10.))
+                                            .text_size(px(TYPE_CAPTION2))
                                             .text_color(hex(TEXT_MUTED))
                                             .cursor_pointer()
                                             .on_mouse_down(
@@ -540,13 +540,13 @@ impl AppView {
                             .justify_between()
                             .child(
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(px(TYPE_BODY))
                                     .text_color(hex(TEXT_PRIMARY))
                                     .child("ステータス"),
                             )
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(TYPE_CAPTION1))
                                     .text_color(hex(status_color))
                                     .child(status_label),
                             ),
