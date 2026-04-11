@@ -373,8 +373,44 @@ pub fn ensure_server(
     Err(failures.join("\n\n"))
 }
 
+/// ローカル GGUF 向けメッセージ正規化。
+/// Gemma 4 等の chat template は user/assistant の厳密な交互パターンを要求するため:
+/// 1. system メッセージを最初の user メッセージに結合
+/// 2. 連続する同一ロールのメッセージを結合
+/// 3. 最後のメッセージが user であることを保証
 fn messages_to_openai_json(messages: &[(String, String)]) -> Vec<Value> {
-    messages
+    // system メッセージを収集し、user/assistant のみに正規化
+    let mut system_parts: Vec<&str> = Vec::new();
+    let mut normalized: Vec<(String, String)> = Vec::new();
+
+    for (role, content) in messages {
+        if role == "system" {
+            system_parts.push(content);
+            continue;
+        }
+        // 連続する同一ロールのメッセージを結合
+        if let Some(last) = normalized.last_mut() {
+            if last.0 == *role {
+                last.1.push('\n');
+                last.1.push_str(content);
+                continue;
+            }
+        }
+        normalized.push((role.clone(), content.clone()));
+    }
+
+    // system 内容を最初の user メッセージに結合
+    if !system_parts.is_empty() {
+        let system_text = system_parts.join("\n");
+        if let Some(first_user) = normalized.iter_mut().find(|(r, _)| r == "user") {
+            first_user.1 = format!("{}\n\n{}", system_text, first_user.1);
+        } else {
+            // user メッセージがない場合は user として挿入
+            normalized.insert(0, ("user".into(), system_text));
+        }
+    }
+
+    normalized
         .iter()
         .map(|(role, content)| {
             json!({
