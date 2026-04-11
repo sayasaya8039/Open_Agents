@@ -167,18 +167,23 @@ pub fn complete_llama_cpp_chat_blocking(
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, false, max_tokens);
     let body = chat_completion_request_body(&model_id, messages, temperature, max_tokens, false);
-    let resp = ureq::post(&url)
+    let resp = match ureq::post(&url)
         .set("Content-Type", "application/json")
         .timeout(Duration::from_secs(60))
         .send_json(body)
-        .map_err(|e| format!("llama.cpp リクエスト失敗: {e}"))?;
-    let status = resp.status();
+    {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            return Err(format!("llama.cpp リクエスト失敗: HTTP {code}: {body}"));
+        }
+        Err(e) => {
+            return Err(format!("llama.cpp リクエスト失敗: {e}"));
+        }
+    };
     let text = resp
         .into_string()
         .map_err(|e| format!("llama.cpp 応答本文の読み取りに失敗しました: {e}"))?;
-    if status >= 400 {
-        return Err(format!("llama.cpp HTTP {status}: {text}"));
-    }
     extract_openai_message(&text, model_label_from_path(model_path), started.elapsed())
 }
 
@@ -202,19 +207,23 @@ where
     let url = chat_completions_url(&base_url);
     log_chat_template_mode(model_path, true, max_tokens);
     let body = chat_completion_request_body(&model_id, messages, temperature, max_tokens, true);
-    let resp = ureq::post(&url)
+    let resp = match ureq::post(&url)
         .set("Content-Type", "application/json")
         .set("Accept", "text/event-stream")
         .timeout(Duration::from_secs(120))
         .send_json(body)
-        .map_err(|e| format!("llama.cpp ストリーミングリクエスト失敗: {e}"))?;
-    let status = resp.status();
-    if status >= 400 {
-        let text = resp
-            .into_string()
-            .map_err(|e| format!("llama.cpp エラー本文の読み取りに失敗しました: {e}"))?;
-        return Err(format!("llama.cpp HTTP {status}: {text}"));
-    }
+    {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            return Err(format!(
+                "llama.cpp ストリーミングリクエスト失敗: HTTP {code}: {body}"
+            ));
+        }
+        Err(e) => {
+            return Err(format!("llama.cpp ストリーミングリクエスト失敗: {e}"));
+        }
+    };
     let reader = resp.into_reader();
     read_streaming_response(
         reader,
