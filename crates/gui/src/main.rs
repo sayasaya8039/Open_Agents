@@ -20,6 +20,11 @@ mod native_chat;
 mod project_explorer;
 mod reasoning;
 mod session_title_editor;
+mod settings_api;
+mod settings_general;
+mod settings_hf;
+mod settings_llama;
+mod settings_model;
 mod settings_ui;
 mod workspace_prefs;
 

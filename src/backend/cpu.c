@@ -105,13 +105,136 @@ static bool cpu_get_device_info(oag_backend_t* be, oag_device_info_t* info) {
 }
 
 // ============================================================
+// Multi-threaded matmul (row-block parallel + AVX2/FMA tiled)
+// ============================================================
+
+#define MATMUL_TILE 64
+#define MATMUL_MT_THRESHOLD 4096  // M*K*N >= threshold でマルチスレッド化
+
+typedef struct {
+    const float* A;
+    const float* B;
+    float*       C;
+    int64_t      M, K, N;
+    int64_t      row_start;
+    int64_t      row_end;
+} matmul_arg_t;
+
+static void matmul_tile_rows(const float* A, const float* B, float* C,
+                             int64_t row_start, int64_t row_end,
+                             int64_t K, int64_t N) {
+    // 担当行を0初期化
+    memset(C + row_start * N, 0, (size_t)(row_end - row_start) * N * sizeof(float));
+
+    for (int64_t ii = row_start; ii < row_end; ii += MATMUL_TILE) {
+        for (int64_t jj = 0; jj < N; jj += MATMUL_TILE) {
+            for (int64_t kk = 0; kk < K; kk += MATMUL_TILE) {
+                int64_t i_end = (ii + MATMUL_TILE < row_end) ? ii + MATMUL_TILE : row_end;
+                int64_t j_end = (jj + MATMUL_TILE < N) ? jj + MATMUL_TILE : N;
+                int64_t k_end = (kk + MATMUL_TILE < K) ? kk + MATMUL_TILE : K;
+
+                for (int64_t i = ii; i < i_end; i++) {
+                    for (int64_t k = kk; k < k_end; k++) {
+                        float a_ik = A[i * K + k];
+                        int64_t j = jj;
+#ifdef __AVX2__
+                        __m256 va = _mm256_set1_ps(a_ik);
+                        for (; j + 8 <= j_end; j += 8) {
+                            __m256 vb = _mm256_loadu_ps(&B[k * N + j]);
+                            __m256 vc = _mm256_loadu_ps(&C[i * N + j]);
+                            vc = _mm256_fmadd_ps(va, vb, vc);
+                            _mm256_storeu_ps(&C[i * N + j], vc);
+                        }
+#endif
+                        for (; j < j_end; j++) {
+                            C[i * N + j] += a_ik * B[k * N + j];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#ifdef _WIN32
+static DWORD WINAPI matmul_thread_fn(LPVOID param) {
+    matmul_arg_t* arg = (matmul_arg_t*)param;
+    matmul_tile_rows(arg->A, arg->B, arg->C,
+                     arg->row_start, arg->row_end, arg->K, arg->N);
+    return 0;
+}
+#endif
+
+// ============================================================
 // Core operations
 // ============================================================
 
 static void cpu_matmul(oag_backend_t* be, oag_tensor_t* dst,
                        const oag_tensor_t* a, const oag_tensor_t* b) {
-    (void)be;
+    cpu_ctx_t* ctx = (cpu_ctx_t*)be->ctx;
+    int64_t M = a->shape[0];
+    int64_t K = a->shape[1];
+    int64_t N = b->shape[1];
+
+    // 小さい行列はシングルスレッドで処理
+    int n_threads = (ctx && ctx->n_threads > 1) ? ctx->n_threads : 1;
+    if (n_threads > 16) n_threads = 16;  // 上限キャップ
+    if (M < n_threads) n_threads = (int)M;
+    if ((int64_t)M * K * N < MATMUL_MT_THRESHOLD || n_threads <= 1) {
+        oag_tensor_matmul(dst, a, b);
+        return;
+    }
+
+#ifdef _WIN32
+    // マルチスレッド matmul: M 行を n_threads ブロックに分割
+    int64_t rows_per = M / n_threads;
+    int64_t extra    = M % n_threads;
+
+    // スレッド数分の引数 + ハンドル（スタック確保、ヒープ不要）
+    matmul_arg_t args[16];
+    HANDLE       handles[16];
+    int          spawned = 0;
+
+    int64_t row = 0;
+    for (int t = 0; t < n_threads; t++) {
+        args[t].A = a->data;
+        args[t].B = b->data;
+        args[t].C = dst->data;
+        args[t].M = M;
+        args[t].K = K;
+        args[t].N = N;
+        args[t].row_start = row;
+        args[t].row_end   = row + rows_per + (t < extra ? 1 : 0);
+        row = args[t].row_end;
+
+        if (t == n_threads - 1) {
+            // 最後のブロックは現スレッドで実行（スレッド生成コスト削減）
+            matmul_tile_rows(a->data, b->data, dst->data,
+                             args[t].row_start, args[t].row_end, K, N);
+        } else {
+            handles[spawned] = CreateThread(NULL, 0, matmul_thread_fn,
+                                            &args[t], 0, NULL);
+            if (handles[spawned]) {
+                spawned++;
+            } else {
+                // スレッド生成失敗: 現スレッドで処理
+                matmul_tile_rows(a->data, b->data, dst->data,
+                                 args[t].row_start, args[t].row_end, K, N);
+            }
+        }
+    }
+
+    // 全ワーカースレッドの完了を待機
+    if (spawned > 0) {
+        WaitForMultipleObjects(spawned, handles, TRUE, INFINITE);
+        for (int i = 0; i < spawned; i++) {
+            CloseHandle(handles[i]);
+        }
+    }
+#else
+    // 非 Windows: シングルスレッドフォールバック
     oag_tensor_matmul(dst, a, b);
+#endif
 }
 
 static void cpu_matmul_q4(oag_backend_t* be, oag_tensor_t* dst,

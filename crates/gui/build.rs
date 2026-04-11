@@ -44,11 +44,21 @@ fn main() {
     println!("cargo:rerun-if-changed={}", bundled_runtime_dir.display());
     sync_bundled_llama_runtime(bundled_runtime_dir);
 
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    build
         .files(&c_sources)
         .include(src_dir)
         .std("c11")
         .opt_level(3)
+        .warnings(false); // コンパイル高速化: 警告解析をスキップ
+
+    // zig cc 対応: ZIG_CC 環境変数 or CC 環境変数で zig cc を指定可能
+    // 例: ZIG_CC="zig cc" cargo zigbuild --release -p open-agents-gui
+    if let Ok(zig_cc) = env::var("ZIG_CC") {
+        build.compiler(&zig_cc);
+    }
+
+    build
         .flag_if_supported("-mavx2")
         .flag_if_supported("-mfma")
         .flag_if_supported("-mf16c")

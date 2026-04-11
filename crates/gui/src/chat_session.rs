@@ -178,7 +178,7 @@ impl SessionStore {
             self.active_id = Some(s.id);
             self.sessions.push(s);
         } else if self.active_id == Some(id) {
-            self.active_id = Some(self.sessions.last().unwrap().id);
+            self.active_id = self.sessions.last().map(|s| s.id);
         }
     }
 

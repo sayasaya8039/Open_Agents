@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use gpui::*;
@@ -6,6 +8,40 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use crate::{
     hex, hex_a, ACCENT_BLUE, BORDER, PANEL_BG, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
 };
+
+/// content hash → パース済みブロック のキャッシュ。
+/// 同一テキストを毎フレーム再パースするのを防ぐ。
+pub(crate) struct MarkdownCache {
+    cache: HashMap<u64, Vec<MarkdownBlock>>,
+}
+
+impl MarkdownCache {
+    pub fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+        }
+    }
+
+    /// content のハッシュをキーにキャッシュヒット判定。ミス時のみパースを実行。
+    pub fn get_or_parse(&mut self, content: &str) -> &[MarkdownBlock] {
+        let key = Self::hash_content(content);
+        self.cache
+            .entry(key)
+            .or_insert_with(|| parse_markdown_blocks(content))
+    }
+
+    /// ストリーミング中など内容が変わったエントリを除去する。
+    pub fn invalidate(&mut self, content: &str) {
+        let key = Self::hash_content(content);
+        self.cache.remove(&key);
+    }
+
+    fn hash_content(content: &str) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 struct InlineContent {
