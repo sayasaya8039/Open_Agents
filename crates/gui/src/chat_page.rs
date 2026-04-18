@@ -910,6 +910,7 @@ fn render_input_bar(
                                                 this.chat_prefs.source =
                                                     this.chat_prefs.source.cycle();
                                                 this.persist_local_llm_prefs();
+                                                this.maybe_restart_api_server();
                                                 cx.notify();
                                             }),
                                         )

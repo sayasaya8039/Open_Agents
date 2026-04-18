@@ -27,6 +27,8 @@ mod settings_hf;
 mod settings_llama;
 mod settings_model;
 mod settings_ui;
+#[cfg(windows)]
+mod tray;
 mod workspace_prefs;
 
 use gpui::prelude::FluentBuilder;
@@ -556,6 +558,8 @@ pub(crate) struct AppView {
     pub(crate) api_server: Option<api_server::ApiServer>,
     /// API サーバー起動エラーメッセージ
     pub(crate) api_server_error: Option<String>,
+    /// API サーバーと共有するモデル名ハンドル（`/v1/models` 応答用）
+    pub(crate) api_server_model_name: api_server::SharedModelName,
 }
 
 impl AppView {
@@ -753,10 +757,12 @@ impl AppView {
         self.persist_local_llm_prefs();
         // サーバキャッシュをクリア（次回送信時に新しいモデルで起動）
         llama_cpp_chat::cleanup_orphan_servers();
+        // API サーバーが稼働中なら新モデル名 + 新 proxy 先で再起動
+        self.maybe_restart_api_server();
         cx.notify();
     }
 
-    fn chat_message_model_label(&self) -> String {
+    pub(crate) fn chat_message_model_label(&self) -> String {
         match self.chat_prefs.source {
             model_prefs::ChatInferenceSource::Api => {
                 let model = self.chat_prefs.api_model.trim();
@@ -1605,6 +1611,27 @@ fn main() {
             |window, cx| {
                 window.set_client_inset(px(44.));
 
+                #[cfg(windows)]
+                {
+                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    match window.window_handle().map(|h| h.as_raw()) {
+                        Ok(RawWindowHandle::Win32(h)) => {
+                            let hwnd = windows::Win32::Foundation::HWND(
+                                h.hwnd.get() as *mut core::ffi::c_void,
+                            );
+                            if let Err(e) = tray::install(hwnd) {
+                                eprintln!("tray: 初期化失敗: {e}");
+                            }
+                        }
+                        Ok(other) => {
+                            eprintln!("tray: 予期しない window handle: {other:?}");
+                        }
+                        Err(e) => {
+                            eprintln!("tray: window_handle 取得失敗: {e:?}");
+                        }
+                    }
+                }
+
                 cx.new(|cx| {
                     let workspace_root = workspace_prefs::resolve_workspace_at_launch();
                     let (file_tree, explorer_expanded) = match read_tree_from_disk(&workspace_root)
@@ -1683,6 +1710,7 @@ fn main() {
                         api_server_prefs,
                         api_server: None,
                         api_server_error: None,
+                        api_server_model_name: api_server::new_shared_model_name(String::new()),
                     };
                     llama_cpp_chat::cleanup_orphan_servers();
                     // GPU 自動検出 & 最適化（Auto モード時）

@@ -44,13 +44,13 @@ impl MarkdownCache {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-struct InlineContent {
+pub(crate) struct InlineContent {
     text: String,
     highlights: Vec<(Range<usize>, HighlightStyle)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum MarkdownBlock {
+pub(crate) enum MarkdownBlock {
     Paragraph(InlineContent),
     Heading {
         level: u8,

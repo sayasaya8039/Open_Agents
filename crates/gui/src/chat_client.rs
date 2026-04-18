@@ -150,8 +150,12 @@ impl ChatBackend {
             } => (base_url.clone(), api_key.clone()),
             Self::Ollama { base_url, .. } => (base_url.clone(), String::new()),
             Self::LlamaCppLocal { .. } => {
-                // llama-server は 8080 で起動する（llama_cpp_chat 参照）
-                ("http://127.0.0.1:8080/v1".to_string(), String::new())
+                // llama-server は ephemeral port で起動するため、稼働中であれば live の base_url を採用。
+                // 未起動時は 127.0.0.1:8080 を fallback として返す（api_server 側が起動後に live 解決する）。
+                let base = crate::llama_cpp_chat::current_base_url()
+                    .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
+                let base = base.trim_end_matches('/').to_string();
+                (format!("{base}/v1"), String::new())
             }
         }
     }

@@ -266,6 +266,14 @@ pub fn server_ready_for(
     server_is_alive(server).unwrap_or(false)
 }
 
+/// 現在キャッシュされている llama-server の base_url（ephemeral port 込み）を返す。
+/// api_server からプロキシ転送先を動的に解決するために使う。
+/// ロック取得に失敗した場合・未起動の場合は `None`。
+pub fn current_base_url() -> Option<String> {
+    let cache = server_cache().try_lock().ok()?;
+    cache.as_ref().map(|s| s.base_url.clone())
+}
+
 /// 孤立した llama-server プロセスを停止（アプリ起動時に呼ぶ）
 pub fn cleanup_orphan_servers() {
     if let Ok(mut cache) = server_cache().lock() {

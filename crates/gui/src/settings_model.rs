@@ -114,6 +114,7 @@ impl AppView {
                                 }
                                 this.chat_prefs = this.chat_prefs.clone().sanitize();
                                 this.persist_local_llm_prefs();
+                                this.maybe_restart_api_server();
                                 cx.notify();
                             }
                         }),
@@ -171,6 +172,8 @@ impl AppView {
         self.persist_local_llm_prefs();
         // LocalWeights に切り替わった場合、サーバをプリウォーム
         self.prewarm_llama_server(cx);
+        // API サーバーが稼働中なら新 source / proxy_target_url で再起動
+        self.maybe_restart_api_server();
         cx.notify();
     }
 
@@ -184,6 +187,7 @@ impl AppView {
         self.chat_prefs.local_model_index = next;
         self.chat_prefs = self.chat_prefs.clone().sanitize();
         self.persist_local_llm_prefs();
+        self.maybe_restart_api_server();
         cx.notify();
     }
 
